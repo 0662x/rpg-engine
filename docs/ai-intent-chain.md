@@ -327,12 +327,15 @@ MCP 对齐：
 - `developer`、`trusted_gm`、`maintenance`、`admin` 才注册低层运行时工具。
 - `player_turn` 可接收后台 `external_intent_candidate`，但输出不暴露 `delta_draft` 或 `turn_proposal`。
 - `player_confirm` 必须使用 `player_turn` 返回的 `session_id`，且只在玩家明确确认后调用。
+- pending action 会绑定 active save、confirmation session 和可选 platform/session/actor identity；
+  过期或身份不匹配时必须重新从 `player_turn` 生成 preview，不能保存旧预演。
 
 Platform sidecar 对齐：
 
 - `platform message` 可以触发 advisory prewarm。
 - `platform act` 转发被动 message identity 到 `player_turn`。
 - `platform confirm` 转发到 `player_confirm`。
+- platform binding 会校验 actor identity，避免同一平台会话中的另一位 actor 确认当前玩家的 pending action。
 - sidecar 不接收 external candidate、internal candidate、delta、proposal 或 commit approval。
 
 ## Future Coordinator Boundary

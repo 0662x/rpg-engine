@@ -86,15 +86,23 @@
 
 ## Player Session / Concurrency
 
+Round 7 基础硬化状态：
+
+- pending action 现在写入 `expires_at`，默认 TTL 为 30 分钟。
+- `player_confirm()` 会拒绝并清理过期 pending action。
+- platform/session identity 之外，平台路径现在还绑定 actor identity hash。
+- platform sidecar 会拒绝同一绑定会话中的 actor mismatch，prewarm gate 同步拒绝 actor mismatch。
+- 回归测试覆盖 pending action TTL、actor mismatch、platform gate actor mismatch 和既有 session mismatch。
+
 残余风险：
 
-- pending action 的 session、过期、actor binding 和并发冲突提示仍需明确语义。
-- UI / Agent 需要更清楚地区分 clarification、pending proposal、player confirmation 和 expired action。
+- UI / Agent 仍需要更细地区分 clarification、pending proposal、player confirmation 和 expired action 的展示文案。
+- 未来如果支持多人/多 actor 同一平台会话，需要把当前单 actor binding 扩展为显式 party/session 模型。
 
 建议证据：
 
-- pending action session contract tests。
-- stale session / wrong actor / concurrent confirmation 回归。
+- 更完整的 UI / Agent transcript 测试，覆盖 expired action 和 wrong actor 文案。
+- 多 actor 会话设计前的 party/session contract doc。
 - 文档同步到 [AI 意图链](../../docs/ai-intent-chain.md)、[MCP 合同](../../docs/mcp-contracts.md)
   和 [CLI 合同](../../docs/cli-contracts.md)。
 

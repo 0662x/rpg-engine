@@ -132,6 +132,12 @@ def should_prewarm_message(
         return gate(False, "duplicate_message", active_save=binding.active_save, **base)
     if message.actor_is_bot or message.actor_is_self:
         return gate(False, "actor_not_allowed", active_save=binding.active_save, **base)
+    if binding.user_id_hash:
+        actor_hash = hash_identity(message.actor_id) if clean(message.actor_id) else ""
+        if not actor_hash:
+            return gate(False, "missing_actor_id", active_save=binding.active_save, **base)
+        if actor_hash != binding.user_id_hash:
+            return gate(False, "actor_mismatch", active_save=binding.active_save, **base)
     if message.is_approval:
         return gate(False, PENDING_APPROVAL, active_save=binding.active_save, **base)
     if clean(message.message_type) not in SUPPORTED_MESSAGE_TYPES:

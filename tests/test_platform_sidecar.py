@@ -139,6 +139,36 @@ class PlatformSidecarTests(unittest.TestCase):
             self.assertEqual(confirmed["platform_gate"]["reason"], "inactive")
             self.assertFalse((root / ".aigm" / "pending-player-action.json").exists())
 
+    def test_platform_gate_rejects_different_actor_on_bound_session(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            shutil.copytree(MINIMAL_FIXTURE, root / "campaigns" / "minimal")
+            sidecar = PlatformSidecar(root, config=sidecar_config(enabled=False))
+            started = sidecar.start_or_continue_from_message(
+                {
+                    "platform": "qq",
+                    "session_key": "qq:group:1",
+                    "message_id": "qq:start",
+                    "text": "开始游戏",
+                    "actor_id": "user:one",
+                },
+                campaign="campaigns/minimal",
+            ).to_dict()
+            acted = sidecar.player_act_from_message(
+                {
+                    "platform": "qq",
+                    "session_key": "qq:group:1",
+                    "message_id": "qq:act:wrong-actor",
+                    "text": "休息到早上",
+                    "actor_id": "user:two",
+                }
+            ).to_dict()
+
+            self.assertTrue(started["ok"], started)
+            self.assertFalse(acted["ok"], acted)
+            self.assertEqual(acted["platform_gate"]["reason"], "actor_mismatch")
+            self.assertFalse((root / ".aigm" / "pending-player-action.json").exists())
+
     def test_message_prewarm_then_player_act_uses_same_message_identity(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

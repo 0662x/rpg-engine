@@ -156,6 +156,8 @@ player duplicate
 
 玩家命令返回给普通玩家的结果不得暴露内部 `delta_draft` 或完整 `turn_proposal`。ready action 应只显示
 玩家可见 preview、确认提示和 `session_id`。确认成功后 pending action 必须清理。
+Pending action 有过期时间；过期、session id 不匹配、active save 不匹配、平台 session/actor
+不匹配时，`confirm` 必须拒绝保存，过期 action 会被清理并要求玩家重新发起 `turn`。
 
 ## Play 命令
 
@@ -211,6 +213,8 @@ platform deactivate
 - `start` 从平台消息 start/continue game，创建或绑定 active save 时仍必须通过 SaveManager。
 - `act` 从平台消息调用 player act/turn 语义，并转发 passive preflight identity；不能绕过 pending/confirm。
 - `confirm --session-id` 从平台消息确认 pending player action；平台 gate 必须校验 active binding。
+- 平台确认必须保持同一 platform、session key 和 actor identity；同一群/会话里不同 actor 不能确认
+  另一位玩家的 pending action。
 - `metrics`、`expire`、`deactivate` 管理 sidecar canary metrics 和平台 session binding，不写游戏事实。
 
 Platform sidecar 可以配置 prewarm、intent helper 和 active binding 策略；这些配置只影响候选评审和

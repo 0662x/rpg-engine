@@ -204,7 +204,8 @@ commit_turn
 - Clarification / blocked：客户端必须先问玩家或说明阻断原因。
 - Pending action：返回 `ready_to_confirm=true` 和 `session_id`，但不暴露 `delta_draft` 或完整
   `turn_proposal`。
-- Confirm：只有玩家明确确认后，客户端才调用 `player_confirm(session_id)`。
+- Confirm：只有玩家明确确认后，客户端才调用 `player_confirm(session_id)`；pending action 过期、
+  active save 不匹配、session id 不匹配或平台 session/actor identity 不匹配时必须拒绝保存。
 
 ## Low-Level 工具合同
 

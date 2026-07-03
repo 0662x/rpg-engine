@@ -383,8 +383,12 @@ Pending action 绑定：
 - `TurnProposal`
 - confirmation `session_id`
 - 可选 platform/session identity hash
+- 可选 actor identity hash
+- `created_at` / `expires_at`
 
-`player_confirm()` 必须匹配 pending action 的 save、session id 和可选 platform/session identity。
+`player_confirm()` 必须匹配 pending action 的 save、session id、可选 platform/session identity 和可选
+actor identity。过期 pending action 不能提交；确认时发现过期会清理 pending action，并要求玩家重新从
+`player_turn()` 生成新的 preview / confirmation session。
 
 ## CLI Surface
 

@@ -293,6 +293,7 @@ class PlatformSidecar:
                 message_id=message.message_id,
                 platform=message.platform,
                 session_key=message.session_key,
+                actor_id=message.actor_id,
                 source_user_text_hash=hash_text(message.text),
                 preflight_pending_wait_ms=self.config.preflight_pending_wait_ms,
             )
@@ -328,6 +329,7 @@ class PlatformSidecar:
                 save_path=binding.active_save,
                 platform=message.platform,
                 session_key=message.session_key,
+                actor_id=message.actor_id,
             )
         except Exception as exc:
             result = platform_manager_error(exc, gate=gate)
@@ -502,6 +504,12 @@ def platform_entry_gate(
         return decision(False, "expired")
     if message.actor_is_bot or message.actor_is_self:
         return decision(False, "actor_not_allowed")
+    if binding.user_id_hash:
+        actor_hash = hash_identity(message.actor_id) if clean(message.actor_id) else ""
+        if not actor_hash:
+            return decision(False, "missing_actor_id")
+        if actor_hash != binding.user_id_hash:
+            return decision(False, "actor_mismatch")
     if clean(message.message_type) not in SUPPORTED_MESSAGE_TYPES:
         return decision(False, "unsupported_message_type")
     if clean(message.chat_type) not in SUPPORTED_CHAT_TYPES:
@@ -571,12 +579,15 @@ def pending_session_conflict(
         return f"{label}_save_mismatch"
     pending_platform = clean(pending.get("platform"))
     pending_session_hash = clean(pending.get("session_key_hash"))
-    if not pending_platform and not pending_session_hash:
+    pending_actor_hash = clean(pending.get("actor_id_hash"))
+    if not pending_platform and not pending_session_hash and not pending_actor_hash:
         return f"{label}_unscoped"
     if pending_platform and pending_platform != clean(message.platform):
         return f"{label}_platform_mismatch"
     if pending_session_hash and pending_session_hash != hash_identity(message.session_key):
         return f"{label}_session_mismatch"
+    if pending_actor_hash and pending_actor_hash != hash_identity(message.actor_id):
+        return f"{label}_actor_mismatch"
     return ""
 
 
@@ -638,6 +649,8 @@ def platform_gate_message(reason: str) -> str:
         "actor_not_allowed": "这条平台消息来自机器人或当前账号，已忽略。\n",
         "unsupported_message_type": "当前只支持文本消息。\n",
         "unsupported_chat": "当前平台会话类型暂不支持。\n",
+        "missing_actor_id": "平台消息缺少玩家身份，无法确认这是同一位玩家。\n",
+        "actor_mismatch": "这个平台会话已绑定到另一位玩家，当前消息不会推进游戏。\n",
         "command": "这条消息被识别为平台命令，不会推进游戏。\n",
         "empty_text": "没有可处理的玩家文本。\n",
         "duplicate_action_message": "这条平台消息已经处理过，已忽略重复行动。\n",

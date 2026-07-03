@@ -7,6 +7,7 @@ import shutil
 import time
 import uuid
 from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -27,6 +28,7 @@ REGISTRY_SCHEMA_VERSION = "1"
 DEFAULT_REGISTRY_RELATIVE = ".aigm/save-registry.json"
 DEFAULT_PENDING_ACTION_RELATIVE = ".aigm/pending-player-action.json"
 DEFAULT_PENDING_CLARIFICATION_RELATIVE = ".aigm/pending-player-clarification.json"
+DEFAULT_PENDING_ACTION_TTL_SECONDS = 1800
 DEFAULT_SAVES_DIR = "saves"
 INTERNAL_ONBOARDING_TERMS = ("delta", "commit", "SQLite", "save_dir", "campaign.yaml", "game.sqlite")
 
@@ -388,6 +390,7 @@ class SaveManager:
         message_id: str = "",
         platform: str = "",
         session_key: str = "",
+        actor_id: str = "",
         source_user_text_hash: str = "",
         preflight_pending_wait_ms: int = 0,
     ) -> dict[str, Any]:
@@ -466,11 +469,13 @@ class SaveManager:
                     "save_id": save["id"],
                     "save_path": save["path"],
                     "created_at": utc_now(),
+                    "expires_at": pending_action_expires_at(),
+                    "ttl_seconds": DEFAULT_PENDING_ACTION_TTL_SECONDS,
                     "user_text": user_text,
                     "action": result.get("action"),
                     "delta": result.get("delta_draft"),
                     "turn_proposal": result.get("turn_proposal"),
-                    **platform_session_metadata(platform=platform, session_key=session_key),
+                    **platform_session_metadata(platform=platform, session_key=session_key, actor_id=actor_id),
                 }
             )
         elif clarification:
@@ -485,7 +490,7 @@ class SaveManager:
                     "created_at": utc_now(),
                     "original_user_text": user_text,
                     "clarification": clarification,
-                    **platform_session_metadata(platform=platform, session_key=session_key),
+                    **platform_session_metadata(platform=platform, session_key=session_key, actor_id=actor_id),
                 }
             )
         else:
@@ -525,6 +530,7 @@ class SaveManager:
         message_id: str = "",
         platform: str = "",
         session_key: str = "",
+        actor_id: str = "",
         source_user_text_hash: str = "",
         preflight_pending_wait_ms: int = 0,
     ) -> dict[str, Any]:
@@ -543,6 +549,7 @@ class SaveManager:
             message_id=message_id,
             platform=platform,
             session_key=session_key,
+            actor_id=actor_id,
             source_user_text_hash=source_user_text_hash,
             preflight_pending_wait_ms=preflight_pending_wait_ms,
         )
@@ -554,14 +561,18 @@ class SaveManager:
         save_path: str = "",
         platform: str = "",
         session_key: str = "",
+        actor_id: str = "",
     ) -> dict[str, Any]:
         save = self.require_save(refresh=True, save_path=save_path)
         session = self.read_pending_action()
         if not session:
             raise SaveManagerError("no pending player action to confirm")
+        if pending_action_is_expired(session):
+            self.clear_pending_action()
+            raise SaveManagerError("pending player action expired; ask the player to run player_turn again")
         if str(session.get("save_id")) != str(save["id"]):
             raise SaveManagerError("pending player action belongs to a different active save")
-        validate_pending_platform_session(session, platform=platform, session_key=session_key)
+        validate_pending_platform_session(session, platform=platform, session_key=session_key, actor_id=actor_id)
         expected_session_id = str(session.get("session_id") or "").strip()
         provided_session_id = str(session_id or "").strip()
         if not expected_session_id:
@@ -941,30 +952,77 @@ def replace_record(records: Any, record: dict[str, Any]) -> list[dict[str, Any]]
     return sorted(items, key=lambda item: str(item.get("id", "")))
 
 
-def platform_session_metadata(*, platform: str, session_key: str) -> dict[str, Any]:
+def pending_action_expires_at(*, ttl_seconds: int = DEFAULT_PENDING_ACTION_TTL_SECONDS) -> str:
+    return (datetime.now(timezone.utc) + timedelta(seconds=max(1, int(ttl_seconds)))).isoformat()
+
+
+def pending_action_is_expired(session: dict[str, Any], *, now: datetime | None = None) -> bool:
+    expires_at = clean(session.get("expires_at"))
+    if not expires_at:
+        created_at = clean(session.get("created_at"))
+        if not created_at:
+            return False
+        try:
+            ttl_seconds = int(session.get("ttl_seconds") or DEFAULT_PENDING_ACTION_TTL_SECONDS)
+        except (TypeError, ValueError):
+            return True
+        created = parse_datetime(created_at)
+        if created is None:
+            return True
+        deadline = created + timedelta(seconds=max(1, ttl_seconds))
+    else:
+        deadline = parse_datetime(expires_at)
+        if deadline is None:
+            return True
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    return deadline <= current
+
+
+def parse_datetime(value: str) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def platform_session_metadata(*, platform: str, session_key: str, actor_id: str = "") -> dict[str, Any]:
     data: dict[str, Any] = {}
     platform_value = clean(platform)
     session_value = clean(session_key)
+    actor_value = clean(actor_id)
     if platform_value:
         data["platform"] = platform_value
     if session_value:
         data["session_key_hash"] = hash_identity(session_value)
+    if actor_value:
+        data["actor_id_hash"] = hash_identity(actor_value)
     return data
 
 
-def validate_pending_platform_session(session: dict[str, Any], *, platform: str, session_key: str) -> None:
+def validate_pending_platform_session(session: dict[str, Any], *, platform: str, session_key: str, actor_id: str = "") -> None:
     pending_platform = clean(session.get("platform"))
     pending_session_hash = clean(session.get("session_key_hash"))
+    pending_actor_hash = clean(session.get("actor_id_hash"))
     provided_platform = clean(platform)
     provided_session_hash = hash_identity(session_key) if clean(session_key) else ""
-    if not pending_platform and not pending_session_hash:
+    provided_actor_hash = hash_identity(actor_id) if clean(actor_id) else ""
+    if not pending_platform and not pending_session_hash and not pending_actor_hash:
         return
-    if not provided_platform or not provided_session_hash:
+    if (pending_platform or pending_session_hash) and (not provided_platform or not provided_session_hash):
         raise SaveManagerError("pending player action requires matching platform session identity")
     if pending_platform and pending_platform != provided_platform:
         raise SaveManagerError("pending player action belongs to a different platform")
     if pending_session_hash and pending_session_hash != provided_session_hash:
         raise SaveManagerError("pending player action belongs to a different platform session")
+    if pending_actor_hash and not provided_actor_hash:
+        raise SaveManagerError("pending player action requires matching platform actor identity")
+    if pending_actor_hash and pending_actor_hash != provided_actor_hash:
+        raise SaveManagerError("pending player action belongs to a different platform actor")
 
 
 def upsert_campaign_record(records: Any, campaign: Any, path: str, starter_path: str | None) -> list[dict[str, Any]]:

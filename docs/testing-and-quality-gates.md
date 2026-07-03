@@ -44,7 +44,7 @@ python3 -m json.tool _bmad-output/project-scan-report.json >/dev/null
 python3 -m pytest
 ```
 
-Round 6 本地基线（2026-07-04）：`python3 -m pytest -q` 通过，`449 passed, 483 subtests passed`。
+Round 7 本地基线（2026-07-04）：`python3 -m pytest -q` 通过，`450 passed, 483 subtests passed`。
 
 当前 native campaign/save 回归：
 

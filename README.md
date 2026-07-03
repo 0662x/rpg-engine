@@ -73,7 +73,7 @@ Phase 7.1 已硬化 projection 事务边界、targeted repair、commit/projectio
 python3 -m pytest
 ```
 
-当前 Round 6 本地基准：`449 passed, 483 subtests passed`。
+当前 Round 7 本地基准：`450 passed, 483 subtests passed`。
 
 ## Boundaries
 

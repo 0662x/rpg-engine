@@ -739,6 +739,7 @@ class SaveManagerConditionCoverageTests(unittest.TestCase):
             self.assertTrue(ready["ready_to_confirm"])
             self.assertEqual(pending_action["platform"], "web")
             self.assertNotEqual(pending_action["session_key_hash"], "abc")
+            self.assertIn("expires_at", pending_action)
 
             captured_turn_kwargs: dict[str, object] = {}
 
@@ -824,6 +825,32 @@ class SaveManagerConditionCoverageTests(unittest.TestCase):
                     manager.player_confirm("sid", platform="mobile", session_key="abc")
                 with self.assertRaisesRegex(SaveManagerError, "different platform session"):
                     manager.player_confirm("sid", platform="web", session_key="wrong")
+                manager.write_pending_action(
+                    {
+                        "save_id": "save-ok",
+                        "session_id": "sid",
+                        "delta": {},
+                        "turn_proposal": {},
+                        **platform_session_metadata(platform="web", session_key="abc", actor_id="actor:one"),
+                    }
+                )
+                with self.assertRaisesRegex(SaveManagerError, "requires matching platform actor"):
+                    manager.player_confirm("sid", platform="web", session_key="abc")
+                with self.assertRaisesRegex(SaveManagerError, "different platform actor"):
+                    manager.player_confirm("sid", platform="web", session_key="abc", actor_id="actor:two")
+                manager.write_pending_action(
+                    {
+                        "save_id": "save-ok",
+                        "session_id": "sid",
+                        "delta": {},
+                        "turn_proposal": {},
+                        "created_at": "2000-01-01T00:00:00+00:00",
+                        "expires_at": "2000-01-01T00:30:00+00:00",
+                    }
+                )
+                with self.assertRaisesRegex(SaveManagerError, "pending player action expired"):
+                    manager.player_confirm("sid")
+                self.assertIsNone(manager.read_pending_action())
                 manager.write_pending_action({"save_id": "save-ok", "delta": {}, "turn_proposal": {}})
                 with self.assertRaisesRegex(SaveManagerError, "missing confirmation session_id"):
                     manager.player_confirm("sid")
