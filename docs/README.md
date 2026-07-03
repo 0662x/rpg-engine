@@ -9,7 +9,7 @@
 | 目标 | 文档 |
 |---|---|
 | 理解产品边界 | [`specs/kernel-requirements.md`](specs/kernel-requirements.md) |
-| 开始开发或让 AI 改代码 | [`../AGENTS.md`](../AGENTS.md)、[`project-context.md`](project-context.md)、[`development-workflow.md`](development-workflow.md)、[`architecture/module-map.md`](architecture/module-map.md) |
+| 开始开发或让 AI 改代码 | [`../AGENTS.md`](../AGENTS.md)、[`project-context.md`](project-context.md)、[`governance/bmad-workflow.md`](governance/bmad-workflow.md)、[`development-workflow.md`](development-workflow.md)、[`architecture/module-map.md`](architecture/module-map.md) |
 | 编写 Campaign Package | [`specs/campaign-package.md`](specs/campaign-package.md)、[`guides/author-guide.md`](guides/author-guide.md) |
 | 管理 Save Package | [`specs/save-package.md`](specs/save-package.md) |
 | 设计玩家入口和多存档体验 | [`specs/player-entry-save-manager.md`](specs/player-entry-save-manager.md) |
@@ -26,6 +26,7 @@
 
 - [`../AGENTS.md`](../AGENTS.md)：AI/human 开发入口、不可破坏边界和验证规则。
 - [`project-context.md`](project-context.md)：BMAD/AI agent 项目上下文，给未来开发规划加载。
+- [`governance/bmad-workflow.md`](governance/bmad-workflow.md)：BMAD 强约束流程、改动分级、角色 review、测试门禁和收尾规则。
 - [`development-workflow.md`](development-workflow.md)：变更分类、阅读路径、测试选择和收尾证据。
 - [`architecture/module-map.md`](architecture/module-map.md)：源码模块边界和编辑启发。
 
@@ -53,6 +54,7 @@
 
 ### Governance
 
+- [`governance/bmad-workflow.md`](governance/bmad-workflow.md)：BMAD 强约束开发流程，规定 P0/P1/P2 分级、必走角色、测试门禁和文档同步要求。
 - [`governance/content-generation.md`](governance/content-generation.md)：palette、random table、content delta、proposal queue 和高影响内容审稿边界。
 
 ### Architecture
@@ -80,4 +82,4 @@
 3. 修改代码能力时，同步更新相关 spec/guide/prompt；不要只更新历史报告。
 4. `docs/README.md` 是文档目录索引；新增长期文档时必须在这里登记。
 5. 历史报告中的旧链接可以保持原样，避免改写历史语境；当前文档必须使用新的相对路径。
-6. 面向 AI/开发流程的长期规范优先更新 `AGENTS.md`、`project-context.md`、`development-workflow.md` 或 `architecture/module-map.md`，不要散落在临时报告里。
+6. 面向 AI/开发流程的长期规范优先更新 `AGENTS.md`、`project-context.md`、`governance/bmad-workflow.md`、`development-workflow.md` 或 `architecture/module-map.md`，不要散落在临时报告里。

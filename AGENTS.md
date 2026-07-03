@@ -12,6 +12,25 @@ the kernel decides what becomes durable fact.
 
 Current documentation starts at `docs/README.md`.
 
+## BMAD Workflow
+
+BMAD is installed for this repository as the strong AI-assisted development
+process layer.
+
+- BMAD modules live under `_bmad/`.
+- Codex and Hermes skills live under `.agents/skills/`.
+- Long-lived BMAD / AI-agent project context is `docs/project-context.md`.
+- The required workflow rules are in `docs/governance/bmad-workflow.md`.
+
+For high-risk changes, do not jump straight to implementation. Classify the
+change first and follow the BMAD workflow:
+
+- AI intent, preflight, Runtime, SaveManager, MCP, CLI, platform, schema,
+  migration, hidden-content, or cross-module refactors require planning and
+  review evidence.
+- Small bug fixes may be implemented directly, but still need focused
+  verification and a clear risk summary.
+
 ## Non-Negotiable Boundaries
 
 - `data/game.sqlite` is the authoritative current fact store.
@@ -39,9 +58,10 @@ For broad changes, read these in order:
 
 1. `docs/README.md`
 2. `docs/project-context.md`
-3. `docs/architecture/module-map.md`
-4. The specific spec or architecture doc for the touched surface.
-5. `TESTING.md`
+3. `docs/governance/bmad-workflow.md`
+4. `docs/architecture/module-map.md`
+5. The specific spec or architecture doc for the touched surface.
+6. `TESTING.md`
 
 For narrow bug fixes, at minimum read the touched module, its closest tests, and
 the relevant section of `docs/architecture/module-map.md`.

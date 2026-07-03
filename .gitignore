@@ -22,3 +22,4 @@ venv/
 /rp/**/*.sqlite
 /rp/**/*.db
 /rp/**/*.jsonl
+/_bmad/config.user.toml
