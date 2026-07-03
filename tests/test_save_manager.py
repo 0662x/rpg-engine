@@ -139,6 +139,41 @@ class SaveManagerTests(unittest.TestCase):
             self.assertFalse((root / ".aigm" / "pending-player-action.json").exists())
             self.assertFalse((root / ".aigm" / "pending-clarification.json").exists())
 
+    def test_player_turn_surface_keeps_route_preparation_cases_unsaved(self) -> None:
+        cases = [
+            ("query_scene", "查看周围", True, "ready", "query", False),
+            ("single_action", "休息到早上", True, "ready", "rest", True),
+            ("maintenance_block", "系统维护：修复存档索引", False, "blocked", "act", False),
+            ("composite_plan_boundary", "去 Old Bridge 找 Scout Ren 问情况", False, "needs_confirmation", "act", False),
+            ("query_entity", "查看 Broken Seal Mark 信息", True, "ready", "query", False),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            campaign_dir = root / "campaigns" / "official"
+            shutil.copytree(OFFICIAL_EXAMPLE, campaign_dir)
+            manager = SaveManager(root, default_campaign="campaigns/official")
+            manager.start_or_continue(campaign="campaigns/official")
+
+            for case_id, user_text, expected_ok, expected_status, expected_action, expected_ready in cases:
+                with self.subTest(case=case_id):
+                    result = manager.player_turn(user_text=user_text)
+
+                    self.assertEqual(result["ok"], expected_ok, result)
+                    self.assertEqual(result["status"], expected_status, result)
+                    self.assertEqual(result["action"], expected_action, result)
+                    self.assertEqual(result["ready_to_confirm"], expected_ready, result)
+                    self.assertFalse(result["saved"], result)
+                    self.assertNotIn("delta_draft", result)
+                    self.assertNotIn("turn_proposal", result)
+                    if expected_ready:
+                        self.assertTrue(result["session_id"], result)
+                        self.assertTrue((root / ".aigm" / "pending-player-action.json").exists())
+                        self.assertIn("确认后", result["message"])
+                    else:
+                        self.assertFalse(result["session_id"], result)
+                        self.assertFalse((root / ".aigm" / "pending-player-action.json").exists())
+                    self.assertFalse((root / ".aigm" / "pending-player-clarification.json").exists())
+
     def test_player_act_confirm_supports_random_dice_without_exposing_delta(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -9,7 +9,7 @@ import threading
 import time
 import unittest
 from copy import deepcopy
-from dataclasses import replace
+from dataclasses import asdict, is_dataclass, replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -78,6 +78,29 @@ def install_fake_hermes(tmp: str | Path, output: str, *, exit_code: int = 0) -> 
     old_path = os.environ.get("PATH", "")
     os.environ["PATH"] = f"{bin_dir}{os.pathsep}{old_path}"
     return old_path
+
+
+def candidate_snapshot(candidate):
+    if candidate is None:
+        return None
+    return {
+        "source": candidate["source"],
+        "source_user_text": candidate["source_user_text"],
+        "kind": candidate["kind"],
+        "mode": candidate["mode"],
+        "action": candidate["action"],
+        "slots": candidate["slots"],
+        "plan": candidate["plan"],
+        "confidence": candidate["confidence"],
+        "missing_slots": candidate["missing_slots"],
+        "needs_confirmation": candidate["needs_confirmation"],
+        "safety_flags": candidate["safety_flags"],
+        "reason": candidate["reason"],
+    }
+
+
+def dataclass_snapshot(value):
+    return asdict(value) if is_dataclass(value) else value
 
 
 class GMRuntimeTests(unittest.TestCase):
@@ -596,6 +619,486 @@ class GMRuntimeTests(unittest.TestCase):
             self.assertEqual(trace["intent_ai"]["external_candidate"]["action"], "rest")
             self.assertEqual(trace["intent_ai"]["decision"]["source"], "rules_fallback")
             self.assertEqual(trace["final_intent"]["action"], "rest")
+
+    def test_intent_candidate_preparation_characterization_snapshots(self) -> None:
+        external_rest = {
+            "kind": "single",
+            "mode": "action",
+            "action": "rest",
+            "slots": {"until": "morning"},
+            "plan": [],
+            "confidence": "high",
+            "missing_slots": [],
+            "needs_confirmation": [],
+            "safety_flags": [],
+            "reason": "外部 AI 判断这是休息行动。",
+        }
+        cases = [
+            {
+                "id": "query_scene",
+                "text": "查看周围",
+                "expected": {
+                    "explicit": {"mode": None, "submode": None},
+                    "intent": {
+                        "user_text": "查看周围",
+                        "mode": "query",
+                        "submode": "scene",
+                        "action": None,
+                        "kind": "single",
+                        "status": "ready",
+                        "source": "rules",
+                        "player_message": "",
+                        "missing_required": [],
+                        "needs_confirmation": [],
+                        "errors": [],
+                        "summary": "",
+                        "plan": [],
+                        "repair_options": [],
+                        "clarification": None,
+                    },
+                    "legacy_rule": {"mode": "query", "submode": "scene"},
+                    "legacy_inferred": {
+                        "kind": "single",
+                        "action": "routine",
+                        "status": "ready",
+                        "fallback": True,
+                        "missing_required": [],
+                        "summary": None,
+                    },
+                    "legacy_outcome": {
+                        "mode": "query",
+                        "submode": "scene",
+                        "action": None,
+                        "source": "rules",
+                        "status": "ready",
+                    },
+                    "legacy_guards": [],
+                    "rules_candidate": {
+                        "source": "rules",
+                        "source_user_text": "查看周围",
+                        "kind": "query",
+                        "mode": "query",
+                        "action": None,
+                        "slots": {},
+                        "plan": [],
+                        "confidence": "medium",
+                        "missing_slots": [],
+                        "needs_confirmation": [],
+                        "safety_flags": [],
+                        "reason": "legacy rules and action inference candidate",
+                    },
+                    "external_candidate": None,
+                    "decision": {"status": "fallback", "source": "rules_fallback"},
+                    "selected_outcome": {
+                        "mode": "query",
+                        "submode": "scene",
+                        "action": None,
+                        "source": "rules",
+                        "status": "ready",
+                    },
+                    "final_intent": {
+                        "mode": "query",
+                        "submode": "scene",
+                        "action": None,
+                        "source": "rules",
+                        "status": "ready",
+                    },
+                },
+            },
+            {
+                "id": "action_rest_external",
+                "text": "休息到早上",
+                "external": external_rest,
+                "expected": {
+                    "explicit": {"mode": None, "submode": None},
+                    "intent": {
+                        "user_text": "休息到早上",
+                        "mode": "action",
+                        "submode": "rest",
+                        "action": "rest",
+                        "kind": "single",
+                        "status": "ready",
+                        "source": "action_inference",
+                        "player_message": "",
+                        "missing_required": [],
+                        "needs_confirmation": [],
+                        "errors": [],
+                        "summary": "",
+                        "plan": [],
+                        "repair_options": [],
+                        "clarification": None,
+                    },
+                    "legacy_rule": {"mode": "action", "submode": "rest"},
+                    "legacy_inferred": {
+                        "kind": "single",
+                        "action": "rest",
+                        "status": "ready",
+                        "fallback": False,
+                        "missing_required": [],
+                        "summary": None,
+                    },
+                    "legacy_outcome": {
+                        "mode": "action",
+                        "submode": "rest",
+                        "action": "rest",
+                        "source": "action_inference",
+                        "status": "ready",
+                    },
+                    "legacy_guards": [],
+                    "rules_candidate": {
+                        "source": "rules",
+                        "source_user_text": "休息到早上",
+                        "kind": "single",
+                        "mode": "action",
+                        "action": "rest",
+                        "slots": {"until": "morning"},
+                        "plan": [],
+                        "confidence": "high",
+                        "missing_slots": [],
+                        "needs_confirmation": [],
+                        "safety_flags": [],
+                        "reason": "legacy rules and action inference candidate",
+                    },
+                    "external_candidate": {
+                        "source": "external_ai",
+                        "source_user_text": "休息到早上",
+                        "kind": "single",
+                        "mode": "action",
+                        "action": "rest",
+                        "slots": {"until": "morning"},
+                        "plan": [],
+                        "confidence": "high",
+                        "missing_slots": [],
+                        "needs_confirmation": [],
+                        "safety_flags": [],
+                        "reason": "外部 AI 判断这是休息行动。",
+                    },
+                    "decision": {"status": "fallback", "source": "rules_fallback"},
+                    "selected_outcome": {
+                        "mode": "action",
+                        "submode": "rest",
+                        "action": "rest",
+                        "source": "action_inference",
+                        "status": "ready",
+                    },
+                    "final_intent": {
+                        "mode": "action",
+                        "submode": "rest",
+                        "action": "rest",
+                        "source": "action_inference",
+                        "status": "ready",
+                    },
+                },
+            },
+            {
+                "id": "maintenance_block",
+                "text": "系统维护：修复存档索引",
+                "expected": {
+                    "explicit": {"mode": None, "submode": None},
+                    "intent": {
+                        "user_text": "系统维护:修复存档索引",
+                        "mode": "unknown",
+                        "submode": "unknown",
+                        "action": None,
+                        "kind": "unresolved",
+                        "status": "blocked",
+                        "source": "rules",
+                        "player_message": "这是维护或作者工具请求，不会作为普通玩家回合处理。",
+                        "missing_required": [],
+                        "needs_confirmation": [],
+                        "errors": ["maintenance request is outside the normal player intent mode"],
+                        "summary": "",
+                        "plan": [],
+                        "repair_options": [],
+                        "clarification": None,
+                    },
+                    "legacy_rule": {"mode": "maintenance", "submode": "maintenance"},
+                    "legacy_inferred": {
+                        "kind": "single",
+                        "action": "routine",
+                        "status": "ready",
+                        "fallback": False,
+                        "missing_required": [],
+                        "summary": None,
+                    },
+                    "legacy_outcome": {
+                        "mode": "unknown",
+                        "submode": "unknown",
+                        "action": None,
+                        "source": "rules",
+                        "status": "blocked",
+                    },
+                    "legacy_guards": ["auto maintenance classification blocked from normal player intent mode"],
+                    "rules_candidate": {
+                        "source": "rules",
+                        "source_user_text": "系统维护:修复存档索引",
+                        "kind": "unresolved",
+                        "mode": "unknown",
+                        "action": None,
+                        "slots": {},
+                        "plan": [],
+                        "confidence": "medium",
+                        "missing_slots": [],
+                        "needs_confirmation": [],
+                        "safety_flags": [],
+                        "reason": "legacy rules and action inference candidate",
+                    },
+                    "external_candidate": None,
+                    "decision": {"status": "fallback", "source": "rules_fallback"},
+                    "selected_outcome": {
+                        "mode": "unknown",
+                        "submode": "unknown",
+                        "action": None,
+                        "source": "rules",
+                        "status": "blocked",
+                    },
+                    "final_intent": {
+                        "mode": "unknown",
+                        "submode": "unknown",
+                        "action": None,
+                        "source": "rules",
+                        "status": "blocked",
+                    },
+                },
+            },
+            {
+                "id": "composite_plan_boundary",
+                "text": "先去 Old Bridge，找 Scout Ren 问情况，然后回来整理物资",
+                "expected": {
+                    "explicit": {"mode": None, "submode": None},
+                    "intent": {
+                        "user_text": "先去 Old Bridge,找 Scout Ren 问情况,然后回来整理物资",
+                        "mode": "action",
+                        "submode": "composite",
+                        "action": None,
+                        "kind": "composite",
+                        "status": "needs_confirmation",
+                        "source": "action_inference",
+                        "player_message": "我理解你想先去 Old Bridge，再找 Scout Ren 互动。需要先确认 travel，再重新预演 social。",
+                        "missing_required": [],
+                        "needs_confirmation": ["composite action requires step confirmation"],
+                        "errors": [],
+                        "summary": "前往Old Bridge后与Scout Ren互动。",
+                        "plan": [
+                            {
+                                "step_id": "step:1",
+                                "action": "travel",
+                                "label": "前往Old Bridge",
+                                "status": "ready",
+                                "options": {"destination": "loc:old-bridge", "pace": "normal"},
+                                "estimated_minutes": None,
+                                "risk_level": "medium",
+                                "delta_draft": None,
+                            },
+                            {
+                                "step_id": "step:2",
+                                "action": "social",
+                                "label": "与Scout Ren互动",
+                                "status": "ready",
+                                "options": {
+                                    "npc": "npc:scout-ren",
+                                    "topic": "情况,然后回来整理物资",
+                                    "approach": "直接询问",
+                                },
+                                "estimated_minutes": None,
+                                "risk_level": "low",
+                                "delta_draft": None,
+                            },
+                        ],
+                        "repair_options": [
+                            {
+                                "id": "travel_then_social",
+                                "label": "先去Old Bridge再交谈",
+                                "description": "",
+                                "action": "travel",
+                                "options": {"destination": "loc:old-bridge", "pace": "normal"},
+                                "effect": "先保存 travel，再预演 social",
+                                "risk_level": "low",
+                                "requires_confirmation": True,
+                            }
+                        ],
+                        "clarification": None,
+                    },
+                    "legacy_rule": {"mode": "action", "submode": "social"},
+                    "legacy_inferred": {
+                        "kind": "composite",
+                        "action": None,
+                        "status": "ready",
+                        "fallback": False,
+                        "missing_required": [],
+                        "summary": "前往Old Bridge后与Scout Ren互动。",
+                    },
+                    "legacy_outcome": {
+                        "mode": "action",
+                        "submode": "composite",
+                        "action": None,
+                        "source": "action_inference",
+                        "status": "needs_confirmation",
+                    },
+                    "legacy_guards": [],
+                    "rules_candidate": {
+                        "source": "rules",
+                        "source_user_text": "先去 Old Bridge,找 Scout Ren 问情况,然后回来整理物资",
+                        "kind": "composite",
+                        "mode": "action",
+                        # Legacy rules currently keep the keyword action here.
+                        # Final intent/pending/proposal must still stay composite
+                        # and non-saveable until a concrete step is re-previewed.
+                        "action": "social",
+                        "slots": {},
+                        "plan": [],
+                        "confidence": "high",
+                        "missing_slots": [],
+                        "needs_confirmation": [],
+                        "safety_flags": [],
+                        "reason": "legacy rules and action inference candidate",
+                    },
+                    "external_candidate": None,
+                    "decision": {"status": "fallback", "source": "rules_fallback"},
+                    "selected_outcome": {
+                        "mode": "action",
+                        "submode": "composite",
+                        "action": None,
+                        "source": "action_inference",
+                        "status": "needs_confirmation",
+                    },
+                    "final_intent": {
+                        "mode": "action",
+                        "submode": "composite",
+                        "action": None,
+                        "source": "action_inference",
+                        "status": "needs_confirmation",
+                    },
+                },
+            },
+            {
+                "id": "explicit_query_entity",
+                "text": "查看 Broken Seal Mark 信息",
+                "mode": "query",
+                "submode": "entity",
+                "expected": {
+                    "explicit": {"mode": "query", "submode": "entity"},
+                    "intent": {
+                        "user_text": "查看 Broken Seal Mark 信息",
+                        "mode": "query",
+                        "submode": "entity",
+                        "action": None,
+                        "kind": "single",
+                        "status": "ready",
+                        "source": "explicit",
+                        "player_message": "",
+                        "missing_required": [],
+                        "needs_confirmation": [],
+                        "errors": [],
+                        "summary": "",
+                        "plan": [],
+                        "repair_options": [],
+                        "clarification": None,
+                    },
+                    "legacy_rule": {"mode": "query", "submode": "entity"},
+                    "legacy_inferred": {
+                        "kind": "single",
+                        "action": "routine",
+                        "status": "ready",
+                        "fallback": True,
+                        "missing_required": [],
+                        "summary": None,
+                    },
+                    "legacy_outcome": {
+                        "mode": "query",
+                        "submode": "entity",
+                        "action": None,
+                        "source": "explicit",
+                        "status": "ready",
+                    },
+                    "legacy_guards": [],
+                    "rules_candidate": {
+                        "source": "rules",
+                        "source_user_text": "查看 Broken Seal Mark 信息",
+                        "kind": "query",
+                        "mode": "query",
+                        "action": None,
+                        "slots": {},
+                        "plan": [],
+                        "confidence": "medium",
+                        "missing_slots": [],
+                        "needs_confirmation": [],
+                        "safety_flags": [],
+                        "reason": "legacy rules and action inference candidate",
+                    },
+                    "external_candidate": None,
+                    "decision": {"status": "fallback", "source": "rules_fallback"},
+                    "selected_outcome": {
+                        "mode": "query",
+                        "submode": "entity",
+                        "action": None,
+                        "source": "explicit",
+                        "status": "ready",
+                    },
+                    "final_intent": {
+                        "mode": "query",
+                        "submode": "entity",
+                        "action": None,
+                        "source": "explicit",
+                        "status": "ready",
+                    },
+                },
+            },
+        ]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = GMRuntime.from_path(copy_official_campaign(tmp))
+
+            for case in cases:
+                with self.subTest(case=case["id"]):
+                    with connect(runtime.campaign) as conn:
+                        intent = route_intent(
+                            runtime.campaign,
+                            conn,
+                            case["text"],
+                            mode=case.get("mode", "auto"),
+                            submode=case.get("submode"),
+                            external_intent_candidate=case.get("external"),
+                        )
+                    trace = intent.decision_trace
+                    legacy_trace = trace["legacy_rule_route"]
+                    rules_candidate = trace["rules_candidate"]
+                    intent_ai_trace = trace["intent_ai"]
+                    self.assertEqual(rules_candidate, intent_ai_trace["rules_candidate"])
+
+                    snapshot = {
+                        "explicit": trace["explicit"],
+                        "intent": {
+                            "user_text": intent.user_text,
+                            "mode": intent.mode,
+                            "submode": intent.submode,
+                            "action": intent.action,
+                            "kind": intent.kind,
+                            "status": intent.status,
+                            "source": intent.source,
+                            "player_message": intent.player_message,
+                            "missing_required": list(intent.missing_required),
+                            "needs_confirmation": list(intent.needs_confirmation),
+                            "errors": list(intent.errors),
+                            "summary": intent.summary,
+                            "plan": [dataclass_snapshot(step) for step in intent.plan],
+                            "repair_options": [dataclass_snapshot(option) for option in intent.repair_options],
+                            "clarification": dataclass_snapshot(intent.clarification) if intent.clarification else None,
+                        },
+                        "legacy_rule": legacy_trace["rule"],
+                        "legacy_inferred": legacy_trace["inferred"],
+                        "legacy_outcome": legacy_trace["outcome"],
+                        "legacy_guards": legacy_trace["guards"],
+                        "rules_candidate": candidate_snapshot(rules_candidate),
+                        "external_candidate": candidate_snapshot(intent_ai_trace["external_candidate"]),
+                        "decision": {
+                            "status": intent_ai_trace["decision"]["status"],
+                            "source": intent_ai_trace["decision"]["source"],
+                        },
+                        "selected_outcome": intent_ai_trace["selected_outcome"],
+                        "final_intent": trace["final_intent"],
+                    }
+                    self.assertEqual(snapshot, case["expected"])
 
     def test_route_intent_records_semantic_suggestion_without_overriding_final_route(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

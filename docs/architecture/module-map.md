@@ -45,7 +45,9 @@ the six-role architecture review and amendments are recorded in
 design-goal alignment is recorded in
 `docs/architecture/intent-design-alignment-review.md`. The future internal
 `IntentCoordinator` / `TurnCoordinator` target is recorded in
-`docs/architecture/future-turn-coordinator-design.md`.
+`docs/architecture/future-turn-coordinator-design.md`. Per-round
+implementation evidence is recorded in
+`docs/architecture/intent-refactor-implementation-log.md`.
 
 ## Context and Visibility
 
