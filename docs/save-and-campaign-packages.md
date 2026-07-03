@@ -53,6 +53,7 @@ flowchart TD
 ## Campaign Package
 
 Campaign Package 面向作者。它描述可加载的世界和玩法，不保存某个玩家的进度。
+作者实际创作流程见 [作者指南](authoring-guide.md)。
 
 当前 V1 最小结构：
 

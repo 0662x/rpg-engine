@@ -156,6 +156,21 @@ SQLite 读取。
 
 如果答案不清楚，不能合入。
 
+## 残余风险 Backlog
+
+Round 4B 已把旧长评审中仍有效的后续风险摘到
+[`../_bmad-output/planning-artifacts/bmad-residual-risk-backlog.md`](../_bmad-output/planning-artifacts/bmad-residual-risk-backlog.md)。
+
+当前重点追踪：
+
+- hidden / export / AI egress 专项加固。
+- backup / restore / archive 故障注入。
+- skipped tests 豁免清单和按模块 coverage 增长。
+- eval report 版本化与历史趋势对比。
+- declarative action spec 的第二个非 random 示例。
+- pending action session / concurrency 语义。
+- TurnCoordinator 不得回退 player workflow、profile gate、atomic write 和 eval metrics。
+
 ## CI 对齐
 
 CI 当前执行：

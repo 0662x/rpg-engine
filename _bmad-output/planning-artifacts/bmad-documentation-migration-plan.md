@@ -1,6 +1,6 @@
 # BMAD 文档体系迁移计划
 
-文档状态：**ACTIVE：Round 4 归档映射中**
+文档状态：**ACTIVE：Round 4B 摘取完成**
 
 日期：2026-07-04
 
@@ -17,7 +17,9 @@
   数据模型内容；`docs/cli-contracts.md` 已合并当前 CLI public / low-level / admin
   合同内容；`docs/mcp-contracts.md` 已合并 MCP profile / tool / adapter 合同内容。
 - Round 4：已开始。旧 `docs/architecture`、`docs/specs`、`docs/guides`、`docs/prompts`
-  的归档映射见 [`../round-4-archive-map.md`](../round-4-archive-map.md)；尚未移动或归档旧文件。
+  的归档映射见 [`../round-4-archive-map.md`](../round-4-archive-map.md)。Round 4B 已处理
+  `extract-before-archive` 和 `decision-needed` 项：作者指南、prompt 长期位置、V1 产品边界
+  和残余风险已迁入 canonical docs / BMAD backlog。尚未移动或归档旧文件。
 - Round 5：待执行。归档和 stub 完成后做链接、入口和轻量回归门禁。
 
 ## 目标
@@ -62,10 +64,15 @@ docs/
   data-models.md
   cli-contracts.md
   mcp-contracts.md
+  prompt-contracts.md
   ai-intent-chain.md
   save-and-campaign-packages.md
+  authoring-guide.md
   testing-and-quality-gates.md
   project-context.md
+  prompts/
+    ai-client-prompt.md
+    author-ai-prompt.md
   governance/
     bmad-workflow.md
   archive/
@@ -77,9 +84,9 @@ docs/
 
 - `docs/index.md` 成为唯一长期文档入口。
 - `docs/README.md` 可以保留为兼容入口，但只指向 `docs/index.md`，不再维护长索引。
-- 旧 `docs/architecture`、`docs/specs`、`docs/guides`、`docs/prompts` 中仍有价值的内容
-  迁入 canonical docs。
-- 旧文件整体归档到 `docs/archive/pre-bmad-docs-2026-07-03/`，避免丢历史。
+- 旧 `docs/architecture`、`docs/specs`、`docs/guides` 中仍有价值的内容迁入 canonical docs。
+- `docs/prompts/` 保留为 active prompt artifact 目录，由 `docs/prompt-contracts.md` 治理。
+- 旧历史文件整体归档到 `docs/archive/pre-bmad-docs-2026-07-03/`，避免丢历史。
 - `docs/project-context.md` 和 `docs/governance/bmad-workflow.md` 继续保留为 BMAD
   agent 约束入口。
 
@@ -181,14 +188,18 @@ docs/
 
 - 先生成旧文档归档映射表，识别 `stub+archive`、`archive-evidence`、
   `extract-before-archive` 和 `decision-needed` 文件。
-- 把旧 `docs/architecture`、`docs/specs`、`docs/guides`、`docs/prompts` 中已迁移内容
-  归档到 `docs/archive/pre-bmad-docs-2026-07-03/`。
+- Round 4B 先处理 `extract-before-archive` 和 `decision-needed` 项：
+  作者指南、prompt 长期位置、V1 产品边界和残余风险。
+- 把旧 `docs/architecture`、`docs/specs`、`docs/guides` 中已迁移内容归档到
+  `docs/archive/pre-bmad-docs-2026-07-03/`。
 - 只保留必要的 compatibility stub 或入口说明。
 
 验收：
 
 - 归档前已处理 [`../round-4-archive-map.md`](../round-4-archive-map.md) 中列出的
   `extract-before-archive` 和 `decision-needed` 项。
+- `docs/prompts/` 的 active prompt artifact 不作为历史文档移动，除非 future template
+  位置已完成替代迁移。
 - 不丢历史。
 - 旧链接要么更新，要么通过 stub 指向新位置。
 - `rg` 检查不再有主要入口指向旧权威文档。

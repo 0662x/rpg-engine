@@ -21,6 +21,37 @@ Campaign Package、Save Package、`GMRuntime`、CLI、MCP adapter 和平台 side
 - 内容权威：Campaign Package、打包 schema、内容注册与验证。
 - AI 边界：AI 可以生成候选和叙事；最终 preview、validation、confirm、commit 必须在引擎内。
 
+## V1 范围与非目标
+
+V1 是收敛式本地内核，不是平台化扩张。必须交付的主线能力是：
+
+- AIGM Kernel 核心库。
+- Campaign Package 规范、校验器和作者 smoke tests。
+- Save Package 规范、初始化、查看、校验、归档和安全维护入口。
+- CLI 参考实现。
+- MCP adapter 薄适配层。
+- 通用 AI 客户端 prompt。
+- 小型官方示例剧本。
+- 对旧纯文档系统整理后继续游玩的承载能力；允许人工或 AI 辅助迁移，不承诺无监督一键完美迁移。
+
+V1 明确不做：
+
+- Web 后端、HTTP API、多人在线、账号、云同步、市场。
+- 强制依赖 LLM 的核心运行路径。
+- 独立聊天 UI 或内置 AI 剧本生成器。
+- 动态插件系统、插件市场、作者自定义代码执行、脚本化规则引擎或插件 SDK。
+- 模型网关、agent 平台、长期任务系统。
+- 10k / 100k 规模目标。
+- 完整电子游戏式战斗、制作、经营、恋爱、政治或国家模拟数值系统。
+
+产品边界：
+
+- 核心默认不依赖 LLM；AI helpers 只能是 advisory，不能成为事实源或写库入口。
+- CLI 和 MCP 必须是薄入口，不能形成第二套业务编排。
+- MCP 是通用 adapter，不是单一客户端私有插件。
+- Campaign 作者只编辑 Markdown、YAML、JSON、prompt 和 template；不需要理解 Python、SQLite、MCP、delta 或 projection。
+- 题材差异通过 Campaign Package 内容、capability、规则摘要、随机表和结构化状态表达。
+
 ## 技术栈
 
 - Python `>=3.11`
