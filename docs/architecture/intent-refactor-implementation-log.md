@@ -641,3 +641,106 @@ Documentation sync:
   bundling scope and intentionally defers CLI/SaveManager call-site bundling to
   later Phase 3c rounds.
 - Final Round 6 expert review is complete with no blockers.
+
+## Round 7: Phase 3c2 SaveManager Intent Input Bundling
+
+Status: **COMPLETE**
+
+Goal:
+
+Continue Phase 3c by bundling `SaveManager.player_turn()` intent settings and
+passive request metadata before the Runtime player preview call, while keeping
+the player-safe entry surface unchanged.
+
+Code scope:
+
+- `rpg_engine/save_manager.py`
+- `tests/test_save_manager.py`
+
+Runtime behavior impact:
+
+- `SaveManager.player_turn()` now builds `IntentRequestMeta` before calling
+  `GMRuntime.act()`.
+- For non-empty player text, `player_turn()` builds `IntentAIConfig` and passes
+  normalized intent settings into Runtime.
+- Empty player text intentionally keeps intent config validation inside
+  `GMRuntime.preview_from_text()` so the existing clarify-first behavior still
+  wins over invalid backend settings.
+- `player_turn()` still clears stale pending actions before preview, still
+  writes pending player actions only when Runtime returns a ready proposal, and
+  still hides `delta_draft` / `turn_proposal` from the player response.
+- `player_act()` remains a compatibility wrapper over `player_turn()`.
+- CLI, MCP, platform sidecar, Runtime, ContextBuilder, preflight-cache,
+  resolver, validation, and commit code are unchanged.
+
+Added regression coverage:
+
+- `test_player_turn_empty_text_keeps_clarification_before_intent_config_validation`
+  - Confirms SaveManager player turns still return the empty-user-text clarify
+    response even when a bad intent backend is supplied.
+  - Confirms no pending player action is created for that path.
+- `test_player_turn_bundles_intent_inputs_without_exposing_internal_delta`
+  - Confirms `player_turn()` can route through bundled intent config/meta while
+    the public player response still hides internal delta/proposal fields.
+  - Confirms the internal pending action trace carries normalized intent config
+    values.
+
+Verification so far:
+
+```bash
+python3 -m py_compile rpg_engine/save_manager.py tests/test_save_manager.py
+
+python3 -m pytest -q tests/test_save_manager.py \
+  -k "bundles_intent_inputs or empty_text_keeps_clarification or player_turn_standard_entry or player_turn_cli_accepts_external_candidate"
+
+python3 -m pytest -q tests/test_mcp_adapter.py tests/test_save_manager.py \
+  -k "player_profile or player_turn or player_act or player_workflow or standard_entry or external_candidate"
+
+python3 -m pytest -q tests/test_save_manager.py
+
+git diff --check
+```
+
+Result:
+
+```text
+py_compile passed
+5 passed, 7 deselected, 12 subtests passed
+15 passed, 20 deselected, 17 subtests passed
+12 passed, 17 subtests passed
+git diff --check passed
+```
+
+Expert code review:
+
+- Engine boundary: pass. Confirmed SaveManager-only bundling preserves the
+  public boundary and reran the focused SaveManager/MCP gates.
+- AI intent safety: pass. Confirmed `external_intent_candidate` remains
+  separate from passive `IntentRequestMeta`, empty text still clarifies before
+  intent config validation, and pending action trace remains internal.
+- Gameplay turn flow: pass. Confirmed pending clarification repeat blocking,
+  pending action creation, hidden delta/proposal response, and `player_confirm`
+  session requirements remain intact.
+- Platform/MCP integration: pass. Confirmed MCP player entry, CLI arguments,
+  and platform sidecar call paths are unchanged.
+- QA/regression: pass. Confirmed the current targeted coverage is sufficient
+  for this diff; direct SaveManager preflight-hit coverage can be added later
+  if the path changes again.
+- Repo/docs: pass. Confirmed implementation log scope and verification results
+  match the diff.
+
+Residual risks:
+
+- Request metadata forwarding through SaveManager is covered indirectly by the
+  MCP `player_act` message-only preflight path rather than by a new direct
+  SaveManager-only preflight-hit test.
+- If `make_intent_request_meta()` later gains stricter validation, re-check the
+  empty-text path because SaveManager now builds passive request metadata before
+  calling Runtime.
+
+Documentation sync:
+
+- This implementation log records the Phase 3c2 SaveManager-only bundling
+  scope and intentionally defers CLI call-site bundling to the next Phase 3c
+  round.
+- Final Round 7 expert review is complete with no blockers.

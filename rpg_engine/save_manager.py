@@ -17,7 +17,8 @@ from .atomic_io import write_text_atomic
 from .campaign import load_campaign
 from .db import utc_now
 from .game_session import clean, hash_identity
-from .runtime import GMRuntime
+from .intent_router import make_intent_ai_config, make_intent_request_meta
+from .runtime import GMRuntime, intent_ai_config_kwargs, intent_request_meta_kwargs
 from .save_service import init_v1_save, inspect_v1_save, normalize_content_paths_for_save
 from .validation_issues import issues_from_messages
 
@@ -415,24 +416,42 @@ class SaveManager:
                 "repair_options": [],
             }
         runtime = GMRuntime.from_path(self.resolve_relative(str(save["path"]), "save"))
-        result = runtime.act(
-            user_text,
-            view="player",
-            intent_ai=intent_ai,
-            intent_backend=intent_backend,
-            intent_model=intent_model,
-            intent_provider=intent_provider,
-            intent_timeout=intent_timeout,
-            intent_base_url=intent_base_url,
-            intent_api_key_env=intent_api_key_env,
-            intent_fallback_backend=intent_fallback_backend,
-            external_intent_candidate=external_intent_candidate,
+        intent_kwargs = {
+            "intent_ai": intent_ai,
+            "intent_backend": intent_backend,
+            "intent_model": intent_model,
+            "intent_provider": intent_provider,
+            "intent_timeout": intent_timeout,
+            "intent_base_url": intent_base_url,
+            "intent_api_key_env": intent_api_key_env,
+            "intent_fallback_backend": intent_fallback_backend,
+        }
+        if isinstance(user_text, str) and user_text.strip():
+            intent_config = make_intent_ai_config(
+                intent_ai=intent_ai,
+                intent_backend=intent_backend,
+                intent_model=intent_model,
+                intent_provider=intent_provider,
+                intent_timeout=intent_timeout,
+                intent_base_url=intent_base_url,
+                intent_api_key_env=intent_api_key_env,
+                intent_fallback_backend=intent_fallback_backend,
+            )
+            intent_kwargs = intent_ai_config_kwargs(intent_config)
+        request_meta = make_intent_request_meta(
             preflight_id=preflight_id,
             message_id=message_id,
             platform=platform,
             session_key=session_key,
             source_user_text_hash=source_user_text_hash,
             preflight_pending_wait_ms=preflight_pending_wait_ms,
+        )
+        result = runtime.act(
+            user_text,
+            view="player",
+            **intent_kwargs,
+            external_intent_candidate=external_intent_candidate,
+            **intent_request_meta_kwargs(request_meta),
         ).to_dict()
         ready = bool(result.get("ready_to_save") and result.get("delta_draft") and result.get("turn_proposal"))
         clarification = extract_result_clarification(result)

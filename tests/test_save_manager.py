@@ -9,6 +9,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from rpg_engine.ai.defaults import DEFAULT_AI_MODEL, DEFAULT_AI_PROVIDER
 from rpg_engine.save_manager import SaveManager
 from rpg_engine.save_service import init_v1_save, inspect_v1_save
 from tests.helpers import consensus_candidate, internal_query_review, internal_review, query_candidate
@@ -253,6 +254,77 @@ class SaveManagerTests(unittest.TestCase):
             self.assertTrue(confirmed["ok"], confirmed)
             self.assertNotEqual(legacy.returncode, 0)
             self.assertIn("unrecognized arguments: --external-intent-candidate", legacy.stderr)
+
+    def test_player_turn_empty_text_keeps_clarification_before_intent_config_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            campaign_dir = root / "campaigns" / "official"
+            shutil.copytree(OFFICIAL_EXAMPLE, campaign_dir)
+            manager = SaveManager(root, default_campaign="campaigns/official")
+            manager.start_or_continue(campaign="campaigns/official")
+
+            result = manager.player_turn(user_text="   ", intent_backend="not-a-backend")
+
+            self.assertFalse(result["ok"], result)
+            self.assertEqual(result["status"], "clarify")
+            self.assertFalse(result["ready_to_confirm"], result)
+            self.assertFalse(result["saved"], result)
+            self.assertEqual(result["errors"], [])
+            self.assertNotIn("delta_draft", result)
+            self.assertNotIn("turn_proposal", result)
+            self.assertFalse((root / ".aigm" / "pending-player-action.json").exists())
+
+    def test_player_turn_bundles_intent_inputs_without_exposing_internal_delta(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            campaign_dir = root / "campaigns" / "official"
+            shutil.copytree(OFFICIAL_EXAMPLE, campaign_dir)
+            manager = SaveManager(root, default_campaign="campaigns/official")
+            manager.start_or_continue(campaign="campaigns/official")
+            external = consensus_candidate("rest", {"until": "morning"}, reason="external AI selected rest")
+            old_fake = os.environ.get("AIGM_AI_FAKE_RESPONSE")
+            os.environ["AIGM_AI_FAKE_RESPONSE"] = json.dumps(
+                internal_review("rest", {"until": "morning"}, reason="internal AI selected rest"),
+                ensure_ascii=False,
+            )
+            try:
+                result = manager.player_turn(
+                    user_text="休息到早上",
+                    external_intent_candidate=external,
+                    intent_ai="CONSENSUS",
+                    intent_backend="direct",
+                    intent_provider="",
+                    intent_model="",
+                    intent_timeout=1,
+                    intent_base_url="https://ai.example.test/v1",
+                    intent_api_key_env="AIGM_TEST_KEY",
+                    intent_fallback_backend="off",
+                    message_id="msg:save-manager-bundle",
+                    platform="qq",
+                    session_key="room:save-manager-bundle",
+                    preflight_pending_wait_ms=-5,
+                )
+            finally:
+                if old_fake is None:
+                    os.environ.pop("AIGM_AI_FAKE_RESPONSE", None)
+                else:
+                    os.environ["AIGM_AI_FAKE_RESPONSE"] = old_fake
+
+            self.assertTrue(result["ok"], result)
+            self.assertTrue(result["ready_to_confirm"], result)
+            self.assertEqual(result["action"], "rest")
+            self.assertNotIn("delta_draft", result)
+            self.assertNotIn("turn_proposal", result)
+            pending = json.loads((root / ".aigm" / "pending-player-action.json").read_text(encoding="utf-8"))
+            trace = pending["turn_proposal"]["intent"]["decision_trace"]["intent_ai"]
+            self.assertEqual(trace["mode"], "consensus")
+            self.assertEqual(trace["backend"], "direct")
+            self.assertEqual(trace["provider"], DEFAULT_AI_PROVIDER)
+            self.assertEqual(trace["model"], DEFAULT_AI_MODEL)
+            self.assertEqual(trace["timeout"], 3)
+            self.assertEqual(trace["base_url"], "https://ai.example.test/v1")
+            self.assertEqual(trace["api_key_env"], "AIGM_TEST_KEY")
+            self.assertEqual(trace["fallback_backend"], "off")
 
     def test_player_turn_standard_entry_covers_all_manifest_actions(self) -> None:
         cases = [
