@@ -7,6 +7,11 @@ Date: 2026-07-03
 This document records the safe refactor plan for consolidating AI intent
 orchestration without changing player-facing behavior.
 
+Historical AI intent design alignment is recorded in
+`docs/architecture/intent-design-alignment-review.md`. That review clarifies
+that Phase 1 is an **Intent Candidate Preparation Refactor**, not the full
+future `IntentCoordinator` or `plan_turn` implementation.
+
 Six-role architecture review amendments are recorded in
 `docs/architecture/intent-coordinator-team-review.md`. That review tightens this
 plan with characterization tests, `message_only` preflight blockers, Phase 3
@@ -32,6 +37,12 @@ The goal of this refactor is therefore narrow:
    routing.
 5. Preserve every trust boundary around external AI, preflight cache, platform
    sidecar, preview, validation, and commit.
+
+This refactor is not allowed to turn legacy keyword/rule routing back into the
+primary long-term natural-language judge. The legacy route is preserved as a
+characterization baseline, deterministic rules candidate, fallback signal, and
+debug trace while the AI consensus path remains the intended direction for open
+player language.
 
 ## Current Chain
 
@@ -142,8 +153,9 @@ Do not do these as part of the first refactor:
 
 ## Target Shape
 
-The first target is a thin internal coordinator near `rpg_engine.intent_router`.
-It should be boring and mostly mechanical.
+The first target is a thin internal preparation layer near
+`rpg_engine.intent_router`. It should be boring and mostly mechanical. It may
+later support a real coordinator package, but Phase 1 is not that package.
 
 Suggested additions:
 
@@ -162,7 +174,6 @@ class IntentAIConfig:
 
 @dataclass(frozen=True)
 class IntentRequestMeta:
-    external_intent_candidate: dict[str, Any] | None
     preflight_id: str
     message_id: str
     platform: str
@@ -172,14 +183,24 @@ class IntentRequestMeta:
 
 
 @dataclass(frozen=True)
+class ExternalCandidateInput:
+    payload: dict[str, Any] | None
+
+
+@dataclass(frozen=True)
 class PreparedIntentCandidates:
     text: str
     explicit_mode: str | None
     explicit_submode: str | None
     legacy_route: LegacyRuleRoute
     rules_candidate: IntentCandidate
-    external_candidate: IntentCandidate | None
+    external_for_live_route: IntentCandidate | None
 ```
+
+`IntentRequestMeta` is passive identity only. It must not contain external
+candidate, internal candidate, delta, proposal, permission, profile override, AI
+backend override, or save authority. External candidate input should remain
+adjacent but visibly low-trust and separate from passive request metadata.
 
 Suggested helper functions:
 
@@ -189,7 +210,7 @@ def make_intent_ai_config(...) -> IntentAIConfig:
 
 
 def make_intent_request_meta(...) -> IntentRequestMeta:
-    """Normalize passive external/preflight request metadata once."""
+    """Normalize passive preflight/request identity once."""
 
 
 def prepare_intent_candidates(
@@ -199,6 +220,7 @@ def prepare_intent_candidates(
     mode: str = "auto",
     submode: str | None = None,
     meta: IntentRequestMeta,
+    external_candidate_input: ExternalCandidateInput | None = None,
 ) -> PreparedIntentCandidates:
     """Normalize text, external candidate, legacy route, and rules candidate."""
 
@@ -300,6 +322,7 @@ Scope:
   `IntentAIConfig` and `IntentRequestMeta` as early as possible.
 - Reduce repeated normalization and request dict assembly where it can be done
   without changing public output.
+- Keep external candidate input separate from passive `IntentRequestMeta`.
 - Do not change MCP profile behavior.
 - Do not change CLI argument names.
 

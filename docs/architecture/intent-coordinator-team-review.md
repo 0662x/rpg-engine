@@ -10,6 +10,11 @@ intent orchestration path. It complements
 review discussion and final design amendments; the refactor plan remains the
 step-by-step implementation checklist.
 
+Historical design-goal alignment is recorded in
+`docs/architecture/intent-design-alignment-review.md`. That follow-up review
+confirms this work is a candidate-preparation cleanup, not the full future
+`IntentCoordinator` or `plan_turn` implementation.
+
 ## Review Method
 
 Six read-only specialist reviews were performed:

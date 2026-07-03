@@ -41,7 +41,9 @@ should flow through the standard intent chain instead of adding routing policy
 to CLI, MCP, platform, or save-manager surfaces. Refactor sequencing for this
 area is recorded in `docs/architecture/intent-coordinator-refactor-plan.md`;
 the six-role architecture review and amendments are recorded in
-`docs/architecture/intent-coordinator-team-review.md`.
+`docs/architecture/intent-coordinator-team-review.md`. Historical AI intent
+design-goal alignment is recorded in
+`docs/architecture/intent-design-alignment-review.md`.
 
 ## Context and Visibility
 
