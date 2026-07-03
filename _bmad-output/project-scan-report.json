@@ -1,0 +1,133 @@
+{
+  "workflow_version": "1.2.0",
+  "timestamps": {
+    "started": "2026-07-03T20:50:22+10:00",
+    "last_updated": "2026-07-03T21:08:27+10:00",
+    "completed": "2026-07-03T21:08:27+10:00"
+  },
+  "mode": "initial_scan",
+  "scan_level": "deep",
+  "project_root": "/Users/oliver/.hermes/rpg-engine",
+  "output_folder": "/Users/oliver/.hermes/rpg-engine/_bmad-output",
+  "completed_steps": [
+    {
+      "step": "step_1_project_classification",
+      "status": "completed",
+      "timestamp": "2026-07-03T20:50:22+10:00",
+      "outputs": [
+        "_bmad-output/project-overview.md"
+      ],
+      "summary": "Detected a Python backend/CLI/library style local-first AI GM game engine kernel, not a Unity/Godot-style graphical client."
+    },
+    {
+      "step": "step_2_source_tree_scan",
+      "status": "completed",
+      "timestamp": "2026-07-03T20:50:22+10:00",
+      "outputs": [
+        "_bmad-output/source-tree-analysis.md"
+      ],
+      "summary": "Scanned top-level directories and critical rpg_engine modules, excluding runtime caches and save-like artifacts."
+    },
+    {
+      "step": "step_3_architecture_scan",
+      "status": "completed",
+      "timestamp": "2026-07-03T20:50:22+10:00",
+      "outputs": [
+        "_bmad-output/architecture.md",
+        "_bmad-output/component-inventory.md"
+      ],
+      "summary": "Documented player-safe, low-level runtime, platform sidecar, prewarm, intent, context, preview/proposal and commit boundaries."
+    },
+    {
+      "step": "step_4_data_model_scan",
+      "status": "completed",
+      "timestamp": "2026-07-03T20:50:22+10:00",
+      "outputs": [
+        "_bmad-output/data-models.md"
+      ],
+      "summary": "Summarized packaged SQLite migrations, JSON schemas, Campaign Package, Save Package and runtime data boundaries."
+    },
+    {
+      "step": "step_5_development_guide_scan",
+      "status": "completed",
+      "timestamp": "2026-07-03T20:50:22+10:00",
+      "outputs": [
+        "_bmad-output/development-guide.md"
+      ],
+      "summary": "Captured local setup, CI-aligned commands, BMAD workflow guardrails and public repository constraints."
+    },
+    {
+      "step": "step_6_review_sync",
+      "status": "completed",
+      "timestamp": "2026-07-03T21:08:27+10:00",
+      "outputs": [
+        "_bmad-output/round-1-sync-report.md"
+      ],
+      "summary": "Recorded expert review findings, corrections, validation results and next migration risks."
+    }
+  ],
+  "current_step": "complete",
+  "findings": {
+    "project_classification": {
+      "repository_type": "monorepo-like single Python package with docs, examples, scripts and runtime materials",
+      "parts_count": 1,
+      "primary_language": "Python",
+      "architecture_type": "local-first AI GM engine kernel with CLI, MCP, runtime facade, SQLite state and AI intent orchestration"
+    },
+    "technology_stack": [
+      {
+        "part_id": "engine",
+        "tech_summary": "Python >=3.11, PyYAML, jsonschema, optional MCP, pytest, coverage, ruff, build and twine."
+      }
+    ],
+    "batches_completed": [
+      {
+        "path": "rpg_engine",
+        "files_scanned": 149,
+        "summary": "Critical runtime, save, intent, context, platform, action, package and infrastructure modules scanned by role."
+      },
+      {
+        "path": "tests",
+        "files_scanned": 50,
+        "summary": "Test inventory counted and full pytest suite executed after documentation changes."
+      },
+      {
+        "path": "docs",
+        "files_scanned": 45,
+        "summary": "Legacy Markdown docs counted and treated as migration source material, not canonical truth."
+      },
+      {
+        "path": "rpg_engine/resources",
+        "files_scanned": 24,
+        "summary": "Packaged migrations, schemas, examples and eval resources scanned for model and package boundaries."
+      }
+    ]
+  },
+  "outputs_generated": [
+    "_bmad-output/index.md",
+    "_bmad-output/project-overview.md",
+    "_bmad-output/source-tree-analysis.md",
+    "_bmad-output/architecture.md",
+    "_bmad-output/component-inventory.md",
+    "_bmad-output/data-models.md",
+    "_bmad-output/development-guide.md",
+    "_bmad-output/round-1-sync-report.md"
+  ],
+  "resume_instructions": "Round 1 Deep Scan is complete. Resume by using these _bmad-output artifacts as reviewed scan material to create canonical BMAD docs under docs/, then inventory and migrate legacy docs one by one.",
+  "validation_status": {
+    "last_validated": "2026-07-03T21:08:27+10:00",
+    "validation_errors": []
+  },
+  "scan_notes": {
+    "language": "zh-CN",
+    "legacy_docs_policy": "Do not bulk-copy old docs. Treat them as sources to classify as valid, partially valid, stale or archive-only.",
+    "runtime_data_policy": "Do not publish runtime data such as .aigm/, saves/, Save Packages, player save databases, platform session bindings or preflight cache contents.",
+    "inventory": {
+      "python_source_files": 149,
+      "pytest_files": 50,
+      "legacy_markdown_docs": 45,
+      "sqlite_migrations": 8,
+      "packaged_json_schemas": 13
+    }
+  }
+}

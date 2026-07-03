@@ -121,7 +121,8 @@ docs/
 - 入口清楚。
 - 每个文档只表达一种职责。
 - 不删除旧文档。
-- `git diff --check` 通过。
+- `git add -N docs _bmad-output && git diff --check` 通过。
+- `python3 scripts/check_markdown_links.py docs _bmad-output` 通过。
 
 ### Round 3：领域文档合并
 
@@ -179,7 +180,9 @@ docs/
 建议门禁：
 
 ```bash
+git add -N docs _bmad-output
 git diff --check
+python3 scripts/check_markdown_links.py docs _bmad-output
 python3 -m pytest -q tests/test_ai_intent.py tests/test_save_manager.py
 ```
 
