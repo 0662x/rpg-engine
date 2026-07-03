@@ -29,9 +29,13 @@ from .ai_intent.internal_review import collect_internal_intent_candidate
 from .intent_router import (
     ActionIntent,
     ExternalCandidateInput,
+    IntentAIConfig,
+    IntentRequestMeta,
     action_intent_from_dict,
     action_intent_to_dict,
     detect_preview_action_mismatch,
+    make_intent_ai_config,
+    make_intent_request_meta,
     normalize_player_text,
     prepare_intent_candidates,
     route_intent,
@@ -589,6 +593,30 @@ def query_text_for_intent(intent: ActionIntent, query_kind: str) -> str | None:
     return intent.user_text
 
 
+def intent_ai_config_kwargs(config: IntentAIConfig) -> dict[str, Any]:
+    return {
+        "intent_ai": config.mode,
+        "intent_backend": config.backend,
+        "intent_provider": config.provider,
+        "intent_model": config.model,
+        "intent_timeout": config.timeout,
+        "intent_base_url": config.base_url,
+        "intent_api_key_env": config.api_key_env,
+        "intent_fallback_backend": config.fallback_backend,
+    }
+
+
+def intent_request_meta_kwargs(meta: IntentRequestMeta) -> dict[str, Any]:
+    return {
+        "preflight_id": meta.preflight_id,
+        "message_id": meta.message_id,
+        "platform": meta.platform,
+        "session_key": meta.session_key,
+        "source_user_text_hash": meta.source_user_text_hash,
+        "preflight_pending_wait_ms": meta.preflight_pending_wait_ms,
+    }
+
+
 class GMRuntime:
     """Stable V1-facing facade over the existing engine internals."""
 
@@ -1098,6 +1126,24 @@ class GMRuntime:
                 ),
                 missing_required=("user_text",),
             )
+        intent_config = make_intent_ai_config(
+            intent_ai=intent_ai,
+            intent_backend=intent_backend,
+            intent_provider=intent_provider,
+            intent_model=intent_model,
+            intent_timeout=intent_timeout,
+            intent_base_url=intent_base_url,
+            intent_api_key_env=intent_api_key_env,
+            intent_fallback_backend=intent_fallback_backend,
+        )
+        request_meta = make_intent_request_meta(
+            preflight_id=preflight_id,
+            message_id=message_id,
+            platform=platform,
+            session_key=session_key,
+            source_user_text_hash=source_user_text_hash,
+            preflight_pending_wait_ms=preflight_pending_wait_ms,
+        )
         with connect(self.campaign) as conn:
             intent = route_intent(
                 self.campaign,
@@ -1109,21 +1155,9 @@ class GMRuntime:
                 semantic_provider=semantic_provider,
                 semantic_model=semantic_model,
                 semantic_timeout=semantic_timeout,
-                intent_ai=intent_ai,
-                intent_backend=intent_backend,
-                intent_provider=intent_provider,
-                intent_model=intent_model,
-                intent_timeout=intent_timeout,
-                intent_base_url=intent_base_url,
-                intent_api_key_env=intent_api_key_env,
-                intent_fallback_backend=intent_fallback_backend,
+                **intent_ai_config_kwargs(intent_config),
                 external_intent_candidate=external_intent_candidate,
-                preflight_id=preflight_id,
-                message_id=message_id,
-                platform=platform,
-                session_key=session_key,
-                source_user_text_hash=source_user_text_hash,
-                preflight_pending_wait_ms=preflight_pending_wait_ms,
+                **intent_request_meta_kwargs(request_meta),
             )
         return self.preview_intent(intent, view=view)
 

@@ -348,3 +348,95 @@ Documentation sync:
 - This implementation log records the Phase 2 change and its current
   verification gate.
 - Final Round 3 expert review is complete with no blockers.
+
+## Round 4: Phase 3a Runtime Text Preview Intent Bundling
+
+Status: **COMPLETE**
+
+Goal:
+
+Start Phase 3a by bundling Runtime's text-preview intent parameters into the
+existing `IntentAIConfig` and `IntentRequestMeta` value objects before calling
+`route_intent()`.
+
+Code scope:
+
+- `rpg_engine/runtime.py`
+- `tests/test_runtime.py`
+
+Runtime behavior impact:
+
+- `GMRuntime.preview_from_text()` now builds `IntentAIConfig` and
+  `IntentRequestMeta` after the empty-text guard and before opening the DB
+  connection.
+- The public `GMRuntime.preview_from_text()` and `GMRuntime.act()` signatures
+  are unchanged.
+- `GMRuntime.act()` still delegates to `preview_from_text()` with the same
+  public arguments.
+- `GMRuntime.start_turn()` and `ContextBuilder` are intentionally unchanged;
+  ContextBuilder bundling remains Phase 3b.
+- External candidate input remains a separate low-trust argument and is not
+  placed inside passive `IntentRequestMeta`.
+- No MCP, CLI, SaveManager, platform, preflight-cache, resolver, validation, or
+  commit code changed.
+
+Added internal helpers:
+
+- `intent_ai_config_kwargs()`
+- `intent_request_meta_kwargs()`
+
+Added regression coverage:
+
+- `test_preview_from_text_bundles_runtime_intent_config_after_empty_text_guard`
+  - Confirms empty text still returns a clarification before invalid intent
+    backend validation.
+  - Confirms Runtime text preview still passes normalized backend/provider/
+    model/timeout/base-url/api-key/fallback settings into intent trace.
+
+Verification so far:
+
+```bash
+python3 -m compileall -q rpg_engine/runtime.py tests/test_runtime.py
+
+python3 -m pytest -q tests/test_runtime.py \
+  -k "preview_from_text_bundles_runtime_intent_config or external_intent_candidate_schema_error or start_turn_records_external_intent_candidate"
+
+python3 -m pytest -q tests/test_mcp_adapter.py tests/test_save_manager.py \
+  -k "player_profile or player_turn or player_act or player_workflow or standard_entry or external_candidate"
+
+python3 -m pytest -q tests/test_ai_intent.py tests/test_runtime.py tests/test_save_manager.py \
+  -k "intent_ai or intent_router or external_intent_candidate or semantic_suggestion or gold_set or candidate_preparation_characterization or route_preparation_cases_unsaved or prepare_intent_candidates or conflicting_external_candidate or preview_from_text_bundles_runtime_intent_config"
+
+git diff --check
+```
+
+Result:
+
+```text
+compileall passed
+3 passed, 56 deselected
+13 passed, 18 deselected, 17 subtests passed
+21 passed, 87 deselected, 40 subtests passed
+git diff --check passed
+```
+
+Expert code review:
+
+- Engine boundary: pass. Confirmed empty-text guard still precedes intent
+  config validation and public signatures are unchanged.
+- AI intent safety: pass. Confirmed `IntentRequestMeta` remains passive-only and
+  external candidate input stays separate.
+- Gameplay turn flow: pass. Confirmed player-facing text preview behavior stays
+  unchanged.
+- Platform/MCP integration: pass. Confirmed no MCP, CLI, SaveManager, platform,
+  or ContextBuilder files changed.
+- QA/regression: pass. Confirmed staged diff preserves existing public surfaces
+  and focused gates passed.
+- Repo/docs: pass. Confirmed the implementation log matches the staged diff and
+  verification results.
+
+Documentation sync:
+
+- This implementation log records the Phase 3a Runtime-only bundling scope and
+  intentionally defers ContextBuilder/MCP/SaveManager bundling to Phases 3b/3c.
+- Final Round 4 expert review is complete with no blockers.

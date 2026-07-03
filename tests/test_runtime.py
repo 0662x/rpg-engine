@@ -1317,6 +1317,34 @@ class GMRuntimeTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, r"external_intent_candidate schema validation failed"):
                 runtime.preview_from_text("休息到早上", external_intent_candidate=external)
 
+    def test_preview_from_text_bundles_runtime_intent_config_after_empty_text_guard(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = GMRuntime.from_path(copy_minimal_campaign(tmp))
+
+            empty = runtime.preview_from_text("", intent_backend="bad-backend")
+            self.assertEqual(empty.status, "clarify")
+            self.assertEqual(empty.missing_required, ("user_text",))
+
+            preview = runtime.preview_from_text(
+                "休息到早上",
+                intent_backend="hermes",
+                intent_provider="",
+                intent_model="",
+                intent_timeout=1,
+                intent_base_url="https://ai.example.test/v1",
+                intent_api_key_env="TEST_AI_KEY",
+                intent_fallback_backend="hermes",
+            )
+
+            trace = preview.interpretation["intent"]["decision_trace"]["intent_ai"]
+            self.assertEqual(trace["backend"], "hermes_z")
+            self.assertEqual(trace["provider"], DEFAULT_AI_PROVIDER)
+            self.assertEqual(trace["model"], DEFAULT_AI_MODEL)
+            self.assertEqual(trace["timeout"], 3)
+            self.assertEqual(trace["base_url"], "https://ai.example.test/v1")
+            self.assertEqual(trace["api_key_env"], "TEST_AI_KEY")
+            self.assertEqual(trace["fallback_backend"], "hermes_z")
+
     def test_consensus_intent_ai_adopts_external_internal_agreement(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             runtime = GMRuntime.from_path(copy_minimal_campaign(tmp))
