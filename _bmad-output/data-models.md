@@ -1,112 +1,155 @@
 # 数据模型
 
-文档状态：DRAFT / Round 1 Deep Scan
-语言：zh-CN
-迁移阶段：BMAD 扫描素材，未进入 canonical docs
+文档状态：**DRAFT：GDS full_rescan exhaustive data model scan**
+日期：2026-07-04
+工作流：`gds-document-project`
 
-## 权威状态
+本文件是 BMAD/GDS exhaustive rescan 的数据模型产物。它记录当前代码事实，不直接替代
+长期 canonical 文档 [`docs/data-models.md`](../docs/data-models.md)。
 
-Save Package 内的 SQLite 数据库是当前状态权威。事件表提供审计与回放材料，事实表和领域表提供当前查询与上下文构建材料。
+## BMAD Provenance
 
-## 初始迁移
+- Skill：`.agents/skills/gds-document-project/SKILL.md`
+- Resolver：
+  `python3 _bmad/scripts/resolve_customization.py --skill .agents/skills/gds-document-project --key workflow`
+- Mode：`full_rescan`
+- Scan level：`exhaustive`
+- Evidence：`rpg_engine/db.py`、`rpg_engine/resources/migrations/`、
+  `rpg_engine/resources/schemas/`、`rpg_engine/save_manager.py`、`rpg_engine/runtime.py`、
+  `rpg_engine/preflight_cache.py`、`rpg_engine/platform_sidecar.py`
 
-`rpg_engine/resources/migrations/0001_init.sql` 定义基础表：
+## 权威关系
 
-| 表 | 责任 |
+Save Package 内的 SQLite 数据库是当前事实权威。Events、JSONL、snapshots、
+cards、memory summaries、reports、registry、archive manifest、preflight cache 都是
+审计、投影、索引、运行时状态或 advisory evidence，不能绕过写入校验。
+
+一句话边界：
+
+```text
+AI proposes. Kernel verifies. Player confirms. Engine commits.
+```
+
+## SQLite Migrations
+
+当前打包迁移权威目录是 `rpg_engine/resources/migrations/`。
+
+| Migration | Responsibility |
 | --- | --- |
-| `meta` | 数据库元信息 |
-| `turns` | 回合记录 |
-| `events` | 状态事件流 |
-| `entities` | 通用实体 |
-| `aliases` | 名称/别名 |
-| `facts` | 事实表 |
-| `characters` | 角色 |
-| `items` | 物品 |
-| `locations` | 地点 |
-| `routes` | 路线 |
-| `crop_plots` | 作物/地块 |
-| `clocks` | 时钟 |
-| `rules` | 规则 |
-| `memory_summaries` | 记忆摘要 |
-| `context_runs` | 上下文构建运行记录 |
-| `context_items` | 上下文条目 |
-| `fts_index` | 全文索引 |
+| `0001_init.sql` | 基础事实库、turns/events/entities/facts/items/locations/routes/clocks/rules/context。 |
+| `0002_world_settings.sql` | World settings key/value store。 |
+| `0003_write_reliability.sql` | `turns.command_*`、`schema_migrations.checksum`、`outbox`、`projection_state`。 |
+| `0004_discovery_proposals.sql` | `discovery_states`、`proposal_queue`。 |
+| `0005_archivist_proposal_queue.sql` | `archivist_suggestions`。 |
+| `0006_intent_preflight_cache.sql` | `intent_preflight_cache` base table and status/message indexes。 |
+| `0007_intent_preflight_identity_hardening.sql` | Preflight context/provider/model/backend/fallback/profile identity fields。 |
+| `0008_intent_joiner_message_only.sql` | Message-only join fields and message join index。 |
 
-## 后续迁移
+Root-level `migrations/` currently mirrors only `0001` through `0005`; installed runtime
+resource loading uses the packaged migration directory.
 
-| 迁移 | 主题 | 关键表/字段 |
-| --- | --- | --- |
-| `0002_world_settings.sql` | 世界设定扩展 | `world_settings` |
-| `0003_write_reliability.sql` | 写入可靠性 | `schema_migrations.checksum`、`outbox`、`projection_state` |
-| `0004_discovery_proposals.sql` | 发现/提案 | `discovery_states`、`proposal_queue` |
-| `0005_archivist_proposal_queue.sql` | archivist 建议 | `archivist_suggestions` |
-| `0006_intent_preflight_cache.sql` | 意图预热缓存 | `intent_preflight_cache` |
-| `0007_intent_preflight_identity_hardening.sql` | 预热身份硬化 | context/provider/model/backend/fallback/profile 等身份字段与索引 |
-| `0008_intent_joiner_message_only.sql` | 意图 joiner message-only 优化 | message-only join 相关索引/字段 |
+## Core Tables
 
-`schema_migrations` 由迁移 runner 创建，后续迁移会补充 checksum 等字段。权威迁移目录是 `rpg_engine/resources/migrations/`。
+`0001_init.sql` creates these tables:
 
-## 意图预热缓存
+| Table | Role |
+| --- | --- |
+| `meta` | Save/content/projection schema versions and current campaign state. |
+| `turns` | Turn audit records, command id/hash, expected turn id after later migration. |
+| `events` | Durable event stream for committed changes. |
+| `entities` | Generic factual entity rows with visibility, owner/location, summary and details JSON. |
+| `aliases` | Name/alias lookup. |
+| `facts` | Subject-predicate facts with visibility and validity windows. |
+| `characters` | Character-specific details. |
+| `items` | Item quantities/category/owner/location fields. |
+| `locations` | Location hierarchy and description fields. |
+| `routes` | Traversal links between locations. |
+| `crop_plots` | Farming/crop state. |
+| `clocks` | Progress clocks. |
+| `rules` | Campaign/runtime rule rows. |
+| `memory_summaries` | Long-term memory summaries. |
+| `context_runs` | Context build audit. |
+| `context_items` | Items loaded into a context packet. |
 
-`intent_preflight_cache` 是 advisory internal intent review cache。平台预热是重要生产者，但 CLI/MCP/runtime 也可以创建或消费 preflight 结果。它保存消息级/会话级/上下文级的预热候选和状态，用于让正式入口在重新校验身份后复用已经完成的意图识别结果。
+## Projection and Reliability Tables
 
-关键概念：
+`0003_write_reliability.sql` adds:
 
-- `status`：预热状态。
-- `platform` / `session_key` / `message_id`：平台消息身份。
-- `save_id` / `base_turn` / `context_hash`：存档与上下文身份。
-- `provider` / `model` / `backend`：AI 来源。
-- `fallback` / `bypassed` / `late_ready`：降级与时序状态。
-- `hash` / `profile`：结果身份与配置。
-- `user_text`、platform、session/message 标识、internal review 和 helper audit：敏感运行数据。
+- `outbox` for post-commit projection work.
+- `projection_state` for projection status/version/error metadata.
+- `turns.command_id`, `turns.command_hash`, `turns.expected_turn_id`.
+- Schema/content/projection version metadata.
 
-架构约束：缓存只能作为候选来源，不能绕过最终上下文校验、preview、validation 和 commit。
+`ProjectionService` is responsible for derived snapshots/cards/memory/report projection status.
+Projection failure must not be confused with fact commit failure.
 
-## JSON Schema
+## Intent and Preflight State
 
-打包 schema 位于 `rpg_engine/resources/schemas/`：
+`intent_preflight_cache` stores advisory internal intent review results. It includes:
 
-- `campaign.schema.json`
-- `turn_delta.schema.json`
-- `intent_candidate.schema.json`
-- `internal_intent_review.schema.json`
-- `semantic_suggestion.schema.json`
-- `save_patch.schema.json`
-- `content_delta.schema.json`
-- `state_audit.schema.json`
-- `reflection_draft.schema.json`
-- `random_tables.schema.json`
-- `capabilities.schema.json`
-- `archivist.schema.json`
-- `smoke.schema.json`
+- lifecycle status (`pending`, `ready`, failed/bypassed/late-ready variants),
+- platform/session/message identity,
+- save/base turn/context identity,
+- provider/model/backend/fallback/profile identity,
+- candidate/review/helper payloads.
 
-这些 schema 是 AI 输出、内容包、状态补丁和能力声明的主要结构约束。
+This cache may improve later routing, but final authority remains in runtime validation and
+player confirmation.
 
-## 包模型
+## JSON Schemas
 
-### Campaign Package
+Packaged schemas under `rpg_engine/resources/schemas/`:
 
-Campaign Package 承载世界、规则、内容、capabilities、smoke tests、作者提示和模板。示例包位于：
+| Schema | Required Fields |
+| --- | --- |
+| `campaign.schema.json` | `id`, `name`, `engine_version`, `package_version`, `content_schema_version`, `capabilities`, `initial_location_id`, `defaults`, `content` |
+| `turn_delta.schema.json` | `user_text`, `intent`, `summary` |
+| `intent_candidate.schema.json` | `kind`, `mode`, `action`, `slots`, `plan`, `confidence`, `missing_slots`, `needs_confirmation`, `safety_flags`, `reason` |
+| `internal_intent_review.schema.json` | Intent candidate fields plus `agreement_with_external`, `disagreements`, `external_candidate_quality` |
+| `semantic_suggestion.schema.json` | `mode`, `submode`, `targets`, `entities_mentioned`, `missing_confirmations`, `notes`, `confidence` |
+| `save_patch.schema.json` | `operations` |
+| `state_audit.schema.json` | `ok`, `risk`, `findings`, `missing_structured_changes`, `requires_human_review` |
+| `archivist.schema.json` | `turn_summary`, candidate arrays, contradiction/context hints, `review_required` |
+| `reflection_draft.schema.json` | `title`, `summary`, `key_points`, `source_event_ids` |
+| `random_tables.schema.json` | `random_tables` |
+| `smoke.schema.json` | `smoke_tests` |
+| `capabilities.schema.json` | Array of capability strings |
+| `content_delta.schema.json` | Content maintenance delta shape |
 
-- `rpg_engine/resources/examples/blank_campaign`
-- `rpg_engine/resources/examples/small_cn_campaign`
-- `rpg_engine/resources/examples/v1_minimal_adventure`
+Root-level `schemas/` mirrors most but not all packaged schemas; packaged resources include
+`intent_candidate.schema.json` and `internal_intent_review.schema.json`, which are absent from
+root `schemas/`.
 
-### Save Package
+## Package Data
 
-Save Package 承载一个存档实例的状态、SQLite 数据库、事件、投影、snapshots、cards/memory 和运行时存档元数据。
+Campaign Package inputs are YAML/Markdown resources under example packages:
 
-Save Package 不承载 workspace 级平台绑定。平台绑定默认位于 `.aigm/game-session-bindings.json`，由 `GameSessionBindingStore` 管理；`.aigm/save-registry.json` 和 `.aigm/pending-*` 也属于 workspace/runtime state。
+- `campaign.yaml`
+- `content/*.yaml`
+- `prompts/gm.md`
+- `templates/action.md`
+- `templates/query.md`
+- `tests/smoke.yaml`
+- optional author notes/prompts and content palettes
 
-### RP / 剧情包材料
+Packaged examples are under both `examples/` and `rpg_engine/resources/examples/`.
 
-`rp/` 是当前剧本/剧情包材料区域。公开仓库策略应只纳入当前最新剧情包本体，不纳入玩家存档、运行时缓存或私有历史记录。
+## Runtime State Outside Save Package
 
-## 数据治理建议
+Workspace/player state can include:
 
-- schema 变更必须配套测试和迁移说明。
-- SQLite 表结构变更必须通过迁移文件进入。
-- AI 输出结构变更必须同步 `intent_candidate`、`internal_intent_review` 或相关 schema。
-- Save Package 内玩家进度数据默认不进入公开仓库。
-- `.aigm/`、`saves/`、Save Package、玩家 SQLite、平台 session 绑定和 preflight cache 内容默认不进入公开仓库。
-- 示例 campaign 可进入公开仓库，真实存档和平台会话数据不进入公开仓库。
+- `.aigm/save-registry.json`
+- `.aigm/pending-player-action.json`
+- `.aigm/pending-player-clarification.json`
+- `.aigm/game-session-bindings.json`
+
+These files are runtime/workspace state, not Campaign Package source truth. They may bind
+platform/session/actor identity and must not become public source-of-truth docs.
+
+## Rescan Findings
+
+- The current canonical data model document is directionally aligned with code.
+- Any future docs should clarify that packaged migrations are currently ahead of root migration
+  mirror files.
+- Earlier BMAD output docs in `_bmad-output/` were Round 1 draft material; this file adds strict
+  skill provenance for the new rescan.

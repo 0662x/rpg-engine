@@ -1,63 +1,131 @@
 # 项目概览
 
-文档状态：DRAFT / Round 1 Deep Scan
+文档状态：DRAFT / GDS full_rescan exhaustive overview
 语言：zh-CN
-迁移阶段：BMAD 扫描素材，未进入 canonical docs
+工作流：`gds-document-project`
+生成时间：2026-07-04
+迁移阶段：BMAD 扫描输出，供 brownfield PRD / 后续 story 使用；长期规范入口仍是 [`docs/project-overview.md`](../docs/project-overview.md)。
+
+## BMAD Provenance
+
+- 用户触发：`gds-document-project`
+- Skill：`.agents/skills/gds-document-project/SKILL.md`
+- Customization resolver：
+  `python3 _bmad/scripts/resolve_customization.py --skill .agents/skills/gds-document-project --key workflow`
+- Config：`_bmad/gds/config.yaml`
+- Workflow instructions：
+  `.agents/skills/gds-document-project/instructions.md`,
+  `.agents/skills/gds-document-project/workflows/full-scan-instructions.md`
+- 支撑文件：
+  `.agents/skills/gds-document-project/checklist.md`,
+  `.agents/skills/gds-document-project/documentation-requirements.csv`
+- 模式：`full_rescan`
+- 扫描深度：`exhaustive`
+- 用户额外关注：`none`
 
 ## 摘要
 
-`aigm-kernel` 是一个 local-first AI GM 游戏引擎内核。它围绕 Campaign Package、Save Package、GMRuntime、CLI 和 MCP adapter 组织，目标是在本地可审计状态机中运行文字 RPG/AI GM 回合流程。
+RPG Engine 是 local-first AI GM 游戏引擎内核，Python 包名为 `aigm-kernel`。它围绕
+Campaign Package、Save Package、`GMRuntime`、CLI、MCP adapter、platform sidecar、
+AI intent chain、SQLite 状态和验证/提交链组织，用本地可审计状态机运行文字 RPG / AI GM
+回合流程。
 
-当前仓库包含约 149 个 Python 源文件、50 个 pytest 测试文件、8 个 SQLite 迁移和 13 个打包 JSON Schema。旧文档约 45 篇，需要迁移和裁剪。
+本仓库当前更接近 Python backend / CLI / library 型内核，而不是 Unity、Godot、Unreal
+或图形客户端项目。架构重心不是渲染，而是事实权威、玩家确认、隐藏信息、上下文构建、
+包格式、入口权限和可审计状态提交。
 
-## 项目定位
+核心边界：
 
-- 领域：AI GM / 文字 RPG / 本地优先游戏引擎内核。
-- 类型：Python backend + CLI + library + MCP integration。
-- 主要运行方式：命令行、Python API、MCP 工具入口。
-- 状态权威来源：Save Package 内 SQLite 数据库与事件流。
-- 内容权威来源：Campaign Package、资源 schema、内容注册与验证。
-- AI 边界：AI 可以识别意图、生成候选、给出叙事或提案；引擎负责校验、预览、提交和隐藏信息边界。
+```text
+AI proposes. Kernel verifies. Player confirms. Engine commits.
+```
+
+## 项目分类
+
+| 项 | 结论 |
+| --- | --- |
+| Repository type | Monolith |
+| Parts count | 1 |
+| Primary language | Python |
+| Project type | Backend/kernel with CLI, library, game, and data traits |
+| Package | `aigm-kernel` |
+| Runtime authority | Save Package SQLite + events + projections |
+| Content authority | Campaign Package + packaged schemas + content validation |
+| Public surfaces | CLI, Python runtime API, MCP tools, platform sidecar |
+| Deployment surface | GitHub Actions CI; no Docker/Kubernetes/cloud deployment config found |
+
+用户已确认这个 single-part classification 可用，因此 workflow 跳过 multi-part integration
+architecture。
+
+## V1 产品边界
+
+V1 是收敛式本地内核。必须维护的主线能力是：
+
+- AIGM Kernel 核心库。
+- Campaign Package 规范、校验器、作者工具和 smoke tests。
+- Save Package 初始化、查看、校验、导入导出、归档、补丁和安全维护入口。
+- CLI 参考实现。
+- MCP adapter 薄适配层。
+- 通用 AI 客户端 prompt artifacts。
+- 小型官方示例 campaign。
+- 对旧纯文档系统整理后继续游玩的承载能力；允许人工或 AI 辅助迁移，不承诺无监督一键完美迁移。
+
+V1 非目标：
+
+- Web 后端、HTTP API、多人在线、账号、云同步、市场。
+- 强制依赖 LLM 的核心运行路径。
+- 独立聊天 UI 或内置 AI 剧本生成器。
+- 动态插件系统、插件市场、作者自定义代码执行、脚本化规则引擎或插件 SDK。
+- 模型网关、agent 平台、长期任务系统。
+- 完整电子游戏式战斗、制作、经营、恋爱、政治或国家模拟数值系统。
 
 ## 技术栈
 
-- Python：`>=3.11`
-- 包名：`aigm-kernel`
-- 入口命令：`aigm`、`rpg_engine`
-- 核心依赖：`PyYAML`、`jsonschema`
-- 可选 MCP：`mcp`
-- 开发工具：`pytest`、`coverage`、`ruff`、`build`、`twine`
-- CI：GitHub Actions，Python 3.11/3.12 测试矩阵
-
-参考：
-
-- [pyproject.toml](../pyproject.toml)
-- [CI workflow](../.github/workflows/ci.yml)
-- [README](../README.md)
+| 类别 | 技术 | 当前证据 |
+| --- | --- | --- |
+| Language | Python `>=3.11` | `pyproject.toml`, CI matrix |
+| Package | setuptools package `aigm-kernel` `0.2.0` | `pyproject.toml` |
+| Console scripts | `aigm`, `rpg_engine` | `pyproject.toml` |
+| Runtime deps | `PyYAML>=6.0`, `jsonschema>=4.20` | `pyproject.toml` |
+| Optional integration | `mcp>=1.28,<2` | `pyproject.toml`, `rpg_engine/mcp_adapter.py` |
+| Persistence | SQLite + SQL migrations | `rpg_engine/db.py`, `rpg_engine/resources/migrations/` |
+| Dev tools | pytest, coverage, ruff, build, twine | `pyproject.toml`, `.github/workflows/ci.yml` |
+| CI | GitHub Actions Python 3.11 / 3.12 | `.github/workflows/ci.yml` |
 
 ## 主要能力
 
-- Campaign Package 载入、校验与示例包。
-- Save Package 创建、校验、归档、修补；平台链维护 workspace 级会话绑定。
-- GMRuntime 回合门面：开始回合、查询、预览动作、校验 delta、提交回合、健康检查。
-- 玩家安全回合链：`SaveManager.player_turn` 创建 pending `TurnProposal`，`SaveManager.player_confirm` 才进入正式提交。
-- 行动系统：探索、旅行、战斗、休息、采集、制作、社交、随机表，核心合约是 `ActionResolverSpec` 和 `GMRuntime.preview_action`。
-- AI 意图链：外层 `intent_router.py` 管规则/兼容候选，`ai_intent/router.py` 编排 AI 候选、内部复核、仲裁、绑定和 trace。
-- 平台链：入口门禁、消息冲突处理、异步预热、workspace 级平台会话绑定、advisory intent preflight cache。
-- 上下文链：可见事实收集、预算、语义建议、上下文渲染和审计。
+- Campaign Package 载入、校验、复制示例、outline、author doctor、split 和 smoke test。
+- Save Package 创建、检查、校验、导入导出、归档、补丁、投影和安全维护。
+- `GMRuntime` 回合门面：start turn、query、act、preview、validate delta、commit、health。
+- 玩家安全回合链：`SaveManager.player_turn()` 创建 pending `TurnProposal`；
+  `SaveManager.player_confirm()` 才进入正式提交。
+- 行动系统：探索、旅行、战斗、休息、采集、制作、社交、随机表。
+- AI 意图链：规则候选、外部候选、AI 候选、internal review、arbiter、binder、trace。
+- Platform chain：sidecar 门禁、异步 prewarm、platform session identity、advisory cache。
+- 上下文链：可见事实收集、预算、语义建议、渲染和泄漏审计。
 - 写入链：preview/proposal、validation pipeline、unit of work、write guard、commit service。
-- MCP adapter：按 profile gate 暴露工具面，默认 player-safe，低层 runtime 工具只给 developer/trusted/maintenance/admin profile。
+- MCP adapter：profile-gated 工具面，默认 player-safe，受信 profile 才暴露低层 runtime 工具。
 
-## 关键约束
+## 不可破坏边界
 
-- 不允许 AI 直接绕过引擎写入状态。
-- 隐藏内容必须通过 visibility/context 规则保护。
-- 所有状态变更应可预览、可校验、可审计、可回滚或可重建。
-- 平台侧预热只能加速意图准备，不能替代最终门禁和提交校验。
-- 平台绑定位于 workspace/runtime 级 `.aigm/game-session-bindings.json`，不属于单个 Save Package。
-- `.aigm/`、`saves/`、Save Package、玩家 SQLite、平台 session 和 preflight cache 内容都属于运行数据，公开仓库默认不提交。
-- 文档迁移必须以当前代码事实为准，旧 docs 只能作为素材源。
+- AI 输出永远是低信任候选，不是事实、最终 intent 或写入授权。
+- Internal AI review 不能 preview、validate、confirm 或 commit。
+- `SaveManager.player_turn()` 不能提交游戏事实。
+- `SaveManager.player_confirm()` 是普通玩家路径的提交门。
+- Platform prewarm 只能产生 advisory / `message_only` preflight。
+- Hidden / GM-only 内容不能泄露到玩家视图、FTS、scene output 或普通 query。
+- CLI、MCP、platform sidecar 必须调用 kernel service，不能复制业务逻辑。
+- Campaign Package 与 Save Package 职责分离，不能把剧情源数据和存档事实混在一起。
 
-## 当前文档状态
+## 文档状态
 
-已安装 BMAD / Game Dev Studio 相关护栏，并新增 BMAD 文档迁移计划。本轮 Deep Scan 的产物位于 `_bmad-output/`，后续会将成熟内容迁入 `docs/` 作为新的 canonical 文档。
+当前长期入口是 [`docs/index.md`](../docs/index.md)。Round 4C 后，旧 `docs/architecture/`、
+`docs/specs/` 和 `docs/guides/` 正文已归档到
+[`docs/archive/pre-bmad-docs-2026-07-03/`](../docs/archive/pre-bmad-docs-2026-07-03/)，旧路径
+只保留 compatibility stubs。
+
+本轮复核结论：
+
+- Canonical docs 已经存在并覆盖主要当前边界。
+- 旧 `_bmad-output` 中 Round 1 素材仍有参考价值，但状态头和 provenance 不足以证明本轮严格执行。
+- 本轮新/刷新输出已加入 `gds-document-project` provenance，作为后续 brownfield PRD 和 story 的扫描基线。
