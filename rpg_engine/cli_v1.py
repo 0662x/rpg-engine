@@ -95,6 +95,76 @@ def load_json_object_arg(value: str | None, *, label: str) -> dict[str, Any] | N
     return data
 
 
+def intent_option_kwargs_from_args(args: argparse.Namespace) -> dict[str, Any]:
+    return {
+        "intent_ai": args.intent_ai,
+        "intent_backend": args.intent_backend,
+        "intent_provider": args.intent_provider,
+        "intent_model": args.intent_model,
+        "intent_timeout": args.intent_timeout,
+        "intent_base_url": args.intent_base_url,
+        "intent_api_key_env": args.intent_api_key_env,
+        "intent_fallback_backend": args.intent_fallback_backend,
+    }
+
+
+def preflight_consume_kwargs_from_args(args: argparse.Namespace) -> dict[str, Any]:
+    return {
+        "preflight_id": args.preflight_id,
+        "message_id": args.message_id,
+        "platform": args.platform,
+        "session_key": args.session_key,
+        "source_user_text_hash": args.source_user_text_hash,
+        "preflight_pending_wait_ms": args.preflight_pending_wait_ms,
+    }
+
+
+def intent_review_kwargs_from_args(args: argparse.Namespace) -> dict[str, Any]:
+    return {
+        "intent_backend": args.intent_backend,
+        "intent_provider": args.intent_provider,
+        "intent_model": args.intent_model,
+        "intent_timeout": args.intent_timeout,
+        "intent_base_url": args.intent_base_url,
+        "intent_api_key_env": args.intent_api_key_env,
+        "intent_fallback_backend": args.intent_fallback_backend,
+    }
+
+
+def preflight_identity_kwargs_from_args(args: argparse.Namespace) -> dict[str, Any]:
+    return {
+        "message_id": args.message_id,
+        "platform": args.platform,
+        "session_key": args.session_key,
+        "source_user_text_hash": args.source_user_text_hash,
+    }
+
+
+def external_intent_candidate_from_args(args: argparse.Namespace) -> dict[str, Any] | None:
+    return load_json_object_arg(
+        args.external_intent_candidate,
+        label="--external-intent-candidate",
+    )
+
+
+def intent_preview_kwargs_from_args(args: argparse.Namespace) -> dict[str, Any]:
+    return {
+        **intent_option_kwargs_from_args(args),
+        "external_intent_candidate": external_intent_candidate_from_args(args),
+        **preflight_consume_kwargs_from_args(args),
+    }
+
+
+def intent_preflight_kwargs_from_args(args: argparse.Namespace) -> dict[str, Any]:
+    return {
+        **intent_review_kwargs_from_args(args),
+        "external_intent_candidate": external_intent_candidate_from_args(args),
+        **preflight_identity_kwargs_from_args(args),
+        "preflight_identity_profile": args.preflight_identity_profile,
+        "ttl_seconds": args.ttl_seconds,
+    }
+
+
 def add_play_delta_validation_options(parser: argparse.ArgumentParser, registered_actions: list[str]) -> None:
     parser.add_argument("--action", choices=registered_actions, help="action resolver used for runtime delta validation")
     parser.add_argument("--options-json", help="JSON object or file path for action options")
@@ -772,24 +842,7 @@ def handle_play(args: argparse.Namespace) -> int:
             budget=args.budget,
             max_events=args.max_events,
             max_depth=args.max_depth,
-            intent_ai=args.intent_ai,
-            intent_backend=args.intent_backend,
-            intent_provider=args.intent_provider,
-            intent_model=args.intent_model,
-            intent_timeout=args.intent_timeout,
-            intent_base_url=args.intent_base_url,
-            intent_api_key_env=args.intent_api_key_env,
-            intent_fallback_backend=args.intent_fallback_backend,
-            external_intent_candidate=load_json_object_arg(
-                args.external_intent_candidate,
-                label="--external-intent-candidate",
-            ),
-            preflight_id=args.preflight_id,
-            message_id=args.message_id,
-            platform=args.platform,
-            session_key=args.session_key,
-            source_user_text_hash=args.source_user_text_hash,
-            preflight_pending_wait_ms=args.preflight_pending_wait_ms,
+            **intent_preview_kwargs_from_args(args),
         )
         if args.format == "json":
             print(result.to_json_text(), end="")
@@ -803,23 +856,7 @@ def handle_play(args: argparse.Namespace) -> int:
             return print_failure(exc, args.format)
         result = runtime.preflight_intent(
             user_text,
-            intent_backend=args.intent_backend,
-            intent_provider=args.intent_provider,
-            intent_model=args.intent_model,
-            intent_timeout=args.intent_timeout,
-            intent_base_url=args.intent_base_url,
-            intent_api_key_env=args.intent_api_key_env,
-            intent_fallback_backend=args.intent_fallback_backend,
-            external_intent_candidate=load_json_object_arg(
-                args.external_intent_candidate,
-                label="--external-intent-candidate",
-            ),
-            message_id=args.message_id,
-            platform=args.platform,
-            session_key=args.session_key,
-            source_user_text_hash=args.source_user_text_hash,
-            preflight_identity_profile=args.preflight_identity_profile,
-            ttl_seconds=args.ttl_seconds,
+            **intent_preflight_kwargs_from_args(args),
         )
         if args.format == "json":
             print(result.to_json_text(), end="")
@@ -848,24 +885,7 @@ def handle_play(args: argparse.Namespace) -> int:
             user_text,
             view=args.view,
             auto_confirm_low_risk=args.auto_confirm_low_risk,
-            intent_ai=args.intent_ai,
-            intent_backend=args.intent_backend,
-            intent_provider=args.intent_provider,
-            intent_model=args.intent_model,
-            intent_timeout=args.intent_timeout,
-            intent_base_url=args.intent_base_url,
-            intent_api_key_env=args.intent_api_key_env,
-            intent_fallback_backend=args.intent_fallback_backend,
-            external_intent_candidate=load_json_object_arg(
-                args.external_intent_candidate,
-                label="--external-intent-candidate",
-            ),
-            preflight_id=args.preflight_id,
-            message_id=args.message_id,
-            platform=args.platform,
-            session_key=args.session_key,
-            source_user_text_hash=args.source_user_text_hash,
-            preflight_pending_wait_ms=args.preflight_pending_wait_ms,
+            **intent_preview_kwargs_from_args(args),
         )
         if args.format == "json":
             print(result.to_json_text(), end="")
@@ -1052,42 +1072,13 @@ def handle_player(args: argparse.Namespace) -> int:
         elif args.player_type == "turn":
             result = manager.player_turn(
                 user_text=resolve_user_text_arg(args),
-                external_intent_candidate=load_json_object_arg(
-                    args.external_intent_candidate,
-                    label="--external-intent-candidate",
-                ),
-                intent_ai=args.intent_ai,
-                intent_backend=args.intent_backend,
-                intent_provider=args.intent_provider,
-                intent_model=args.intent_model,
-                intent_timeout=args.intent_timeout,
-                intent_base_url=args.intent_base_url,
-                intent_api_key_env=args.intent_api_key_env,
-                intent_fallback_backend=args.intent_fallback_backend,
-                preflight_id=args.preflight_id,
-                message_id=args.message_id,
-                platform=args.platform,
-                session_key=args.session_key,
-                source_user_text_hash=args.source_user_text_hash,
-                preflight_pending_wait_ms=args.preflight_pending_wait_ms,
+                **intent_preview_kwargs_from_args(args),
             )
         elif args.player_type == "act":
             result = manager.player_act(
                 user_text=resolve_user_text_arg(args),
-                intent_ai=args.intent_ai,
-                intent_backend=args.intent_backend,
-                intent_provider=args.intent_provider,
-                intent_model=args.intent_model,
-                intent_timeout=args.intent_timeout,
-                intent_base_url=args.intent_base_url,
-                intent_api_key_env=args.intent_api_key_env,
-                intent_fallback_backend=args.intent_fallback_backend,
-                preflight_id=args.preflight_id,
-                message_id=args.message_id,
-                platform=args.platform,
-                session_key=args.session_key,
-                source_user_text_hash=args.source_user_text_hash,
-                preflight_pending_wait_ms=args.preflight_pending_wait_ms,
+                **intent_option_kwargs_from_args(args),
+                **preflight_consume_kwargs_from_args(args),
             )
         elif args.player_type == "confirm":
             result = manager.player_confirm(session_id=args.session_id)

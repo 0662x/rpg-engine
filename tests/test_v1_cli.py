@@ -7,9 +7,17 @@ import sys
 import tempfile
 import unittest
 import zipfile
+from argparse import Namespace
 from pathlib import Path
 
 import yaml
+
+from rpg_engine.cli_v1 import (
+    intent_option_kwargs_from_args,
+    intent_preflight_kwargs_from_args,
+    intent_preview_kwargs_from_args,
+    preflight_consume_kwargs_from_args,
+)
 
 
 ENGINE_ROOT = Path(__file__).resolve().parents[1]
@@ -48,6 +56,49 @@ def delta_from_markdown(markdown: str) -> dict[str, object]:
 
 
 class V1CliTests(unittest.TestCase):
+    def test_cli_intent_helpers_preserve_option_and_preflight_surfaces(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            candidate_path = Path(tmp) / "external.json"
+            candidate = {"kind": "single", "mode": "action", "action": "rest", "slots": {"until": "morning"}}
+            candidate_path.write_text(json.dumps(candidate), encoding="utf-8")
+            args = Namespace(
+                intent_ai="consensus",
+                intent_backend="direct",
+                intent_provider="deepseek",
+                intent_model="deepseek-v4-flash",
+                intent_timeout=7,
+                intent_base_url="https://ai.example.test/v1",
+                intent_api_key_env="AIGM_TEST_KEY",
+                intent_fallback_backend="off",
+                external_intent_candidate=str(candidate_path),
+                preflight_id="preflight:cli",
+                message_id="msg:cli",
+                platform="qq",
+                session_key="qq:user:1",
+                source_user_text_hash="hash:cli",
+                preflight_pending_wait_ms=10,
+                preflight_identity_profile="message_only",
+                ttl_seconds=300,
+            )
+
+            intent_options = intent_option_kwargs_from_args(args)
+            preflight_options = preflight_consume_kwargs_from_args(args)
+            preview_options = intent_preview_kwargs_from_args(args)
+            production_options = intent_preflight_kwargs_from_args(args)
+
+            self.assertEqual(intent_options["intent_ai"], "consensus")
+            self.assertEqual(intent_options["intent_backend"], "direct")
+            self.assertNotIn("external_intent_candidate", intent_options)
+            self.assertEqual(preflight_options["message_id"], "msg:cli")
+            self.assertEqual(preflight_options["preflight_pending_wait_ms"], 10)
+            self.assertEqual(preview_options["external_intent_candidate"], candidate)
+            self.assertEqual(preview_options["preflight_id"], "preflight:cli")
+            self.assertNotIn("intent_ai", production_options)
+            self.assertNotIn("preflight_id", production_options)
+            self.assertNotIn("preflight_pending_wait_ms", production_options)
+            self.assertEqual(production_options["preflight_identity_profile"], "message_only")
+            self.assertEqual(production_options["ttl_seconds"], 300)
+
     def test_campaign_validate_and_test_commands(self) -> None:
         validate = load_stdout_json(run_cli("campaign", "validate", MINIMAL_FIXTURE, "--format", "json"))
         smoke = load_stdout_json(run_cli("campaign", "test", MINIMAL_FIXTURE, "--format", "json"))

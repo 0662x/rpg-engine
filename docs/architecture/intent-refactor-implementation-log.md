@@ -744,3 +744,122 @@ Documentation sync:
   scope and intentionally defers CLI call-site bundling to the next Phase 3c
   round.
 - Final Round 7 expert review is complete with no blockers.
+
+## Round 8: Phase 3c3 CLI Intent Call-Site Bundling
+
+Status: **COMPLETE**
+
+Goal:
+
+Finish Phase 3c call-site bundling by collecting repeated CLI intent,
+external-candidate, passive preflight-consume, and preflight-production
+arguments into helper kwargs before dispatching to Runtime or SaveManager.
+
+Code scope:
+
+- `rpg_engine/cli_v1.py`
+- `tests/test_v1_cli.py`
+
+Runtime behavior impact:
+
+- Added CLI-only helpers for intent option kwargs, internal-review kwargs,
+  passive preflight-consume kwargs, preflight-production identity kwargs,
+  external intent candidate loading, combined preview kwargs, and preflight
+  production kwargs.
+- `play start-turn` and `play act` now pass bundled preview kwargs to Runtime.
+- `play preflight` now passes bundled preflight-production kwargs to Runtime.
+- `player turn` now passes bundled preview kwargs to SaveManager.
+- `player act` now passes intent option kwargs plus passive preflight kwargs to
+  SaveManager, intentionally keeping external candidate unsupported for that
+  compatibility command.
+- No CLI command names, flags, defaults, parser choices, Runtime signatures,
+  SaveManager signatures, MCP surfaces, platform behavior, or intent-routing
+  behavior changed.
+- CLI helpers do not create `IntentAIConfig` or `IntentRequestMeta`; validation
+  remains in Runtime/ContextBuilder/SaveManager as established in earlier
+  rounds.
+
+Added regression coverage:
+
+- `test_cli_intent_helpers_preserve_option_and_preflight_surfaces`
+  - Confirms intent option kwargs do not include external candidate payloads.
+  - Confirms preview kwargs load external candidate JSON and preserve passive
+    preflight metadata.
+  - Confirms preflight-production kwargs exclude player-turn-only fields such
+    as `intent_ai`, `preflight_id`, and pending-wait metadata while preserving
+    identity profile and TTL.
+
+Verification so far:
+
+```bash
+python3 -m py_compile rpg_engine/cli_v1.py tests/test_v1_cli.py
+
+python3 -m pytest -q tests/test_v1_cli.py \
+  -k "cli_intent_helpers or play_start_query_preview_and_commit_commands"
+
+python3 -m pytest -q tests/test_save_manager.py \
+  -k "player_turn_cli_accepts_external_candidate or player_act_confirm_hides_internal_delta"
+
+python3 -m pytest -q tests/test_mcp_adapter.py tests/test_save_manager.py \
+  -k "player_profile or player_turn or player_act or player_workflow or standard_entry or external_candidate"
+
+python3 -m pytest -q tests/test_v1_cli.py
+
+python3 -m pytest -q tests/test_save_manager.py
+
+git diff --check
+```
+
+Result:
+
+```text
+py_compile passed
+2 passed, 12 deselected
+2 passed, 10 deselected
+15 passed, 20 deselected, 17 subtests passed
+14 passed
+12 passed, 17 subtests passed
+git diff --check passed
+```
+
+Expert code review:
+
+- Initial repo/docs review found the Round 8 log under-reported the final
+  `play preflight` helper bundling scope. The log was updated to include
+  internal-review kwargs, preflight-production identity kwargs,
+  `intent_preflight_kwargs_from_args()`, and `play preflight` dispatch.
+- Engine boundary: pass. Confirmed CLI helpers preserve Runtime/SaveManager
+  kwarg surfaces and do not introduce `IntentAIConfig` / `IntentRequestMeta`
+  validation at the CLI layer.
+- AI intent safety: pass. Confirmed external candidates remain limited to
+  preview/preflight-capable helpers, passive metadata remains separate, and
+  empty-text/error priority stays owned by Runtime/SaveManager.
+- Gameplay turn flow: pass. Confirmed `player turn` still produces pending
+  work without committing, `player act` still rejects external candidate flags,
+  and `player confirm` remains the commit path.
+- Platform/MCP integration: pass. Confirmed no MCP adapter, MCP profile/tool
+  surface, `mcp serve` config, platform sidecar, platform CLI, or player CLI
+  argument regression.
+- QA/regression: pass. Confirmed helper-level coverage and existing CLI /
+  SaveManager gates are sufficient for this diff.
+- Repo/docs: pass. Confirmed Round 8 documentation now matches the final diff,
+  verification results, scope, and Phase 4 deferral.
+
+Residual risks:
+
+- `play preflight` helper dispatch is covered by helper-shape assertions and
+  existing Runtime/preflight tests, not by a new subprocess CLI end-to-end test
+  with non-default preflight flags.
+- CLI helper functions assume the parser namespace contains the expected
+  attributes, so future reuse on unrelated subcommands should add targeted
+  tests or keep helpers scoped to matching parser surfaces.
+- Existing behavior remains that `play preflight` registers `--intent-ai`
+  through shared parser setup but does not pass it to `GMRuntime.preflight_intent`;
+  Round 8 preserves that behavior rather than changing it.
+
+Documentation sync:
+
+- This implementation log records the Phase 3c3 CLI-only call-site bundling
+  scope. Phase 4 platform verification remains separate and should not be
+  combined into this round.
+- Final Round 8 expert review is complete with no blockers.
