@@ -76,6 +76,42 @@
 - `rpg_engine/cli_v1.py`
 - `rpg_engine/mcp_adapter.py`
 
+### Data models
+
+已新增：
+
+- [`docs/data-models.md`](../docs/data-models.md)
+
+已更新：
+
+- [`docs/index.md`](../docs/index.md)
+- [`_bmad-output/planning-artifacts/bmad-documentation-migration-plan.md`](planning-artifacts/bmad-documentation-migration-plan.md)
+
+主要来源：
+
+- [`docs/architecture.md`](../docs/architecture.md)
+- [`docs/component-inventory.md`](../docs/component-inventory.md)
+- [`docs/save-and-campaign-packages.md`](../docs/save-and-campaign-packages.md)
+- [`docs/testing-and-quality-gates.md`](../docs/testing-and-quality-gates.md)
+- [`docs/architecture/game-engine.md`](../docs/architecture/game-engine.md)
+- [`docs/architecture/turn-flow-architecture.md`](../docs/architecture/turn-flow-architecture.md)
+
+代码事实校验：
+
+- `rpg_engine/db.py`
+- `rpg_engine/resources/migrations/*.sql`
+- `rpg_engine/delta_schema.py`
+- `rpg_engine/proposal.py`
+- `rpg_engine/intent_router.py`
+- `rpg_engine/validation_pipeline.py`
+- `rpg_engine/unit_of_work.py`
+- `rpg_engine/projections.py`
+- `rpg_engine/projection_service.py`
+- `rpg_engine/content_types/*`
+- `rpg_engine/save_manager.py`
+- `schemas/*.json`
+- `rpg_engine/resources/schemas/*.json`
+
 ## 不改范围
 
 - 不移动或归档旧文档。
@@ -84,6 +120,7 @@
 - 不把 future coordinator 描述成当前已实现主路径。
 - 不把旧 `player-entry-save-manager.md` 的过期设计草稿当成当前事实；以当前
   `SaveManager`、CLI 和 MCP 代码为准。
+- 不把 reports、projection artifacts、registry、pending action 或 AI preflight cache 写成事实源。
 
 ## 已保留的关键边界
 
@@ -100,12 +137,14 @@
 - Registry 仍只是 workspace 索引，不是事实源。
 - `.aigmsave` 仍是完整归档形态，默认可能包含 GM hidden 信息。
 - 投影产物仍由 `projection_state` 和 `ProjectionService` 管理，不是绕过 SQLite 的写入通道。
+- `TurnProposal`、turn delta、`ValidationReport` 和 `ProjectionReport` 仍是运行合同或证据，
+  不是已提交事实本身。
+- Content registry 的 registered content type 与 delta schema 允许的 entity type 保持区分。
 
 ## 待完成 Round 3 文档
 
 - `docs/cli-contracts.md`
 - `docs/mcp-contracts.md`
-- `docs/data-models.md`
 
 ## Review Gate
 
@@ -118,6 +157,7 @@
 | Platform / MCP | 通过。player profile 和 platform sidecar 的低权限 surface 未被弱化。 |
 | QA / Test Architect | 通过。文档收敛到既有 AI intent、SaveManager、package 和 projection 高风险测试门禁。 |
 | Package / Save Boundary | 通过。Campaign Package、Save Package、workspace registry、projection 和 `.aigmsave` 的事实权威边界分开记录。 |
+| Data Model Boundary | 通过。SQLite facts、turn delta、TurnProposal、validation/projection reports、registry、archive 和 preflight cache 的权威关系分开记录。 |
 
 ## 验证记录
 
@@ -128,18 +168,21 @@ git add -N docs _bmad-output
 git diff --check
 python3 scripts/check_markdown_links.py docs _bmad-output
 python3 -m pytest -q tests/test_save_manager.py tests/test_campaign_validation.py tests/test_package_cli.py tests/test_package_save_condition_coverage.py tests/test_projection_service.py tests/test_current_native_visibility.py tests/test_save_patch.py
+python3 -m pytest -q tests/test_validation_pipeline.py tests/test_projection_service.py tests/test_current_native_package.py tests/test_current_native_write_safety.py tests/test_current_native_visibility.py tests/test_save_manager.py tests/test_package_cli.py tests/test_package_merge.py tests/test_package_save_condition_coverage.py tests/test_ai_intent.py tests/test_preflight_cache.py
 ```
 
 结果：
 
 - `git diff --check`：通过。
-- Markdown 链接检查：`checked 65 markdown files; local links ok`。
-- Focused package/save tests：`55 passed, 28 subtests passed in 9.20s`。
+- Markdown 链接检查：`checked 66 markdown files; local links ok`。
+- Focused package/save tests：`55 passed, 28 subtests passed`。
+- Focused data-model tests：`130 passed, 45 subtests passed`。
 
 未执行：
 
 - 全量 `python3 -m pytest`。原因：本切片仅改 Markdown 文档和 BMAD 计划产物；已补跑
-  SaveManager、Campaign validation、package CLI、projection、visibility 和 safe patch
+  SaveManager、Campaign validation、package CLI、projection、visibility、safe patch、
+  validation pipeline、current native package/write safety、package merge、AI intent 和 preflight cache
   相关 focused tests。
 
 如后续领域文档引入新的 CLI/MCP 命令示例，再补对应 focused tests。
