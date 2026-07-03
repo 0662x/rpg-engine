@@ -938,3 +938,84 @@ Documentation sync:
 - This implementation log records the Phase 4 platform verification-only scope.
   No behavior change was required.
 - Final Round 9 expert review is complete with no blockers.
+
+## Round 10: Final Regression Gate And Documentation Close-Out
+
+Status: **COMPLETE**
+
+Goal:
+
+Run the final regression gate for the completed Phase 1 to Phase 4 refactor
+work and close out the architecture documentation so future work can see which
+parts are implemented and which parts remain optional.
+
+Code scope:
+
+- `docs/architecture/intent-coordinator-refactor-plan.md`
+- `docs/architecture/intent-refactor-implementation-log.md`
+
+Runtime behavior impact:
+
+- No runtime, platform, MCP, CLI, SaveManager, preflight-cache, intent-router,
+  resolver, validation, commit, or test behavior changed.
+- The refactor plan status now records that Phases 1 to 4 are complete and
+  Phase 5 remains optional.
+- The implementation log records the final regression gate and review result.
+
+Final regression gate:
+
+```bash
+python3 -m pytest -q tests/test_ai_intent.py tests/test_runtime.py tests/test_mcp_adapter.py \
+  tests/test_preflight_cache.py tests/test_platform_prewarm.py \
+  tests/test_platform_ai_simulation.py tests/test_platform_sidecar.py \
+  tests/test_save_manager.py tests/test_v1_cli.py \
+  tests/test_current_native_context.py tests/test_context_quality.py
+
+git diff --check
+```
+
+Result:
+
+```text
+202 passed, 115 subtests passed in 19.24s
+git diff --check passed
+```
+
+Expert code review:
+
+- Engine boundary: pass. Confirmed Round 10 remains documentation-only, the
+  protected regression suite now includes sidecar, CLI, and ContextBuilder
+  coverage, and Round 9 residual engine risks were carried forward.
+- AI intent safety: pass. Confirmed external AI remains low-trust, internal AI
+  remains review-only, preflight cache remains advisory/single-use, and
+  `message_only` / platform boundaries are not overstated.
+- Gameplay turn flow: pass. Confirmed `player_turn` remains pending/no-save,
+  `player_confirm` remains the commit gate, and platform act/confirm forwarding
+  remains accurately documented.
+- Platform/MCP integration: pass. Confirmed the final gate now includes
+  platform sidecar and CLI coverage, while real platform connector, real MCP
+  client, and real model canary coverage are not overclaimed.
+- QA/regression: pass after follow-up. Initial blocker was that the final gate
+  omitted the Phase 3b ContextBuilder suites; fixed by running and recording
+  the expanded final gate with `tests/test_current_native_context.py` and
+  `tests/test_context_quality.py`.
+- Repo/docs: pass. Confirmed the plan/log status, links, final gate, and
+  implementation evidence are synchronized.
+
+Residual risks:
+
+- The final gate is still a local automated regression suite, not a real
+  platform connector, real MCP client, or real model canary.
+- Round 9 engine-boundary residuals still apply: pending action storage remains
+  a workspace-level single slot, and preflight cache privacy hardening for raw
+  `session_key` / `user_text` remains existing technical debt.
+- Phase 5 package split remains optional and intentionally unstarted.
+- Larger future coordinator work remains design-only until it gets its own
+  characterization tests, implementation rounds, and review gate.
+
+Documentation sync:
+
+- `intent-coordinator-refactor-plan.md` now points to this implementation log
+  as the source of per-round implementation and review evidence.
+- This log records the final gate used to close Phases 1 to 4.
+- Final Round 10 expert review is complete with no blockers.

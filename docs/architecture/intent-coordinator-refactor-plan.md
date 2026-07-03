@@ -1,11 +1,17 @@
 # Intent Coordinator Refactor Plan
 
-Status: **PROPOSED：仅为重构计划，尚未实施**
+Status: **PHASES 1-4 COMPLETE：Phase 5 仍为可选后续**
 
 Date: 2026-07-03
 
 This document records the safe refactor plan for consolidating AI intent
 orchestration without changing player-facing behavior.
+
+Implementation status and per-round review evidence are recorded in
+`docs/architecture/intent-refactor-implementation-log.md`. Phases 1 to 4 have
+been completed as small commits with expert review and regression gates. Phase
+5 remains optional and should only be considered after a separate design/review
+round.
 
 Historical AI intent design alignment is recorded in
 `docs/architecture/intent-design-alignment-review.md`. That review clarifies
@@ -408,7 +414,9 @@ Run this targeted suite before any merge:
 ```bash
 python3 -m pytest -q tests/test_ai_intent.py tests/test_runtime.py tests/test_mcp_adapter.py \
   tests/test_preflight_cache.py tests/test_platform_prewarm.py \
-  tests/test_platform_ai_simulation.py tests/test_save_manager.py
+  tests/test_platform_ai_simulation.py tests/test_platform_sidecar.py \
+  tests/test_save_manager.py tests/test_v1_cli.py \
+  tests/test_current_native_context.py tests/test_context_quality.py
 ```
 
 Important behavior checks already covered by tests:
@@ -423,9 +431,12 @@ Important behavior checks already covered by tests:
 - preflight context/hash/model/candidate mismatch rejection
 - message-only preflight consumption without `preflight_id`
 - pending preflight timeout and late-ready handling
+- ContextBuilder native/current-context quality paths
 - MCP `player_turn` hides delta/proposal
 - `player_confirm` commits only pending approved action
 - platform prewarm remains advisory
+- platform sidecar act/confirm forwarding
+- CLI intent helper surfaces
 
 ## Rollback Plan
 
