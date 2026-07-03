@@ -15,6 +15,7 @@
 | 理解当前架构 | [架构](architecture.md) |
 | 查找模块职责 | [组件清单](component-inventory.md) |
 | 理解 AI 意图链 | [AI 意图链](ai-intent-chain.md) |
+| 理解 Save / Campaign 包边界 | [Save 与 Campaign Package](save-and-campaign-packages.md) |
 | 开始开发 | [开发指南](development-guide.md) |
 | 选择测试和门禁 | [测试与质量门禁](testing-and-quality-gates.md) |
 | 读取 AI agent 项目宪法 | [项目上下文](project-context.md) |
@@ -46,6 +47,7 @@ Round 1 Deep Scan 已完成，扫描材料保留在 [`../_bmad-output/`](../_bma
 - [架构](architecture.md)
 - [组件清单](component-inventory.md)
 - [AI 意图链](ai-intent-chain.md)
+- [Save 与 Campaign Package](save-and-campaign-packages.md)
 - [开发指南](development-guide.md)
 - [测试与质量门禁](testing-and-quality-gates.md)
 - [项目上下文](project-context.md)
@@ -76,8 +78,9 @@ Round 1 Deep Scan 已完成，扫描材料保留在 [`../_bmad-output/`](../_bma
 4. [架构](architecture.md)
 5. [组件清单](component-inventory.md)
 6. [AI 意图链](ai-intent-chain.md)
-7. touched surface 对应的旧 spec / architecture 文档
-8. [测试与质量门禁](testing-and-quality-gates.md)
+7. [Save 与 Campaign Package](save-and-campaign-packages.md)
+8. touched surface 对应的旧 spec / architecture 文档
+9. [测试与质量门禁](testing-and-quality-gates.md)
 
 AI intent、SaveManager、MCP、platform、schema、migration 或 hidden-content 相关改动
 必须按 BMAD P0/P1 流程留下 plan、story、test/review 和 docs sync 证据。

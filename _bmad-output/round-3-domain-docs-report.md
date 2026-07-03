@@ -44,12 +44,46 @@
 - `rpg_engine/preflight_cache.py`
 - `rpg_engine/intent_manifest.py`
 
+### Save and campaign packages
+
+已新增：
+
+- [`docs/save-and-campaign-packages.md`](../docs/save-and-campaign-packages.md)
+
+已更新：
+
+- [`docs/index.md`](../docs/index.md)
+- [`_bmad-output/planning-artifacts/bmad-documentation-migration-plan.md`](planning-artifacts/bmad-documentation-migration-plan.md)
+
+主要来源：
+
+- [`docs/specs/campaign-package.md`](../docs/specs/campaign-package.md)
+- [`docs/specs/save-package.md`](../docs/specs/save-package.md)
+- [`docs/specs/player-entry-save-manager.md`](../docs/specs/player-entry-save-manager.md)
+- [`docs/architecture/game-engine.md`](../docs/architecture/game-engine.md)
+- [`docs/architecture/turn-flow-architecture.md`](../docs/architecture/turn-flow-architecture.md)
+- [`docs/project-context.md`](../docs/project-context.md)
+
+代码事实校验：
+
+- `rpg_engine/campaign.py`
+- `rpg_engine/save_service.py`
+- `rpg_engine/save_archive.py`
+- `rpg_engine/save_validation.py`
+- `rpg_engine/save_manager.py`
+- `rpg_engine/projection_service.py`
+- `rpg_engine/packages/service.py`
+- `rpg_engine/cli_v1.py`
+- `rpg_engine/mcp_adapter.py`
+
 ## 不改范围
 
 - 不移动或归档旧文档。
 - 不改 Python 代码、测试、schema、CLI/MCP 行为或 runtime 行为。
 - 不弱化 AI trust boundary。
 - 不把 future coordinator 描述成当前已实现主路径。
+- 不把旧 `player-entry-save-manager.md` 的过期设计草稿当成当前事实；以当前
+  `SaveManager`、CLI 和 MCP 代码为准。
 
 ## 已保留的关键边界
 
@@ -61,10 +95,14 @@
 - `player_confirm` 仍是普通玩家路径提交门。
 - MCP player profile 仍不能调用低层工具。
 - Platform sidecar 仍只 gate、prewarm、forward passive identity 和转发 act/confirm。
+- Campaign Package 仍只定义作者内容、初始世界、规则、模板和 smoke tests。
+- Save Package 仍保存一次游玩的当前事实，且 `data/game.sqlite` 是事实权威。
+- Registry 仍只是 workspace 索引，不是事实源。
+- `.aigmsave` 仍是完整归档形态，默认可能包含 GM hidden 信息。
+- 投影产物仍由 `projection_state` 和 `ProjectionService` 管理，不是绕过 SQLite 的写入通道。
 
 ## 待完成 Round 3 文档
 
-- `docs/save-and-campaign-packages.md`
 - `docs/cli-contracts.md`
 - `docs/mcp-contracts.md`
 - `docs/data-models.md`
@@ -78,7 +116,8 @@
 | AI Intent Safety | 通过。external/internal/preflight/message-only 边界保持明确。 |
 | Gameplay Flow | 通过。`player_turn -> pending/no save` 与 `player_confirm -> commit` 明确记录。 |
 | Platform / MCP | 通过。player profile 和 platform sidecar 的低权限 surface 未被弱化。 |
-| QA / Test Architect | 通过。文档收敛到既有 AI intent 高风险测试门禁。 |
+| QA / Test Architect | 通过。文档收敛到既有 AI intent、SaveManager、package 和 projection 高风险测试门禁。 |
+| Package / Save Boundary | 通过。Campaign Package、Save Package、workspace registry、projection 和 `.aigmsave` 的事实权威边界分开记录。 |
 
 ## 验证记录
 
@@ -88,15 +127,19 @@
 git add -N docs _bmad-output
 git diff --check
 python3 scripts/check_markdown_links.py docs _bmad-output
+python3 -m pytest -q tests/test_save_manager.py tests/test_campaign_validation.py tests/test_package_cli.py tests/test_package_save_condition_coverage.py tests/test_projection_service.py tests/test_current_native_visibility.py tests/test_save_patch.py
 ```
 
 结果：
 
 - `git diff --check`：通过。
-- Markdown 链接检查：`checked 64 markdown files; local links ok`。
+- Markdown 链接检查：`checked 65 markdown files; local links ok`。
+- Focused package/save tests：`55 passed, 28 subtests passed in 9.20s`。
 
 未执行：
 
-- `python3 -m pytest`。原因：本切片仅改 Markdown 文档和 BMAD 计划产物，不改 Python 行为。
+- 全量 `python3 -m pytest`。原因：本切片仅改 Markdown 文档和 BMAD 计划产物；已补跑
+  SaveManager、Campaign validation、package CLI、projection、visibility 和 safe patch
+  相关 focused tests。
 
 如后续领域文档引入新的 CLI/MCP 命令示例，再补对应 focused tests。

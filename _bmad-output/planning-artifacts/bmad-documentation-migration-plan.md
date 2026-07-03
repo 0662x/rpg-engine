@@ -1,6 +1,6 @@
 # BMAD 文档体系迁移计划
 
-文档状态：**ACTIVE：Round 1 已完成，Round 2 canonical docs 骨架已执行**
+文档状态：**ACTIVE：Round 3 领域文档合并中**
 
 日期：2026-07-03
 
@@ -11,8 +11,9 @@
 - Round 2：已执行。`docs/` 下已建立 canonical docs 骨架，`docs/README.md` 已收敛为
   指向 `docs/index.md` 的兼容入口。同步记录见
   [`../round-2-canonical-docs-report.md`](../round-2-canonical-docs-report.md)。
-- Round 3：执行中。`docs/ai-intent-chain.md` 已开始合并 AI intent / prewarm / surface
-  领域内容；其余领域文档仍待执行。
+- Round 3：执行中。`docs/ai-intent-chain.md` 已合并 AI intent / prewarm / surface
+  领域内容；`docs/save-and-campaign-packages.md` 已合并 Campaign / Save / SaveManager
+  包边界内容；其余领域文档仍待执行。
 - Round 4 及以后：待执行。旧 `docs/architecture`、`docs/specs`、`docs/guides`、
   `docs/prompts` 仍保留为迁移来源，尚未归档。
 
