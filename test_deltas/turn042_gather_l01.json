@@ -1,0 +1,27 @@
+{
+  "changed": true,
+  "command_id": "gm-turn-042-gather-l01",
+  "expected_turn_id": "turn:000042",
+  "intent": "gather",
+  "summary": "在L1小溪打满竹水筒，收鱼笼得小杂鱼3条+溪虾2只，发现新鲜偶蹄印，返回菌丝复合屋",
+  "user_text": "打满竹水筒，收鱼笼，观察岸边迹象，返回家",
+  "game_time_before": "第28天 · 上午",
+  "game_time_after": "第28天 · 上午（约30分钟往返+采集）",
+  "location_before": "loc:l01-creek",
+  "location_after": "loc:home-mycelium-house",
+  "events": [
+    {
+      "type": "gather",
+      "title": "打水+收鱼笼",
+      "summary": "竹水筒灌满溪水；鱼笼收获小杂鱼3条（手指长银鳞）、溪虾2只（拇指大透明壳）；鱼笼重新放回窄口；岸边发现新鲜偶蹄印向溪下游方向",
+      "source": "gm_narration",
+      "payload": {
+        "竹水筒": "装满",
+        "鱼笼产出": "小杂鱼3条 + 溪虾2只",
+        "发现": "新鲜偶蹄印，向下游方向"
+      }
+    }
+  ],
+  "tick_clocks": [],
+  "upsert_entities": []
+}

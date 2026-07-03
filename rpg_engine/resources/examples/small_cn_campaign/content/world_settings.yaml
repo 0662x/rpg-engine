@@ -1,0 +1,94 @@
+world_settings:
+  - id: world:storm-road
+    name: 风暴与旧河路
+    category: weather
+    scope: campaign
+    visibility: known
+    priority: 20
+    summary: 风暴影响旅行、视线、营地耐心和旧桥风险。
+    content:
+      travel_effect: 风暴越近，旅行越慢，桥边检查越危险。
+      social_effect: 营地人员会要求更具体的证据。
+    linked_rules:
+      - rule:risk-before-result
+    linked_clocks:
+      - clock:storm-front
+    linked_entities:
+      - loc:old-bridge
+
+  - id: world:new-content-boundary
+    name: 新内容事实边界
+    category: truth
+    scope: campaign
+    visibility: known
+    priority: 80
+    summary: AI 可以描述候选和线索，但不能把未保存的新势力、文明、地点或材料直接确认为事实。
+    content:
+      rule: 新内容必须来自已知事实、palette、random table、unknown_lead 或 content delta。
+      player_language: 未确认内容应使用“像是”“可能”“需要确认”等措辞。
+    linked_rules:
+      - rule:palette-candidate-boundary
+      - rule:high-impact-content-review
+      - rule:hidden-never-player-visible
+    linked_clocks: []
+    linked_entities:
+      - loc:camp
+
+  - id: world:material-discovery
+    name: 材料发现和采样
+    category: ecology
+    scope: campaign
+    visibility: known
+    priority: 65
+    summary: 材料发现要区分可见草药、待确认变体和仅作线索的痕迹。
+    content:
+      direct_materials: 普通月白草、河泥、镜片碎屑可以作为低风险候选。
+      confirm_required: 银边月白草、旧绳纤维、信号灰需要采样或询问后才能保存为确认事实。
+      clue_only: 黑盐痕这类封印相关内容只能先作为线索。
+    linked_rules:
+      - rule:no-inventory-without-delta
+      - rule:palette-candidate-boundary
+    linked_clocks:
+      - clock:storm-front
+    linked_entities:
+      - mat:moon-herb
+      - loc:camp
+      - loc:old-bridge
+
+  - id: world:faction-contact
+    name: 势力和文明接触边界
+    category: faction
+    scope: campaign
+    visibility: known
+    priority: 60
+    summary: 旧桥守路人、山岗传信者等高影响内容必须多源确认，不能由单次刻痕或传闻确认为势力。
+    content:
+      minimum_path: 传闻或符号 -> 线索 -> 多源确认 -> content delta。
+      social_rule: NPC 可以提供传闻或反应，但不能凭一句话让新文明变成 known。
+    linked_rules:
+      - rule:high-impact-content-review
+      - rule:hidden-never-player-visible
+    linked_clocks:
+      - clock:camp-suspicion
+    linked_entities:
+      - loc:old-bridge
+      - loc:watch-hill
+
+  - id: world:rumor-is-not-fact
+    name: 传闻不是事实
+    category: truth
+    scope: campaign
+    visibility: known
+    priority: 55
+    summary: 随机表和 NPC 传闻只提供调查方向，不能直接覆盖世界状态。
+    content:
+      random_tables: camp-rumor、social-reaction 等表默认生成未证实信息。
+      persistence: 若传闻影响后续玩法，应保存为 event 或 hinted reference，再通过行动确认。
+    linked_rules:
+      - rule:palette-candidate-boundary
+      - rule:resource-accounting
+    linked_clocks:
+      - clock:camp-suspicion
+    linked_entities:
+      - npc:guide-lin
+      - npc:merchant-qiao

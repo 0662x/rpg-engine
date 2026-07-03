@@ -1,0 +1,28 @@
+entities:
+  - id: loc:start
+    type: location
+    name: Start
+    status: active
+    visibility: known
+    summary: A simple starting place for the campaign.
+    aliases: [start]
+    location:
+      safety_level: guarded
+      description_short: A clear starting point with enough room for the first scene.
+      exits:
+        - Nearby path
+      resources:
+        - basic supplies
+
+  - id: pc:player
+    type: character
+    name: Player
+    status: active
+    visibility: known
+    location_id: loc:start
+    summary: The player character at the start of the campaign.
+    aliases: [player]
+    character:
+      role: player
+      attitude: ready
+      health_state: healthy

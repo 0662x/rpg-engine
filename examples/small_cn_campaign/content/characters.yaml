@@ -1,0 +1,70 @@
+entities:
+  - id: pc:traveler
+    type: character
+    name: 旅人
+    status: active
+    visibility: known
+    location_id: loc:camp
+    summary: 玩家角色，被委托在风暴封路前查明旧桥异常。
+    aliases: [主角, 玩家, 旅人]
+    details:
+      goal: 查明旧桥封印为何破损。
+      stress: steady
+    character:
+      role: player
+      attitude: focused
+      trust: 0
+      health_state: healthy
+
+  - id: npc:guide-lin
+    type: character
+    name: 林向导
+    status: active
+    visibility: known
+    location_id: loc:camp
+    summary: 熟悉旧河路的向导，愿意解释路线和危险，但不想冒无意义的险。
+    aliases: [林, 向导]
+    details:
+      relationship_to_pc: cautious ally
+      wants: 先确认旧桥封印是人为破坏还是自然崩落。
+    character:
+      role: guide
+      attitude: cautious
+      trust: 20
+      health_state: tired
+
+  - id: npc:merchant-qiao
+    type: character
+    name: 乔商人
+    status: active
+    visibility: known
+    location_id: loc:camp
+    summary: 带着口粮和绳索的小商人，愿意交换桥边残留物和可靠消息。
+    aliases: [乔, 商人]
+    details:
+      relationship_to_pc: neutral
+      trade_offers:
+        - 口粮换旧桥残片。
+        - 信任提高后可借出绳索。
+    character:
+      role: trader
+      attitude: transactional
+      trust: 10
+      health_state: healthy
+
+  - id: npc:missing-scout
+    type: character
+    name: 失踪斥候任
+    status: active
+    visibility: hinted
+    location_id: loc:old-bridge
+    summary: 最后一次被看到是在旧桥检查封印。
+    aliases: [任, 斥候]
+    details:
+      unknowns:
+        - 任是否在风暴警告前越过旧桥。
+    character:
+      role: scout
+      attitude: unknown
+      trust: 0
+      health_state: unknown

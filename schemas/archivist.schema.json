@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ArchivistSuggestion",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "turn_summary",
+    "memory_candidates",
+    "entity_alias_suggestions",
+    "unresolved_leads",
+    "possible_contradictions",
+    "next_context_hints",
+    "review_required"
+  ],
+  "properties": {
+    "turn_summary": { "type": "string" },
+    "memory_candidates": { "type": "array", "items": { "type": "object" } },
+    "entity_alias_suggestions": { "type": "array", "items": { "type": "object" } },
+    "unresolved_leads": { "type": "array", "items": { "type": "object" } },
+    "possible_contradictions": { "type": "array", "items": { "type": "object" } },
+    "next_context_hints": { "type": "array", "items": { "type": "string" } },
+    "review_required": { "type": "array", "items": { "type": "object" } }
+  }
+}

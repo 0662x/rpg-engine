@@ -1,0 +1,465 @@
+from __future__ import annotations
+
+import json
+import sqlite3
+from typing import Any
+
+from ..campaign import Campaign
+from ..db import get_meta, resolve_entity
+from ..palette import find_palette_candidate, palette_candidate_payload
+from ..render import parse_json
+from ..ux import RepairOption
+from .base import (
+    ActionOptionSpec,
+    ActionResolverSpec,
+    ActionValidationResult,
+    ResolutionResult,
+    option_specs_for,
+    option_value,
+)
+
+
+def explore_target_query(options: Any) -> str | None:
+    target = option_value(options, "target") or option_value(options, "location")
+    return str(target) if target else None
+
+
+def allows_unknown_lead(options: Any) -> bool:
+    value = option_value(options, "unknown_lead")
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "未知线索", "unknown"}
+
+
+def preview_explore(
+    campaign: Campaign,
+    conn: sqlite3.Connection,
+    context_data: dict[str, Any],
+    options: Any,
+) -> str:
+    del context_data
+    palette_id = option_value(options, "palette_id")
+    if palette_id:
+        return render_palette_explore_preview(campaign, conn, options, str(palette_id))
+    target_query = explore_target_query(options)
+    approach = option_value(options, "approach")
+    user_text = option_value(options, "user_text") or target_query or "探索"
+    meta = get_meta(conn)
+    current_location = str(meta.get("current_location_id", "unknown"))
+    lines = [
+        "## 探索行动预演",
+        "",
+        "### 输入",
+        "| 项目 | 值 |",
+        "|------|----|",
+        f"| 原始行动 | {user_text} |",
+        f"| 当前地点 | `{current_location}` |",
+        f"| 探索目标 | {target_query or '未明确'} |",
+        f"| 方法 | {approach or '未明确'} |",
+    ]
+    if not target_query:
+        lines.extend(
+            [
+                "",
+                "### 必须确认",
+                "- 探索目标未明确。",
+                "",
+                "### Delta 草案",
+                "缺少探索目标，不能生成保存草案。",
+            ]
+        )
+        return "\n".join(lines)
+
+    entity = resolve_entity(conn, str(target_query), view="player")
+    lines.extend(["", "### 已知目标"])
+    if entity:
+        details = parse_json(entity["details_json"], {})
+        lines.extend(
+            [
+                "| 字段 | 值 |",
+                "|------|----|",
+                f"| ID | `{entity['id']}` |",
+                f"| 类型 | {entity['type']} |",
+                f"| 名称 | {entity['name']} |",
+                f"| 摘要 | {entity['summary'] or '无'} |",
+            ]
+        )
+        if details.get("safety"):
+            lines.append(f"| 安全等级 | {details['safety']} |")
+    else:
+        lines.extend(
+            [
+                "- 未命中现有可见实体；探索只能产生线索候选，不能直接确认新事实。",
+            ]
+        )
+
+    lines.extend(
+        [
+            "",
+            "### 结算边界",
+            "- 先描述可观察迹象，再等待玩家选择是否深入、靠近、触碰或撤退。",
+            "- 发现新事实前必须用 delta 显式保存事件、线索或实体。",
+            "- hidden 信息不能因探索预演直接泄露给玩家。",
+            "",
+            "### Delta 草案",
+        ]
+    )
+    if entity is None and not allows_unknown_lead(options):
+        lines.append("目标未解析为现有可见实体，不能生成保存草案。")
+    else:
+        delta = build_explore_delta(
+            target_query=str(target_query),
+            entity=entity,
+            approach=approach,
+            user_text=str(user_text),
+            unknown_lead=entity is None,
+        )
+        lines.extend(
+            [
+                "保存前必须由 GM 按实际线索、风险和耗时改写。",
+                "",
+                "```json",
+                json.dumps(delta, ensure_ascii=False, indent=2, sort_keys=True),
+                "```",
+            ]
+        )
+    return "\n".join(lines)
+
+
+def validate_explore_request(
+    campaign: Campaign,
+    conn: sqlite3.Connection,
+    context_data: dict[str, Any],
+    options: Any,
+) -> ActionValidationResult:
+    del context_data
+    palette_id = option_value(options, "palette_id")
+    if palette_id:
+        candidate = find_palette_candidate(
+            campaign,
+            conn,
+            str(palette_id),
+            location_query=option_value(options, "location"),
+            intent="explore",
+        )
+        return validate_palette_explore_candidate(candidate, str(palette_id))
+    target_query = explore_target_query(options)
+    if not target_query:
+        return ActionValidationResult(missing_required=("target",))
+    target = resolve_entity(conn, target_query, view="player")
+    if not target and not allows_unknown_lead(options):
+        return ActionValidationResult(errors=(f"target not found: {target_query}",))
+    return ActionValidationResult()
+
+
+def resolve_explore(
+    campaign: Campaign,
+    conn: sqlite3.Connection,
+    context_data: dict[str, Any],
+    options: Any,
+) -> ResolutionResult:
+    del context_data
+    palette_id = option_value(options, "palette_id")
+    if palette_id:
+        return resolve_palette_explore(campaign, conn, options, str(palette_id))
+    target_query = explore_target_query(options)
+    if not target_query:
+        return ResolutionResult(
+            status="needs_confirmation",
+            confirmations=("探索目标未明确。",),
+            player_message="需要先说明你要探索什么。",
+            repair_options=(
+                RepairOption(
+                    id="clarify_explore_target",
+                    label="补充探索目标",
+                    action="explore",
+                    effect="说明地点、对象、痕迹或未知线索",
+                    risk_level="none",
+                    requires_confirmation=False,
+                ),
+            ),
+        )
+    entity = resolve_entity(conn, target_query, view="player")
+    if not entity and not allows_unknown_lead(options):
+        return ResolutionResult(
+            status="blocked",
+            confirmations=(f"target not found: {target_query}",),
+            player_message=f"我没找到“{target_query}”对应的已知可见对象。可以改成已知对象，或明确把它当作未知线索探索。",
+            repair_options=(
+                RepairOption(
+                    id="mark_unknown_lead",
+                    label="作为未知线索探索",
+                    action="explore",
+                    options={"target": target_query, "approach": option_value(options, "approach"), "unknown_lead": True},
+                    effect="保存为 unknown_lead，不直接确认新事实",
+                ),
+            ),
+        )
+    return ResolutionResult(
+        status="ready",
+        facts_used=(str(entity["id"]),) if entity else (),
+        proposed_delta=build_explore_delta(
+            target_query=str(target_query),
+            entity=entity,
+            approach=option_value(options, "approach"),
+            user_text=option_value(options, "user_text") or str(target_query),
+            unknown_lead=entity is None,
+        ),
+        player_message="探索预演已准备好；保存后只确认可观察线索，不泄漏 hidden 信息。",
+        narrative_constraints=("Use scene_entry.md for exploration response.", "Do not reveal hidden facts unless delta records discovery."),
+    )
+
+
+def validate_explore_delta(
+    campaign: Campaign,
+    conn: sqlite3.Connection,
+    context_data: dict[str, Any],
+    options: Any,
+    delta: dict[str, Any],
+) -> ActionValidationResult:
+    del context_data
+    palette_id = option_value(options, "palette_id")
+    if palette_id:
+        return validate_palette_explore_delta(campaign, conn, options, delta, str(palette_id))
+    target_query = explore_target_query(options)
+    if not target_query:
+        return ActionValidationResult(missing_required=("target",))
+    target = resolve_entity(conn, target_query, view="player")
+    unknown_lead = allows_unknown_lead(options)
+    if not target and not unknown_lead:
+        return ActionValidationResult(errors=(f"target not found: {target_query}",))
+    errors: list[str] = []
+    warnings: list[str] = []
+    if delta.get("intent") != "explore":
+        warnings.append("delta intent is not explore")
+    target_id = str(target["id"]) if target else None
+    events = delta.get("events", []) if isinstance(delta.get("events", []), list) else []
+    found_target_payload = False
+    for index, event in enumerate(events):
+        if not isinstance(event, dict):
+            continue
+        payload = event.get("payload", {})
+        if not isinstance(payload, dict):
+            continue
+        if unknown_lead and payload.get("target_kind") == "unknown_lead" and payload.get("needs_gm_resolution") is True:
+            found_target_payload = True
+            continue
+        if payload.get("target_id") is not None:
+            found_target_payload = True
+            if target_id and str(payload["target_id"]) != target_id:
+                errors.append(f"events[{index}].payload.target_id must be {target_id}")
+    if not found_target_payload:
+        errors.append("explore delta must include events[].payload.target_id or explicit unknown_lead payload")
+    return ActionValidationResult(errors=tuple(errors), warnings=tuple(warnings))
+
+
+def render_palette_explore_preview(
+    campaign: Campaign,
+    conn: sqlite3.Connection,
+    options: Any,
+    palette_id: str,
+) -> str:
+    candidate = find_palette_candidate(campaign, conn, palette_id, location_query=option_value(options, "location"), intent="explore")
+    target_query = explore_target_query(options)
+    approach = option_value(options, "approach")
+    lines = [
+        "## 探索候选预演",
+        "",
+        "### 输入",
+        "| 项目 | 值 |",
+        "|------|----|",
+        f"| 候选素材 | `{palette_id}` |",
+        f"| 探索目标 | {target_query or '按候选素材线索'} |",
+        f"| 方法 | {approach or '未明确'} |",
+        "",
+    ]
+    if candidate is None:
+        lines.extend(["### 错误", f"- palette not found: {palette_id}"])
+        return "\n".join(lines)
+    entry = candidate["entry"]
+    discovery = entry.get("discovery") if isinstance(entry.get("discovery"), dict) else {}
+    lines.extend(
+        [
+            "### 候选素材",
+            "| 字段 | 值 |",
+            "|------|----|",
+            f"| 状态 | `{candidate['status']}` |",
+            f"| 类型 | `{entry.get('_kind', '')}` |",
+            f"| 名称 | {entry.get('name', '')} |",
+            f"| 摘要 | {entry.get('summary', '')} |",
+            f"| 线索 | {discovery.get('clue_text', '')} |",
+            "",
+            "### 结算边界",
+            "- 探索候选只能确认可观察迹象。",
+            "- 新地点、物种、势力和遭遇不能在探索预演中直接变成 known 事实。",
+            "- 若要保存，delta 必须保留 palette 来源并标记 `needs_gm_resolution`。",
+            "",
+            "### Delta 草案",
+        ]
+    )
+    validation = validate_palette_explore_candidate(candidate, palette_id)
+    if validation.errors:
+        lines.extend(f"- {item}" for item in validation.errors)
+        return "\n".join(lines)
+    delta = build_palette_explore_delta(candidate, options)
+    lines.extend(
+        [
+            "保存前必须由 GM 按实际线索、风险和耗时改写。",
+            "",
+            "```json",
+            json.dumps(delta, ensure_ascii=False, indent=2, sort_keys=True),
+            "```",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def validate_palette_explore_candidate(candidate: dict[str, Any] | None, palette_id: str) -> ActionValidationResult:
+    if candidate is None:
+        return ActionValidationResult(errors=(f"palette not found: {palette_id}",))
+    if candidate["status"] in {"locked", "out_of_context"}:
+        return ActionValidationResult(errors=(f"palette candidate is {candidate['status']}: {palette_id}",))
+    return ActionValidationResult()
+
+
+def resolve_palette_explore(
+    campaign: Campaign,
+    conn: sqlite3.Connection,
+    options: Any,
+    palette_id: str,
+) -> ResolutionResult:
+    candidate = find_palette_candidate(campaign, conn, palette_id, location_query=option_value(options, "location"), intent="explore")
+    validation = validate_palette_explore_candidate(candidate, palette_id)
+    if validation.errors:
+        return ResolutionResult(
+            status="blocked",
+            warnings=validation.errors,
+            player_message=validation.errors[0],
+            narrative_constraints=("Do not invent facts from a locked or missing palette candidate.",),
+        )
+    if candidate is None:
+        return ResolutionResult(status="blocked", warnings=(f"palette not found: {palette_id}",))
+    entry = candidate["entry"]
+    return ResolutionResult(
+        status="ready",
+        facts_used=(palette_id,),
+        warnings=(f"候选状态为 {candidate['status']}；保存后仍只确认线索，不确认 hidden 真相。",),
+        proposed_delta=build_palette_explore_delta(candidate, options),
+        player_message=f"探索候选 {entry.get('name', palette_id)} 已准备好；保存后只记录可观察线索。",
+        narrative_constraints=(
+            "Use scene_entry.md for exploration response.",
+            "Do not reveal hidden facts unless delta records discovery.",
+            "Do not convert palette candidate to known entity in this explore step.",
+        ),
+    )
+
+
+def build_palette_explore_delta(candidate: dict[str, Any], options: Any) -> dict[str, Any]:
+    entry = candidate["entry"]
+    target_query = explore_target_query(options) or str(entry.get("name") or entry.get("id"))
+    payload = {
+        **palette_candidate_payload(candidate),
+        "target_query": target_query,
+        "target_id": None,
+        "target_kind": "palette_candidate",
+        "approach": option_value(options, "approach"),
+    }
+    summary = f"探索候选线索：{entry.get('name', entry.get('id'))}；仅确认可观察迹象。"
+    return {
+        "changed": True,
+        "intent": "explore",
+        "user_text": option_value(options, "user_text") or target_query,
+        "summary": summary,
+        "events": [
+            {
+                "type": "explore",
+                "title": "探索候选线索",
+                "summary": summary,
+                "payload": payload,
+                "source": "palette_explore_preview",
+            }
+        ],
+        "upsert_entities": [],
+        "tick_clocks": [],
+    }
+
+
+def validate_palette_explore_delta(
+    campaign: Campaign,
+    conn: sqlite3.Connection,
+    options: Any,
+    delta: dict[str, Any],
+    palette_id: str,
+) -> ActionValidationResult:
+    candidate = find_palette_candidate(campaign, conn, palette_id, location_query=option_value(options, "location"), intent="explore")
+    validation = validate_palette_explore_candidate(candidate, palette_id)
+    errors = list(validation.errors)
+    warnings = list(validation.warnings)
+    if delta.get("intent") != "explore":
+        warnings.append("delta intent is not explore")
+    payloads = [
+        event.get("payload", {})
+        for event in delta.get("events", []) if isinstance(event, dict)
+    ]
+    if not any(isinstance(payload, dict) and payload.get("palette_id") == palette_id for payload in payloads):
+        errors.append(f"explore delta must include events[].payload.palette_id {palette_id}")
+    if delta.get("upsert_entities"):
+        warnings.append("palette explore delta should not create known entities before confirmation")
+    return ActionValidationResult(errors=tuple(errors), warnings=tuple(warnings))
+
+
+def build_explore_delta(
+    *,
+    target_query: str,
+    entity: sqlite3.Row | None,
+    approach: Any,
+    user_text: str,
+    unknown_lead: bool = False,
+) -> dict[str, Any]:
+    payload = {
+        "target_query": target_query,
+        "target_id": entity["id"] if entity else None,
+        "approach": approach,
+        "needs_gm_resolution": True,
+    }
+    if unknown_lead:
+        payload["target_kind"] = "unknown_lead"
+    return {
+        "changed": True,
+        "intent": "explore",
+        "user_text": user_text,
+        "summary": f"探索{target_query}，需要 GM 根据可见事实结算线索与风险。",
+        "events": [
+            {
+                "type": "explore",
+                "title": "探索行动结算",
+                "summary": f"探索{target_query}；预演不自动确认隐藏事实。",
+                "payload": payload,
+                "source": "explore_preview",
+            }
+        ],
+        "upsert_entities": [],
+        "tick_clocks": [],
+    }
+
+
+EXPLORE_RESOLVER = ActionResolverSpec(
+    name="explore",
+    preview=preview_explore,
+    response_template="scene_entry.md",
+    required_options=("target",),
+    option_specs=option_specs_for(
+        ActionOptionSpec("target", "place, object, clue or area to inspect"),
+        ActionOptionSpec("location", "optional location id/name/alias"),
+        ActionOptionSpec("approach", "how the player explores or handles risk"),
+        ActionOptionSpec("unknown_lead", "allow unresolved target as an explicit unknown lead", dest="unknown-lead"),
+        ActionOptionSpec("palette_id", "palette candidate id to inspect as a controlled clue", dest="palette-id"),
+        ActionOptionSpec("user_text", "original player action text", dest="user-text"),
+    ),
+    keywords=("探索", "调查", "搜查", "搜索", "侦查", "检查线索"),
+    semantic_labels=("explore", "inspect", "search", "investigate", "scout"),
+    inference_priority=55,
+    validate_request=validate_explore_request,
+    resolve=resolve_explore,
+    validate_delta=validate_explore_delta,
+)

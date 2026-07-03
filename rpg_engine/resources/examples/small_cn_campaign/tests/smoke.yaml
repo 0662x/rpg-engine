@@ -1,0 +1,100 @@
+smoke_tests:
+  - id: query-scene
+    type: query
+    capabilities: [query]
+    kind: scene
+    contains: 河道巡查营地
+
+  - id: query-clue
+    type: query
+    capabilities: [clue]
+    kind: entity
+    query_text: 破损封印
+    contains: 旧桥桥头
+
+  - id: query-resource
+    type: query
+    capabilities: [inventory_resource]
+    kind: entity
+    query_text: 野外口粮
+    contains: 3包
+
+  - id: query-project
+    type: query
+    capabilities: [project_task]
+    kind: entity
+    query_text: 修复山岗信号架
+    contains: needs materials
+
+  - id: query-relationship
+    type: query
+    capabilities: [social]
+    kind: entity
+    query_text: 林关系
+    contains: 林向导
+
+  - id: preview-explore-risk
+    type: preview
+    capabilities: [explore, risk]
+    action: explore
+    user_text: 谨慎检查旧桥封印
+    options:
+      target: ref:broken-seal
+      approach: 谨慎目视检查
+    contains: Delta 草案
+
+  - id: preview-travel
+    type: preview
+    capabilities: [travel]
+    action: travel
+    user_text: 去旧桥
+    options:
+      destination: loc:old-bridge
+      pace: careful
+    contains: Delta 草案
+
+  - id: preview-gather
+    type: preview
+    capabilities: [gather_search]
+    action: gather
+    expect_status: needs_confirmation
+    user_text: 在营地附近采月白草
+    options:
+      target: 月白草
+      location: 河道巡查营地
+    contains: Delta 草案
+
+  - id: preview-rest
+    type: preview
+    capabilities: [rest_time]
+    action: rest
+    user_text: 休息到清晨
+    options:
+      until: morning
+    contains: Delta 草案
+
+  - id: validate-clock-delta
+    type: validate_delta
+    capabilities: [clock]
+    delta:
+      expected_turn_id: turn:seed
+      command_id: smoke:validate-clock-delta
+      user_text: 记录风暴逼近。
+      intent: clock
+      changed: true
+      summary: 风暴逼近被记录一次。
+      events:
+        - type: clock_tick
+          title: 风暴逼近
+          summary: 河风和云层显示风暴更近了。
+          source: smoke
+      tick_clocks:
+        - id: clock:storm-front
+          delta: 1
+          reason: smoke
+
+  - id: random-bridge-risk
+    type: random_table
+    capabilities: [random_table]
+    table: table:bridge-risk
+    contains: river wind

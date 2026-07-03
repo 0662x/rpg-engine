@@ -1,0 +1,41 @@
+{
+  "changed": true,
+  "intent": "social",
+  "summary": "从L1小溪边通过菌丝通讯网络联系An，询问灰藓族近况",
+  "user_text": "用菌丝通讯问问An和小的最近怎么样",
+  "location_before": "loc:l01-creek",
+  "location_after": "loc:l01-creek",
+  "game_time_before": "第28天 · 上午",
+  "game_time_after": "第28天 · 上午",
+  "expected_turn_id": "turn:000038",
+  "events": [
+    {
+      "type": "social",
+      "source": "social_interaction",
+      "title": "社交：菌丝通讯联系An",
+      "summary": "通过菌丝通讯网络联系An，询问灰藓族近况、石板沟通进展和西隧维护状态。",
+      "payload": {
+        "target_id": "char:an",
+        "target_type": "character",
+        "interaction_type": "inquiry",
+        "subject": "灰藓族近况与沟通进展",
+        "method": "菌丝通讯",
+        "location_id": "loc:l01-creek",
+        "needs_gm_resolution": true
+      }
+    }
+  ],
+  "upsert_entities": [
+    {
+      "id": "char:an",
+      "type": "character",
+      "name": "An",
+      "status": "active",
+      "summary": "通过菌丝通讯与亚交流，报告近况。"
+    }
+  ],
+  "meta": {
+    "current_location_id": "loc:l01-creek",
+    "current_time_block": "第28天 · 上午"
+  }
+}

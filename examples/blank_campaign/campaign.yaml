@@ -1,0 +1,28 @@
+id: blank-campaign
+name: Blank Campaign
+engine_version: "0.2"
+package_version: "0.1.0"
+content_schema_version: "1"
+capabilities:
+  - query
+  - rest_time
+initial_game_day: 1
+initial_time_block: morning
+initial_game_time: Day 1 morning
+initial_location_id: loc:start
+defaults:
+  player_entity_id: pc:player
+  context_budget: 1800
+  sample_texts:
+    - Look around
+content:
+  entities:
+    - content/entities.yaml
+  rules:
+    - content/rules.yaml
+  clocks:
+    - content/clocks.yaml
+  world_settings:
+    - content/world_settings.yaml
+  random_tables:
+    - content/random_tables.yaml

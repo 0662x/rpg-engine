@@ -1,0 +1,68 @@
+species:
+  - id: pal:species:river-moth
+    name: 河雾小蛾
+    summary: 清晨河雾里常见的小蛾，聚集方向可提示湿地和火光。
+    rarity: common
+    biomes: [riverside camp, river crossing]
+    intents: [explore, gather]
+    discovery:
+      mode: direct
+      clue_text: 几只灰白小蛾沿着水汽低飞，避开了风口。
+      confirm_methods: [观察飞行方向, 检查附近火光]
+    risks:
+      - 只能作为环境提示，不能直接证明有人经过。
+    uses: [寻找湿地, 判断昨夜火光]
+    save_as:
+      type: species
+      entity_id: species:river-moth
+
+  - id: pal:species:stone-crab
+    name: 石缝蟹
+    summary: 旧桥石缝里的小蟹，受惊后会把新落下的碎石推出缝隙。
+    rarity: uncommon
+    locations: [loc:old-bridge]
+    intents: [explore]
+    discovery:
+      mode: confirm_required
+      clue_text: 桥墩石缝里有一点快速缩回去的灰影。
+      confirm_methods: [等待再次出现, 用树枝轻触石缝, 观察新碎石]
+    risks:
+      - 把小蟹动静误判成人会误导探索。
+    uses: [区分自然落石和人为动静]
+    save_as:
+      type: species
+      entity_id: species:stone-crab
+
+  - id: pal:species:ridge-crow
+    name: 山岗鸦
+    summary: 常停在山岗信号架附近的黑鸦，可能被近期火光惊动。
+    rarity: common
+    locations: [loc:watch-hill]
+    intents: [explore, social]
+    discovery:
+      mode: confirm_required
+      clue_text: 山岗上方有黑鸦盘旋，却不肯落回信号架。
+      confirm_methods: [观察落点, 询问林向导, 检查信号架]
+    risks:
+      - 鸟群反应只能作为环境线索。
+    uses: [提示山岗异常, 判断人类活动]
+    save_as:
+      type: species
+      entity_id: species:ridge-crow
+
+  - id: pal:species:reed-leech
+    name: 芦苇水蛭
+    summary: 河湾湿地里的小水蛭，提示水质和采集风险。
+    rarity: uncommon
+    biomes: [riverside camp, river crossing]
+    intents: [gather, explore]
+    discovery:
+      mode: clue_only
+      clue_text: 芦苇根部有细小黑影贴着水面移动。
+      confirm_methods: [用树枝挑开芦苇, 检查水质, 穿戴防护后采集]
+    risks:
+      - 贸然下水会造成小伤口或污染敷料。
+    uses: [湿地风险提示]
+    save_as:
+      type: species
+      entity_id: species:reed-leech

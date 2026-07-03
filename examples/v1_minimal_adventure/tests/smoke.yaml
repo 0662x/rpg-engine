@@ -1,0 +1,111 @@
+smoke_tests:
+  - id: query-scene
+    type: query
+    capabilities: [query]
+    kind: scene
+    contains: Watch Camp
+
+  - id: query-clue
+    type: query
+    capabilities: [clue]
+    kind: entity
+    query_text: Broken Seal Mark
+    contains: chipped warning seal
+
+  - id: query-resource
+    type: query
+    capabilities: [inventory_resource]
+    kind: entity
+    query_text: Field Rations
+    contains: 3pack
+
+  - id: query-project
+    type: query
+    capabilities: [project_task]
+    kind: entity
+    query_text: Repair Signal Frame
+    contains: needs materials
+
+  - id: query-relationship
+    type: query
+    capabilities: [social]
+    kind: entity
+    query_text: Mira relationship
+    contains: careful proof
+
+  - id: preview-explore-risk
+    type: preview
+    capabilities: [explore, risk]
+    action: explore
+    user_text: Inspect the broken bridge seal
+    options:
+      target: Broken Seal Mark
+      approach: careful visual inspection
+    contains: Delta 草案
+
+  - id: preview-travel
+    type: preview
+    capabilities: [travel]
+    action: travel
+    user_text: Travel to the old bridge
+    options:
+      destination: Old Bridge
+      pace: careful
+    contains: Delta 草案
+
+  - id: preview-social-trade
+    type: preview
+    capabilities: [social, trade_exchange]
+    action: social
+    user_text: Ask Pell about trading rations for bridge salvage
+    options:
+      npc: Trader Pell
+      topic: trade rations for bridge salvage
+      approach: practical bargain
+    contains: Trader Pell
+
+  - id: preview-gather
+    type: preview
+    capabilities: [gather_search]
+    action: gather
+    expect_status: needs_confirmation
+    user_text: Gather moon herb near camp
+    options:
+      target: Moon Herb
+      location: Watch Camp
+    contains: Delta 草案
+
+  - id: preview-rest
+    type: preview
+    capabilities: [rest_time]
+    action: rest
+    user_text: Rest until morning
+    options:
+      until: morning
+    contains: Delta 草案
+
+  - id: validate-clock-delta
+    type: validate_delta
+    capabilities: [clock]
+    delta:
+      expected_turn_id: turn:seed
+      command_id: smoke:validate-clock-delta
+      user_text: Storm pressure rises during the watch.
+      intent: clock
+      changed: true
+      summary: Storm pressure rises by one segment.
+      events:
+        - type: clock_tick
+          title: Storm front advances
+          summary: Wind and clouds show the storm is closer.
+          source: smoke
+      tick_clocks:
+        - id: clock:storm-front
+          delta: 1
+          reason: smoke
+
+  - id: random-bridge-risk
+    type: random_table
+    capabilities: [random_table]
+    table: table:bridge-risk
+    contains: river wind

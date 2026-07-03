@@ -1,0 +1,12 @@
+world_settings:
+  - id: world:core
+    name: Core Premise
+    category: truth
+    scope: campaign
+    visibility: known
+    priority: 10
+    summary: Replace this with the campaign's core premise.
+    content:
+      premise: The campaign starts from a small, concrete scene and expands through play.
+    linked_rules:
+      - rule:player-agency

@@ -1,0 +1,31 @@
+id: minimal-campaign
+name: Minimal Campaign
+engine_version: "0.2"
+package_version: "0.1.0"
+content_schema_version: "1"
+capabilities:
+  - query
+  - rest_time
+database: data/game.sqlite
+events: data/events.jsonl
+current_snapshot: snapshots/current.md
+current_snapshot_json: snapshots/current.json
+cards: cards
+initial_game_day: 1
+initial_time_block: morning
+initial_game_time: Day 1 morning
+initial_location_id: loc:start
+defaults:
+  player_entity_id: pc:traveler
+  context_budget: 1800
+content:
+  entities:
+    - content/entities.yaml
+  rules:
+    - content/rules.yaml
+  clocks:
+    - content/clocks.yaml
+  random_tables:
+    - content/random_tables.yaml
+  world_settings:
+    - content/world_settings.yaml

@@ -1,0 +1,23 @@
+{
+  "changed": true,
+  "command_id": "gm-turn-041-travel-l01",
+  "expected_turn_id": "turn:000041",
+  "intent": "travel",
+  "summary": "从菌丝复合屋出发，经空地，沿东南下坡到L1小溪，约16分钟",
+  "user_text": "拿上竹水筒去L1小溪打水，顺便看看鱼笼",
+  "game_time_before": "第28天 · 上午",
+  "game_time_after": "第28天 · 上午",
+  "location_before": "loc:home-mycelium-house",
+  "location_after": "loc:l01-creek",
+  "events": [
+    {
+      "type": "travel",
+      "title": "前往L1小溪",
+      "summary": "从菌丝复合屋经空地沿东南下坡到L1小溪，耗时约16分钟，带着竹水筒",
+      "source": "gm_narration",
+      "payload": {}
+    }
+  ],
+  "tick_clocks": [],
+  "upsert_entities": []
+}

@@ -1,0 +1,28 @@
+entities:
+  - id: loc:start
+    type: location
+    name: Start
+    status: active
+    visibility: known
+    summary: A quiet starting room used by the generic campaign fixture.
+    aliases: [starting room]
+    location:
+      biome: interior
+      safety_level: safe
+      description_short: A quiet starting room.
+      exits: []
+      resources: []
+
+  - id: pc:traveler
+    type: character
+    name: Traveler
+    status: active
+    visibility: known
+    location_id: loc:start
+    summary: The configurable player character for the generic fixture.
+    aliases: [player]
+    character:
+      role: player
+      attitude: neutral
+      trust: 0
+      health_state: healthy

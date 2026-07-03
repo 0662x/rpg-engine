@@ -1,0 +1,254 @@
+random_tables:
+  - id: table:bridge-risk
+    name: 旧桥风险细节
+    visibility: known
+    entries:
+      - result: river wind makes the warning rope snap against the stone.
+        weight: 2
+        tags: [risk, bridge]
+        payload:
+          risk_level: low
+          clock_id: clock:storm-front
+      - result: 桥下传来一声短促的碎石落水声。
+        weight: 1
+        tags: [clue, bridge]
+        payload:
+          palette_id: pal:enc:bridge-under-sound
+          requires_followup: true
+      - result: 桥头石缝里的黑色晶粒被雨水冲出一点。
+        weight: 1
+        tags: [clue, material]
+        payload:
+          palette_id: pal:mat:black-salt-trace
+          clue_stage: hinted
+      - result: 旧绳桩轻轻松动，继续靠近前需要处理支点。
+        weight: 1
+        tags: [risk, gear]
+        payload:
+          risk_level: medium
+
+  - id: table:camp-rumor
+    name: 营地传闻
+    visibility: known
+    entries:
+      - result: 有人说任斥候昨夜还在旧桥附近点过灯。
+        weight: 1
+        tags: [rumor, scout]
+        payload:
+          clue_stage: rumored
+      - result: 乔商人听见山岗方向有一次很短的哨声。
+        weight: 1
+        tags: [rumor, hill]
+        payload:
+          palette_id: pal:enc:hill-short-whistle
+          clue_stage: rumored
+      - result: 林向导说旧桥封印不该从路面这一侧裂开。
+        weight: 1
+        tags: [rumor, bridge]
+        payload:
+          clue_stage: hinted
+      - result: 有人抱怨月白草最近被踩倒了几片，像有人夜里绕过营地。
+        weight: 1
+        tags: [rumor, material]
+        payload:
+          palette_id: pal:enc:wet-footprint
+      - result: 乔商人愿意用一包口粮换可靠的桥边残留物。
+        weight: 1
+        tags: [social, trade]
+        payload:
+          palette_id: pal:enc:merchant-offer
+          requires_followup: true
+
+  - id: table:travel-risk
+    name: 旧河路旅行风险
+    visibility: known
+    entries:
+      - result: 雾气压低视线，下一段路需要慢行或用绳索标记。
+        weight: 2
+        tags: [travel, risk]
+        payload:
+          risk_level: low
+          clock_id: clock:storm-front
+      - result: 泥路边出现半枚新湿脚印，可能值得停下拓印。
+        weight: 1
+        tags: [travel, clue]
+        payload:
+          palette_id: pal:enc:wet-footprint
+          requires_followup: true
+      - result: 河湾芦苇晃动，但没有看见人影。
+        weight: 1
+        tags: [travel, location]
+        payload:
+          palette_id: pal:loc:reed-bend
+          clue_stage: observed
+      - result: 芦苇根部水面出现几道细小波纹，像是采集前需要先确认的湿地风险。
+        weight: 1
+        tags: [travel, species, risk]
+        payload:
+          palette_id: pal:species:reed-leech
+          clue_stage: hinted
+      - result: 风从旧桥方向卷来细灰，提示山岗或桥边近期有火光。
+        weight: 1
+        tags: [travel, clue]
+        payload:
+          palette_id: pal:mat:signal-ash
+
+  - id: table:explore-discovery
+    name: 探索可见发现
+    visibility: known
+    entries:
+      - result: 你注意到一处线索，但它只说明有人或风雨改变过现场，不能直接确认真相。
+        weight: 2
+        tags: [explore, clue]
+        payload:
+          clue_stage: hinted
+      - result: 有一小片银边月白草混在普通草药中，需要采样确认。
+        weight: 1
+        tags: [explore, material]
+        payload:
+          palette_id: pal:mat:silver-moon-herb
+          clue_stage: observed
+      - result: 山岗方向出现短暂反光，可能来自旧信号架。
+        weight: 1
+        tags: [explore, location]
+        payload:
+          palette_id: pal:loc:signal-frame-shadow
+      - result: 旧桥封印背面有陌生刻痕，但单一刻痕不能确认势力存在。
+        weight: 1
+        tags: [explore, faction]
+        payload:
+          palette_id: pal:faction:bridge-wardens
+          clue_stage: hinted
+
+  - id: table:gather-yield
+    name: 采集产出差异
+    visibility: known
+    entries:
+      - result: 采到标准小束，品质普通。
+        weight: 3
+        tags: [gather, yield]
+        payload:
+          quality: standard
+          quantity_hint: 1
+      - result: 只找到半束可用材料，剩余部分需要留给后续恢复。
+        weight: 1
+        tags: [gather, yield]
+        payload:
+          quality: partial
+          quantity_hint: 0.5
+      - result: 找到一处更好的样本，但需要额外时间确认没有污染。
+        weight: 1
+        tags: [gather, yield, confirm]
+        payload:
+          quality: good
+          requires_followup: true
+      - result: 采集时发现旁边还有一个未确认线索，不能直接当成材料收入。
+        weight: 1
+        tags: [gather, clue]
+        payload:
+          clue_stage: hinted
+
+  - id: table:gather-complication
+    name: 采集代价和误判
+    visibility: known
+    entries:
+      - result: 采集动作搅乱了泥面，后续追踪脚印更难。
+        weight: 1
+        tags: [gather, cost]
+        payload:
+          risk_level: low
+      - result: 材料带着异味，需要询问或测试后才能使用。
+        weight: 1
+        tags: [gather, confirm]
+        payload:
+          requires_followup: true
+      - result: 你必须在带走样本和保持现场完整之间选一个。
+        weight: 1
+        tags: [gather, choice]
+        payload:
+          requires_player_choice: true
+      - result: 风暴前的湿气让样本保存时间变短。
+        weight: 1
+        tags: [gather, risk]
+        payload:
+          clock_id: clock:storm-front
+
+  - id: table:craft-material-check
+    name: 制作前材料确认
+    visibility: known
+    entries:
+      - result: 草药包可以先用普通月白草试作，稀有变体必须等确认后再加入配方。
+        weight: 2
+        tags: [craft, herb, safe]
+        payload:
+          palette_id: pal:mat:moon-herb-fresh
+          requires_confirmed_material: true
+      - result: 编过滤垫前必须确认苦芦苇没有污染，否则成品只能作为临时工具。
+        weight: 1
+        tags: [craft, reed, confirm]
+        payload:
+          palette_id: pal:mat:bitter-reed
+          requires_followup: true
+      - result: 修信号架需要镜片碎屑或等效反光材料，不能凭“有反光”直接写入库存。
+        weight: 1
+        tags: [craft, signal, material]
+        payload:
+          palette_id: pal:mat:mirror-splinter
+          requires_confirmed_material: true
+      - result: 灰蓝河泥可用于临时封缝，但潮湿状态会降低耐久。
+        weight: 1
+        tags: [craft, clay, cost]
+        payload:
+          palette_id: pal:mat:river-clay
+          risk_level: low
+
+  - id: table:social-reaction
+    name: NPC 初始反应
+    visibility: known
+    entries:
+      - result: 对方愿意听，但要求你说明证据来源。
+        weight: 2
+        tags: [social, cautious]
+        payload:
+          attitude: cautious
+      - result: 对方先追问风险，不接受凭空推断。
+        weight: 1
+        tags: [social, risk]
+        payload:
+          attitude: skeptical
+          clock_id: clock:camp-suspicion
+      - result: 对方愿意交换信息，但需要一个具体承诺或物品。
+        weight: 1
+        tags: [social, trade]
+        payload:
+          requires_followup: true
+      - result: 对方提到另一条传闻，但明确说自己没有确认。
+        weight: 1
+        tags: [social, rumor]
+        payload:
+          clue_stage: rumored
+
+  - id: table:minor-cost
+    name: 轻微代价
+    visibility: known
+    entries:
+      - result: 耗时比预期更久，风暴压力应被重新评估。
+        weight: 1
+        tags: [cost, time]
+        payload:
+          clock_id: clock:storm-front
+      - result: 你留下了可被他人注意到的痕迹。
+        weight: 1
+        tags: [cost, trace]
+        payload:
+          risk_level: low
+      - result: 一个 NPC 要求你之后解释这次行动。
+        weight: 1
+        tags: [cost, social]
+        payload:
+          clock_id: clock:camp-suspicion
+      - result: 样本、证据或观察结果只能保留其中一部分，需要玩家选择。
+        weight: 1
+        tags: [cost, choice]
+        payload:
+          requires_player_choice: true

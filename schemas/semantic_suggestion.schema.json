@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SemanticSuggestion",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["mode", "submode", "targets", "entities_mentioned", "missing_confirmations", "notes", "confidence"],
+  "properties": {
+    "mode": { "type": "string", "enum": ["query", "action", "unknown"] },
+    "submode": { "type": "string" },
+    "targets": { "type": "array", "items": { "type": "string" } },
+    "entities_mentioned": { "type": "array", "items": { "type": "string" } },
+    "missing_confirmations": { "type": "array", "items": { "type": "string" } },
+    "notes": { "type": "array", "items": { "type": "string" } },
+    "confidence": { "type": "string", "enum": ["high", "medium", "low"] }
+  }
+}

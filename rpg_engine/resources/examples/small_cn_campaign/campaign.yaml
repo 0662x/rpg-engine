@@ -1,0 +1,54 @@
+id: small-cn-campaign
+name: 中文小剧本模板
+engine_version: "0.2"
+package_version: "0.1.0"
+content_schema_version: "1"
+capabilities:
+  - query
+  - explore
+  - social
+  - travel
+  - clock
+  - random_table
+  - clue
+  - risk
+  - inventory_resource
+  - project_task
+  - rest_time
+  - gather_search
+initial_game_day: 1
+initial_time_block: 清晨
+initial_game_time: 第1天 清晨
+initial_location_id: loc:camp
+defaults:
+  player_entity_id: pc:traveler
+  context_budget: 2200
+  sample_texts:
+    - 查看营地
+    - 询问林向导
+    - 去旧桥
+content:
+  entities:
+    - content/locations.yaml
+    - content/characters.yaml
+    - content/items.yaml
+    - content/projects.yaml
+    - content/references.yaml
+  relationships:
+    - content/relationships.yaml
+  rules:
+    - content/rules.yaml
+  clocks:
+    - content/clocks.yaml
+  routes:
+    - content/routes.yaml
+  world_settings:
+    - content/world_settings.yaml
+  random_tables:
+    - content/random_tables.yaml
+  palettes:
+    - content/palettes/materials.yaml
+    - content/palettes/encounters.yaml
+    - content/palettes/factions.yaml
+    - content/palettes/locations.yaml
+    - content/palettes/species.yaml

@@ -1,0 +1,134 @@
+cases:
+  - id: consensus_rest_validates_and_commits
+    text: 休息到早上
+    runtime:
+      intent_ai: consensus
+      external_intent_candidate:
+        kind: single
+        mode: action
+        action: rest
+        slots:
+          until: morning
+        plan: []
+        confidence: high
+        missing_slots: []
+        needs_confirmation: []
+        safety_flags: []
+        reason: 外部 AI 判断这是 rest。
+    fake_internal_review:
+      kind: single
+      mode: action
+      action: rest
+      slots:
+        until: morning
+      plan: []
+      confidence: high
+      missing_slots: []
+      needs_confirmation: []
+      safety_flags: []
+      reason: 内部 AI 同意这是 rest。
+      agreement_with_external: agree
+      disagreements: []
+      external_candidate_quality: usable
+    preview:
+      status: ready
+      ready_to_save: true
+      action: rest
+      selected_source: ai_consensus
+    validate:
+      ok: true
+    commit:
+      attempted: true
+      ok: true
+      state_changed: true
+      state:
+        current_turn_id: turn:000001
+
+  - id: consensus_travel_validates_commits_and_updates_location
+    text: 去 Old Bridge
+    runtime:
+      intent_ai: consensus
+      external_intent_candidate:
+        kind: single
+        mode: action
+        action: travel
+        slots:
+          destination: Old Bridge
+        plan: []
+        confidence: high
+        missing_slots: []
+        needs_confirmation: []
+        safety_flags: []
+        reason: 外部 AI 判断这是 travel。
+    fake_internal_review:
+      kind: single
+      mode: action
+      action: travel
+      slots:
+        destination: Old Bridge
+      plan: []
+      confidence: high
+      missing_slots: []
+      needs_confirmation: []
+      safety_flags: []
+      reason: 内部 AI 同意这是 travel。
+      agreement_with_external: agree
+      disagreements: []
+      external_candidate_quality: usable
+    preview:
+      status: ready
+      ready_to_save: true
+      action: travel
+      selected_source: ai_consensus
+    validate:
+      ok: true
+    commit:
+      attempted: true
+      ok: true
+      state_changed: true
+      state:
+        current_turn_id: turn:000001
+        current_location_id: loc:old-bridge
+
+  - id: consensus_gather_unready_does_not_commit
+    text: Gather Moon Herb
+    runtime:
+      intent_ai: consensus
+      external_intent_candidate:
+        kind: single
+        mode: action
+        action: gather
+        slots:
+          target: Moon Herb
+        plan: []
+        confidence: high
+        missing_slots: []
+        needs_confirmation: []
+        safety_flags: []
+        reason: 外部 AI 判断这是 gather。
+    fake_internal_review:
+      kind: single
+      mode: action
+      action: gather
+      slots:
+        target: Moon Herb
+      plan: []
+      confidence: high
+      missing_slots: []
+      needs_confirmation: []
+      safety_flags: []
+      reason: 内部 AI 同意这是 gather。
+      agreement_with_external: agree
+      disagreements: []
+      external_candidate_quality: usable
+    preview:
+      status: needs_confirmation
+      ready_to_save: false
+      action: gather
+      selected_source: ai_consensus
+    validate:
+      ok: null
+    commit:
+      attempted: false
+      ok: null
+      state_changed: false

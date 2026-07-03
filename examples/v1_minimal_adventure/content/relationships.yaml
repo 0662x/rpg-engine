@@ -1,0 +1,26 @@
+relationships:
+  - id: rel:runner-mira
+    name: Runner and Warden Mira
+    source_id: pc:runner
+    target_id: npc:warden-mira
+    state: cautious ally
+    trust: 20
+    visibility: known
+    summary: Mira trusts careful proof more than brave promises.
+    aliases: [Mira relationship, warden trust]
+    details:
+      axis: proof before risk
+      social_hook: Bring confirmed bridge evidence to improve support.
+
+  - id: rel:runner-pell
+    name: Runner and Trader Pell
+    source_id: pc:runner
+    target_id: npc:trader-pell
+    state: transactional
+    trust: 10
+    visibility: known
+    summary: Pell will trade supplies for useful salvage or reliable favors.
+    aliases: [Pell relationship, trader trust]
+    details:
+      axis: fair exchange
+      trade_hook: Rope loan becomes plausible if trust improves.

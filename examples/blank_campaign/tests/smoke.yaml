@@ -1,0 +1,15 @@
+smoke_tests:
+  - id: query-scene
+    type: query
+    capabilities: [query]
+    kind: scene
+    contains: Start
+
+  - id: rest-preview
+    type: preview
+    capabilities: [rest_time]
+    action: rest
+    user_text: Rest until morning
+    options:
+      until: morning
+    contains: Delta 草案

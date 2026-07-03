@@ -1,0 +1,30 @@
+{
+  "changed": true,
+  "intent": "travel",
+  "summary": "Return home from L1 creek.",
+  "user_text": "回菌丝复合屋",
+  "location_before": "loc:l01-creek",
+  "location_after": "loc:home-mycelium-house",
+  "game_time_before": "第28天 · 上午",
+  "game_time_after": "第28天 · 上午",
+  "expected_turn_id": "turn:000038",
+  "events": [
+    {
+      "type": "travel",
+      "source": "travel_preview",
+      "title": "旅行：返回菌丝复合屋",
+      "summary": "从L1小溪返回六边形菌丝复合屋。",
+      "payload": {
+        "from_location_id": "loc:l01-creek",
+        "to_location_id": "loc:home-mycelium-house",
+        "estimated_minutes": 5,
+        "pace": "normal",
+        "needs_gm_resolution": true
+      }
+    }
+  ],
+  "meta": {
+    "current_location_id": "loc:home-mycelium-house",
+    "current_time_block": "第28天 · 上午"
+  }
+}

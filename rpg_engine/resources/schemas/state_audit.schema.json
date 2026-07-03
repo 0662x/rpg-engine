@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "StateAuditResult",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "ok",
+    "risk",
+    "findings",
+    "missing_structured_changes",
+    "requires_human_review"
+  ],
+  "properties": {
+    "ok": { "type": "boolean" },
+    "risk": { "type": "string", "enum": ["low", "medium", "high"] },
+    "findings": { "type": "array", "items": { "type": "object" } },
+    "missing_structured_changes": { "type": "array", "items": { "type": "object" } },
+    "requires_human_review": { "type": "boolean" },
+    "warnings": { "type": "array", "items": { "type": "string" } }
+  }
+}

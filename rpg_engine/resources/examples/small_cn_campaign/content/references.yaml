@@ -1,0 +1,28 @@
+entities:
+  - id: ref:broken-seal
+    type: reference
+    name: 破损封印
+    status: active
+    visibility: hinted
+    location_id: loc:old-bridge
+    summary: 旧桥桥头的警示封印缺了一角，可能解释封路原因。
+    aliases: [封印, 断裂封印, 桥头线索]
+    details:
+      gameplay_role: clue
+      clue_stage: hinted
+      question: 封印是从道路一侧被凿开，还是从桥内侧被破坏？
+
+  - id: ref:hidden-signal-code
+    type: reference
+    name: 隐藏信号码
+    status: active
+    visibility: hidden
+    location_id: loc:watch-hill
+    summary: 山岗信号架上隐藏的编号，可指认最后使用信号的人。
+    aliases: [信号码]
+    details:
+      gameplay_role: clue
+      clue_stage: hidden
+      revealed_by:
+        - 探查山岗信号架。
+        - 找到失踪斥候任。

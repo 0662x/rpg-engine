@@ -1,0 +1,47 @@
+entities:
+  - id: item:rations
+    type: item
+    name: 野外口粮
+    status: active
+    visibility: known
+    owner_id: pc:traveler
+    summary: 3包耐放口粮，可用于恢复、交换或长路旅行。
+    aliases: [口粮, 食物]
+    details:
+      gameplay_role: inventory_resource
+      depletion: exact when traded or consumed
+    item:
+      category: supply
+      quantity: 3
+      unit: 包
+      quality: standard
+      stackable: true
+
+  - id: item:rope
+    type: item
+    name: 旧麻绳
+    status: active
+    visibility: known
+    owner_id: pc:traveler
+    summary: 一卷可用但略旧的麻绳，适合桥边探查时降低风险。
+    aliases: [绳索, 麻绳]
+    details:
+      gameplay_role: risk mitigation
+    item:
+      category: tool
+      quantity: 1
+      unit: 卷
+      quality: worn but usable
+      stackable: false
+
+  - id: mat:moon-herb
+    type: material
+    name: 月白草
+    status: active
+    visibility: known
+    location_id: loc:camp
+    summary: 营地边的浅色草药，可制作简单敷料，也可用于交换。
+    aliases: [草药, 月白草]
+    details:
+      gameplay_role: inventory_resource
+      gather_output: 小束草药

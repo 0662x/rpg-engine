@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "IntentCandidate",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "mode",
+    "action",
+    "slots",
+    "plan",
+    "confidence",
+    "missing_slots",
+    "needs_confirmation",
+    "safety_flags",
+    "reason"
+  ],
+  "properties": {
+    "kind": { "type": "string", "enum": ["single", "composite", "query", "unresolved"] },
+    "mode": { "type": "string", "enum": ["action", "query", "unknown"] },
+    "action": { "type": "string" },
+    "slots": { "type": "object" },
+    "plan": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "confidence": { "type": "string", "enum": ["high", "medium", "low"] },
+    "missing_slots": { "type": "array", "items": { "type": "string" } },
+    "needs_confirmation": { "type": "array", "items": { "type": "string" } },
+    "safety_flags": { "type": "array", "items": { "type": "string" } },
+    "reason": { "type": "string" },
+    "source": { "type": "string" },
+    "source_user_text": { "type": "string" }
+  }
+}

@@ -1,0 +1,65 @@
+entities:
+  - id: loc:camp
+    type: location
+    name: 河道巡查营地
+    status: active
+    visibility: known
+    summary: 旧河路旁的小营地，地图板、冷火堆和帆布棚围成安全起点。
+    aliases: [营地, 起点, 巡查营]
+    details:
+      risk_band: low
+      scene_role: safe hub
+    location:
+      biome: riverside camp
+      safety_level: guarded
+      description_short: 帆布棚、冷火堆、地图板和旧桥方向的泥路都在清晨雾气里。
+      exits:
+        - 旧桥
+        - 山岗
+      resources:
+        - 清水
+        - 月白草
+
+  - id: loc:old-bridge
+    type: location
+    name: 旧桥
+    status: active
+    visibility: known
+    summary: 一座裂开的石桥，桥头旧封印被人凿开，河风让警示绳不断摆动。
+    aliases: [断桥, 石桥, 桥头]
+    details:
+      risk_band: medium
+      clue_focus: ref:broken-seal
+    location:
+      biome: river crossing
+      safety_level: risky
+      travel_minutes_from_home: 30
+      description_short: 裂桥横在急水上方，桥头封印缺了一角。
+      exits:
+        - 河道巡查营地
+        - 山岗
+      resources:
+        - 河石
+        - 旧绳桩
+
+  - id: loc:watch-hill
+    type: location
+    name: 山岗
+    status: active
+    visibility: hinted
+    summary: 能俯瞰旧桥的低山岗，坏掉的信号架还立在风里。
+    aliases: [信号山岗, 山坡]
+    details:
+      risk_band: medium
+      project_focus: project:repair-signal
+    location:
+      biome: ridge
+      safety_level: exposed
+      travel_minutes_from_home: 45
+      description_short: 风切过矮坡，旧信号架缺了横木。
+      exits:
+        - 河道巡查营地
+        - 旧桥
+      resources:
+        - 干木
+        - 镜片碎片

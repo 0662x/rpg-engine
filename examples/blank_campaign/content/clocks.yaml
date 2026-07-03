@@ -1,0 +1,7 @@
+clocks:
+  - id: clock:pressure
+    name: Campaign Pressure
+    segments_total: 4
+    segments_filled: 0
+    visibility: visible
+    trigger_when_full: A new complication enters the first scene.

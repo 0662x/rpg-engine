@@ -1,0 +1,20 @@
+random_tables:
+  - id: table:bridge-risk
+    name: Bridge Risk Event
+    visibility: known
+    entries:
+      - result: The river wind rises; mark one soft warning before ticking the storm clock.
+        weight: 2
+      - result: Loose stones shift underfoot; the next bridge action needs a careful approach.
+        weight: 1
+      - result: A guard lantern flashes from camp, hinting someone noticed movement at the bridge.
+        weight: 1
+
+  - id: table:camp-rumor
+    name: Camp Rumor
+    visibility: known
+    entries:
+      - result: Pell heard Ren mention a tower signal before leaving camp.
+        weight: 1
+      - result: Mira thinks the seal was broken by a tool, not by weather.
+        weight: 1

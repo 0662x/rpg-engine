@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AIGM V1 Campaign Package Manifest",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "id",
+    "name",
+    "engine_version",
+    "package_version",
+    "content_schema_version",
+    "capabilities",
+    "initial_location_id",
+    "defaults",
+    "content"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[a-z0-9][a-z0-9_.-]*$"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "engine_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "package_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "content_schema_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "capabilities": {
+      "$ref": "capabilities.schema.json"
+    },
+    "initial_game_day": {
+      "type": ["integer", "string"]
+    },
+    "initial_time_block": {
+      "type": "string"
+    },
+    "initial_game_time": {
+      "type": "string"
+    },
+    "initial_location_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "defaults": {
+      "type": "object",
+      "required": ["player_entity_id"],
+      "properties": {
+        "player_entity_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "context_budget": {
+          "type": "integer",
+          "minimum": 500
+        },
+        "sample_texts": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "content": {
+      "type": "object",
+      "required": ["entities", "rules", "clocks"],
+      "properties": {
+        "entities": {
+          "$ref": "#/$defs/path_or_paths"
+        },
+        "rules": {
+          "$ref": "#/$defs/path_or_paths"
+        },
+        "clocks": {
+          "$ref": "#/$defs/path_or_paths"
+        },
+        "routes": {
+          "$ref": "#/$defs/path_or_paths"
+        },
+        "world_settings": {
+          "$ref": "#/$defs/path_or_paths"
+        },
+        "random_tables": {
+          "$ref": "#/$defs/path_or_paths"
+        },
+        "relationships": {
+          "$ref": "#/$defs/path_or_paths"
+        },
+        "palettes": {
+          "$ref": "#/$defs/path_or_paths"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "path_or_paths": {
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      ]
+    }
+  }
+}

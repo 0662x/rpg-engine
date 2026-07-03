@@ -1,0 +1,49 @@
+id: v1-minimal-adventure
+name: Watch Camp Minimal Adventure
+engine_version: "0.2"
+package_version: "0.1.0"
+content_schema_version: "1"
+capabilities:
+  - query
+  - explore
+  - social
+  - travel
+  - clock
+  - random_table
+  - clue
+  - risk
+  - inventory_resource
+  - project_task
+  - rest_time
+  - trade_exchange
+  - gather_search
+database: data/game.sqlite
+events: data/events.jsonl
+current_snapshot: snapshots/current.md
+current_snapshot_json: snapshots/current.json
+cards: cards
+initial_game_day: 1
+initial_time_block: morning
+initial_game_time: Day 1 morning
+initial_location_id: loc:watch-camp
+defaults:
+  player_entity_id: pc:runner
+  context_budget: 2200
+  sample_texts:
+    - Look around the camp
+    - Inspect the broken bridge seal
+content:
+  entities:
+    - content/entities.yaml
+  relationships:
+    - content/relationships.yaml
+  rules:
+    - content/rules.yaml
+  clocks:
+    - content/clocks.yaml
+  routes:
+    - content/routes.yaml
+  world_settings:
+    - content/world_settings.yaml
+  random_tables:
+    - content/random_tables.yaml

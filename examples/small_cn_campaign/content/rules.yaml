@@ -1,0 +1,21 @@
+rules:
+  - id: rule:player-agency
+    statement: GM 不替玩家决定重大意图、承诺、攻击或不可逆选择。
+
+  - id: rule:risk-before-result
+    statement: 高风险行动必须先说明可见风险、代价和需要确认的点，再给出后果。
+
+  - id: rule:resource-accounting
+    statement: 口粮、绳索、证据和项目材料的增减必须通过结构化 delta 保存。
+
+  - id: rule:no-inventory-without-delta
+    statement: 没有结构化库存或实体 delta 时，GM 不能说玩家已经获得、消耗或失去物品与材料。
+
+  - id: rule:palette-candidate-boundary
+    statement: 候选素材只是可投放内容，不是当前事实；需确认和仅线索素材不能直接变成 known 实体。
+
+  - id: rule:high-impact-content-review
+    statement: 新地点、路线、势力、文明、世界规则和稀有物种必须经过内容维护或多源确认，不能由一次普通行动直接确认。
+
+  - id: rule:hidden-never-player-visible
+    statement: hidden 内容不得进入玩家视图；只能通过已保存线索、确认行动或维护流程逐步公开。

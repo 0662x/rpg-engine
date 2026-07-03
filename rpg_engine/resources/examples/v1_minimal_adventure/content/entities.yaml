@@ -1,0 +1,244 @@
+entities:
+  - id: loc:watch-camp
+    type: location
+    name: Watch Camp
+    status: active
+    visibility: known
+    summary: A small survey camp beside the sealed river road.
+    aliases: [camp, start camp]
+    details:
+      risk_band: low
+      scene_role: safe hub
+    location:
+      biome: riverside camp
+      safety_level: guarded
+      description_short: Canvas shelters, a cold fire ring, and map boards face the broken bridge road.
+      exits:
+        - Old Bridge
+        - Watchtower Ridge
+      resources:
+        - Moon Herb patch
+        - clean water
+
+  - id: loc:old-bridge
+    type: location
+    name: Old Bridge
+    status: active
+    visibility: known
+    summary: A cracked stone bridge sealed by old warning marks.
+    aliases: [bridge, sealed bridge]
+    details:
+      risk_band: medium
+      clue_focus: ref:broken-seal
+    location:
+      biome: river crossing
+      safety_level: risky
+      travel_minutes_from_home: 30
+      description_short: Broken arches hang over fast water; a seal mark has been chipped open.
+      exits:
+        - Watch Camp
+        - Watchtower Ridge
+      resources:
+        - loose river stone
+
+  - id: loc:watchtower-ridge
+    type: location
+    name: Watchtower Ridge
+    status: active
+    visibility: hinted
+    summary: A ridge with a damaged signal tower overlooking the road.
+    aliases: [ridge, tower]
+    details:
+      risk_band: medium
+      project_focus: project:repair-signal
+    location:
+      biome: high ridge
+      safety_level: exposed
+      travel_minutes_from_home: 45
+      description_short: A low ridge, broken signal frame, and wind-cut path above the bridge.
+      exits:
+        - Watch Camp
+        - Old Bridge
+      resources:
+        - dry timber
+        - signal mirror fragments
+
+  - id: pc:runner
+    type: character
+    name: Road Runner
+    status: active
+    visibility: known
+    location_id: loc:watch-camp
+    summary: The player character, a courier asked to reopen the river road.
+    aliases: [player, courier]
+    details:
+      stress: steady
+      goal: Reopen the road without letting the storm trap the camp.
+    character:
+      role: player
+      attitude: focused
+      trust: 0
+      health_state: healthy
+
+  - id: npc:warden-mira
+    type: character
+    name: Warden Mira
+    status: active
+    visibility: known
+    location_id: loc:watch-camp
+    summary: The camp warden who tracks risks and keeps the maps.
+    aliases: [Mira, warden]
+    details:
+      relationship_to_pc: cautious ally
+      wants: Clear proof before sending people to the bridge.
+    character:
+      role: camp warden
+      attitude: cautious
+      trust: 20
+      health_state: tired
+
+  - id: npc:trader-pell
+    type: character
+    name: Trader Pell
+    status: active
+    visibility: known
+    location_id: loc:watch-camp
+    summary: A practical trader with spare supplies and a sharp memory for favors.
+    aliases: [Pell, trader]
+    details:
+      relationship_to_pc: neutral
+      trade_offers:
+        - Field rations for bridge salvage.
+        - Rope loan if trust improves.
+    character:
+      role: trader
+      attitude: transactional
+      trust: 10
+      health_state: healthy
+
+  - id: npc:scout-ren
+    type: character
+    name: Scout Ren
+    status: active
+    visibility: hinted
+    location_id: loc:old-bridge
+    summary: A missing scout last seen checking the bridge seal.
+    aliases: [Ren, missing scout]
+    details:
+      relationship_to_pc: unknown
+      unknowns:
+        - Whether Ren crossed the bridge before the storm warning.
+    character:
+      role: scout
+      attitude: unknown
+      trust: 0
+      health_state: unknown
+
+  - id: item:field-rations
+    type: item
+    name: Field Rations
+    status: active
+    visibility: known
+    owner_id: pc:runner
+    summary: Compact meals for travel, trade, or recovery.
+    aliases: [rations, food]
+    details:
+      gameplay_role: inventory_resource
+      depletion: fuzzy; count exact when traded or consumed
+    item:
+      category: supply
+      quantity: 3
+      unit: pack
+      quality: standard
+      stackable: true
+
+  - id: item:signal-flare
+    type: item
+    name: Signal Flare
+    status: active
+    visibility: known
+    owner_id: pc:runner
+    summary: A one-use flare that can reduce travel or rescue risk.
+    aliases: [flare]
+    details:
+      gameplay_role: risk mitigation
+    item:
+      category: tool
+      quantity: 1
+      unit: flare
+      quality: old but usable
+      stackable: true
+
+  - id: mat:moon-herb
+    type: material
+    name: Moon Herb
+    status: active
+    visibility: known
+    location_id: loc:watch-camp
+    summary: A pale herb used for simple poultices and trade.
+    aliases: [moon herb, herb patch]
+    details:
+      gameplay_role: gather_search
+      gather_output: small bundle
+      risk: low unless gathered at night
+
+  - id: ref:broken-seal
+    type: reference
+    name: Broken Seal Mark
+    status: active
+    visibility: hinted
+    location_id: loc:old-bridge
+    summary: A chipped warning seal may explain why the bridge road was closed.
+    aliases: [seal mark, bridge clue]
+    details:
+      gameplay_role: clue
+      clue_stage: hinted
+      leads_to:
+        - ref:tower-signal-code
+      question: Was the seal broken from the road side or the tower side?
+
+  - id: ref:tower-signal-code
+    type: reference
+    name: Tower Signal Code
+    status: active
+    visibility: hidden
+    location_id: loc:watchtower-ridge
+    summary: A hidden code that can identify who last used the tower.
+    aliases: [signal code]
+    details:
+      gameplay_role: clue
+      clue_stage: hidden
+      revealed_by:
+        - Explore Watchtower Ridge.
+        - Ask Scout Ren if found.
+
+  - id: project:repair-signal
+    type: project
+    name: Repair Signal Frame
+    status: active
+    visibility: known
+    location_id: loc:watchtower-ridge
+    summary: Restore the ridge signal so the camp can call help before the storm closes in.
+    aliases: [signal repair, tower repair]
+    details:
+      gameplay_role: project_task
+      stage: needs materials
+      progress: 0/3
+      tasks:
+        - Find the tower.
+        - Gather dry timber or salvage.
+        - Spend a turn repairing the frame.
+
+  - id: fstate:river-guard
+    type: faction_state
+    name: River Guard Mood
+    status: active
+    visibility: known
+    summary: The guards want the road reopened but will not risk people without proof.
+    aliases: [guards, river guard]
+    details:
+      attitude_to_pc: uncertain
+      support_level: 1
+      leverage:
+        - proof from the bridge seal
+        - a working signal frame

@@ -1,0 +1,316 @@
+transcripts:
+  - id: valid_natural_language_action
+    kind: natural_language_player_action
+    expected_findings: []
+    steps:
+      - tool: mcp_aigm_kernel_start_or_continue
+        result:
+          ok: true
+      - tool: mcp_aigm_kernel_player_turn
+        request:
+          user_text: 在家盘点库存
+          external_intent_candidate:
+            kind: single
+            mode: action
+            action: routine
+            slots:
+              task: 盘点库存
+        result:
+          action: routine
+          status: ready
+          ready_to_confirm: true
+          session_id: player_action:test:routine
+      - tool: mcp_aigm_kernel_player_confirm
+        request:
+          session_id: player_action:test:routine
+        result:
+          turn_id: turn:000001
+
+  - id: valid_random_table_low_level_preview
+    kind: random_table
+    expected_findings: []
+    steps:
+      - tool: start_turn
+        request:
+          user_text: roll bridge risk
+      - tool: preview_action
+        allow_low_level_preview: true
+        request:
+          action: random_table
+          options:
+            table: table:bridge-risk
+        result:
+          action: random_table
+          status: ready
+          ready_to_save: true
+      - tool: validate_delta
+        result:
+          ok: true
+      - tool: commit_turn
+        request:
+          turn_proposal:
+            proposal_id: turn-proposal:test:random_table
+            delta_source: resolver_proposed
+        result:
+          turn_id: turn:000001
+
+  - id: valid_clarification_question_asked
+    kind: natural_language_player_action
+    expected_findings: []
+    steps:
+      - tool: player_turn
+        request:
+          user_text: 问 Mira 关于 Old Bridge 的情况
+          external_intent_candidate:
+            kind: query
+            mode: query
+            slots:
+              query_text: Old Bridge
+        result:
+          clarification:
+            reason: external_internal_mode_mismatch
+            question: 我需要确认这句话是要执行游戏行动，还是只读取/维护信息？
+            choices:
+              - id: external_candidate
+                label: "外部判断: query"
+              - id: internal_candidate
+                label: "内部复核: social"
+      - role: assistant
+        asks_clarification: true
+        message: 我需要确认这句话是要执行游戏行动，还是只读取/维护信息？
+
+  - id: valid_clarification_answer_repreview_commit
+    kind: natural_language_player_action
+    expected_findings: []
+    steps:
+      - tool: player_turn
+        request:
+          user_text: 守夜到天亮
+          external_intent_candidate:
+            kind: single
+            mode: action
+            action: routine
+        result:
+          action: act
+          status: needs_confirmation
+          ready_to_save: false
+          interpretation:
+            clarification:
+              reason: external_internal_action_mismatch
+              question: 我需要确认你想按哪类行动结算。
+              choices:
+                - id: external_candidate
+                - id: internal_candidate
+      - role: assistant
+        asks_clarification: true
+        message: 我需要确认你想按哪类行动结算。
+      - role: player
+        message: 我是想休息到天亮。
+      - tool: player_turn
+        request:
+          user_text: 我是想休息到天亮
+          external_intent_candidate:
+            kind: single
+            mode: action
+            action: rest
+            slots:
+              until: 天亮
+            plan: []
+            confidence: high
+            missing_slots: []
+            needs_confirmation: []
+            safety_flags: []
+            reason: 玩家澄清后重新生成的完整候选。
+        result:
+          action: rest
+          status: ready
+          ready_to_confirm: true
+          session_id: player_action:test:clarified-rest
+      - tool: player_confirm
+        request:
+          session_id: player_action:test:clarified-rest
+        result:
+          turn_id: turn:000002
+
+  - id: invalid_clarification_continue_without_asking
+    kind: natural_language_player_action
+    expected_findings:
+      - clarification_not_asked
+    steps:
+      - tool: player_turn
+        request:
+          user_text: 守夜到天亮
+          external_intent_candidate:
+            kind: single
+            mode: action
+            action: routine
+        result:
+          action: act
+          status: needs_confirmation
+          ready_to_save: false
+          interpretation:
+            clarification:
+              reason: external_internal_action_mismatch
+              question: 我需要确认你想按哪类行动结算。
+              choices:
+                - id: external_candidate
+                - id: internal_candidate
+      - tool: player_confirm
+        result:
+          ok: false
+
+  - id: invalid_clarification_self_selected
+    kind: natural_language_player_action
+    expected_findings:
+      - clarification_self_selected
+    steps:
+      - tool: player_turn
+        request:
+          user_text: 我到底是去 Old Bridge 还是留在 Watch Camp
+          external_intent_candidate:
+            kind: unresolved
+            mode: unknown
+        result:
+          action: act
+          status: needs_confirmation
+          ready_to_save: false
+          interpretation:
+            clarification:
+              reason: external_internal_slot_mismatch
+              question: 我需要确认这次行动的目标对象或关键参数。
+              choices:
+                - id: external_candidate
+                - id: internal_candidate
+      - role: assistant
+        clarification_response:
+          selected_choice_id: external_candidate
+
+  - id: invalid_clarification_prose_self_selected
+    kind: natural_language_player_action
+    expected_findings:
+      - clarification_self_selected
+    steps:
+      - tool: player_turn
+        request:
+          user_text: 守夜到天亮
+          external_intent_candidate:
+            kind: single
+            mode: action
+            action: routine
+        result:
+          interpretation:
+            clarification:
+              reason: external_internal_action_mismatch
+              question: 我需要确认你想按哪类行动结算。
+              choices:
+                - id: external_candidate
+                - id: internal_candidate
+      - role: assistant
+        message: 我选择 external_candidate 来继续。
+
+  - id: invalid_clarification_stale_repreview
+    kind: natural_language_player_action
+    expected_findings:
+      - clarification_stale_repreview
+    steps:
+      - tool: player_turn
+        request:
+          user_text: 守夜到天亮
+          external_intent_candidate:
+            action: rest
+        result:
+          interpretation:
+            clarification:
+              reason: external_internal_action_mismatch
+              question: 我需要确认你想按哪类行动结算。
+              choices:
+                - id: external_candidate
+                - id: internal_candidate
+      - role: assistant
+        message: 我需要确认你想按哪类行动结算。
+      - role: player
+        message: 我是想休息到天亮。
+      - tool: player_turn
+        request:
+          user_text: 守夜到天亮
+          external_intent_candidate:
+            action: rest
+        result:
+          action: rest
+          status: ready
+          ready_to_save: true
+
+  - id: invalid_natural_language_direct_preview_action
+    kind: natural_language_player_action
+    expected_findings:
+      - forbidden_normal_play_tool
+      - natural_language_preview_action_first
+    steps:
+      - tool: preview_action
+        request:
+          action: craft
+          source_user_text: 在家盘点库存
+        result:
+          action: craft
+          status: needs_confirmation
+          ready_to_save: false
+
+  - id: invalid_commit_without_validate
+    kind: low_level_natural_language_player_action
+    expected_findings:
+      - commit_without_validation
+      - commit_without_turn_proposal
+    steps:
+      - tool: start_turn
+        request:
+          user_text: 休息到早上
+      - tool: preview_from_text
+        result:
+          action: rest
+          status: ready
+          ready_to_save: true
+      - tool: commit_turn
+        result:
+          ok: false
+
+  - id: invalid_commit_after_unready_preview_and_failed_validate
+    kind: low_level_natural_language_player_action
+    expected_findings:
+      - commit_after_unready_preview
+      - commit_after_failed_validation
+      - commit_without_turn_proposal
+    steps:
+      - tool: start_turn
+        request:
+          user_text: 制作草药包
+      - tool: preview_from_text
+        result:
+          action: craft
+          status: needs_confirmation
+          ready_to_save: false
+      - tool: validate_delta
+        result:
+          ok: false
+      - tool: commit_turn
+        result:
+          ok: false
+
+  - id: invalid_maintenance_tool_request
+    kind: normal_play
+    expected_findings:
+      - forbidden_normal_play_tool
+      - unknown_default_mcp_tool
+    steps:
+      - tool: save_import
+        request:
+          archive: saves.zip
+
+  - id: invalid_package_upgrade_request
+    kind: normal_play
+    expected_findings:
+      - forbidden_normal_play_tool
+      - unknown_default_mcp_tool
+    steps:
+      - tool: package_upgrade
+        request:
+          dry_run: false

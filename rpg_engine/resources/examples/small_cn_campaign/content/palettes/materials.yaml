@@ -1,0 +1,190 @@
+materials:
+  - id: pal:mat:moon-herb-fresh
+    name: 新鲜月白草
+    summary: 营地边湿土里的浅色草药，可做简单敷料或小额交换。
+    rarity: common
+    locations: [loc:camp]
+    intents: [gather, explore, craft]
+    discovery:
+      mode: direct
+      clue_text: 帆布棚外的湿草里有几株叶面泛白的月白草。
+      confirm_methods: [观察叶色, 少量采样]
+    risks:
+      - 采得过多会让营地附近短期无草可取。
+    uses: [敷料, 交换, 制作草药包]
+    save_as:
+      type: material
+      entity_id: mat:moon-herb-fresh
+      category: herb
+      default_quantity: 1
+      unit: 小束
+
+  - id: pal:mat:silver-moon-herb
+    name: 银边月白草
+    summary: 月白草的罕见变体，叶缘带银光，可能让敷料更稳定。
+    rarity: uncommon
+    locations: [loc:camp]
+    intents: [gather, explore, craft]
+    discovery:
+      mode: confirm_required
+      clue_text: 草丛里有几片叶缘发亮的月白草，和普通月白草不完全一样。
+      confirm_methods: [小量采样, 询问林向导, 对比普通月白草]
+    risks:
+      - 与普通月白草混淆会降低药效。
+      - 未确认前不能作为正式配方材料。
+    uses: [稳定敷料, 交换稀有草药情报]
+    save_as:
+      type: material
+      entity_id: mat:silver-moon-herb
+      category: herb
+      default_quantity: 1
+      unit: 小束
+
+  - id: pal:mat:river-clay
+    name: 灰蓝河泥
+    summary: 旧河路低洼处的黏泥，干后可临时封缝或拓印痕迹。
+    rarity: common
+    locations: [loc:camp, loc:old-bridge]
+    intents: [gather, explore, craft]
+    discovery:
+      mode: direct
+      clue_text: 脚边有一片灰蓝色黏泥，能留下清晰鞋印。
+      confirm_methods: [捏取少量, 晾干测试]
+    risks:
+      - 河泥太湿时不能直接用于修补。
+    uses: [拓印足迹, 临时封缝, 标记路线]
+    save_as:
+      type: material
+      entity_id: mat:river-clay
+      category: clay
+      default_quantity: 1
+      unit: 团
+
+  - id: pal:mat:old-rope-fiber
+    name: 旧绳纤维
+    summary: 警示绳磨出的散纤维，可用来判断近期是否有人拉扯过绳索。
+    rarity: common
+    locations: [loc:old-bridge]
+    intents: [gather, explore]
+    discovery:
+      mode: confirm_required
+      clue_text: 桥头石缝里挂着几缕潮湿的旧绳纤维。
+      confirm_methods: [观察断口, 与营地绳索对比]
+    risks:
+      - 纤维很容易被风雨污染。
+    uses: [证据对比, 追踪桥头活动]
+    save_as:
+      type: material
+      entity_id: mat:old-rope-fiber
+      category: trace
+      default_quantity: 1
+      unit: 缕
+
+  - id: pal:mat:signal-ash
+    name: 信号灰
+    summary: 山岗信号架附近的细灰，可能来自昨夜短促点火。
+    rarity: uncommon
+    locations: [loc:watch-hill]
+    intents: [gather, explore]
+    discovery:
+      mode: confirm_required
+      clue_text: 信号架背风面有一小撮比冷火堆更细的黑灰。
+      confirm_methods: [闻气味, 与营地冷火堆灰对比, 询问林向导]
+    risks:
+      - 风会很快吹散灰样。
+    uses: [确认信号架近期使用, 作为社交证据]
+    save_as:
+      type: material
+      entity_id: mat:signal-ash
+      category: trace
+      default_quantity: 1
+      unit: 撮
+
+  - id: pal:mat:mirror-splinter
+    name: 镜片碎屑
+    summary: 山岗旧信号架边的细小反光碎屑，可用于修复信号架或辨认装备。
+    rarity: common
+    locations: [loc:watch-hill]
+    intents: [gather, explore, craft]
+    discovery:
+      mode: direct
+      clue_text: 矮草里有几片细碎反光，像是信号镜掉下来的边角。
+      confirm_methods: [捡取碎屑, 检查边缘]
+    risks:
+      - 徒手拾取可能割伤。
+    uses: [修复信号架, 反光标记]
+    save_as:
+      type: material
+      entity_id: mat:mirror-splinter
+      category: salvage
+      default_quantity: 1
+      unit: 小片
+
+  - id: pal:mat:bitter-reed
+    name: 苦芦苇
+    summary: 河湾湿地的苦味芦苇，能临时编成过滤垫，但需要确认是否受污染。
+    rarity: uncommon
+    biomes: [river crossing, riverside camp]
+    intents: [gather, explore, craft]
+    discovery:
+      mode: confirm_required
+      clue_text: 水边有一簇叶尖发黑的芦苇，掰开后有明显苦味。
+      confirm_methods: [嗅闻断口, 少量浸水测试, 询问乔商人]
+    risks:
+      - 被上游污染后不能接触伤口。
+    uses: [过滤垫, 编绳填料]
+    save_as:
+      type: material
+      entity_id: mat:bitter-reed
+      category: reed
+      default_quantity: 1
+      unit: 把
+
+  - id: pal:mat:black-salt-trace
+    name: 黑盐痕
+    summary: 旧桥石缝中的深色盐粒，像是某种防腐或封印材料残留。
+    rarity: rare
+    locations: [loc:old-bridge]
+    intents: [gather, explore]
+    discovery:
+      mode: clue_only
+      clue_text: 破损封印边缘有几点黑色晶粒，雨水没有完全冲掉。
+      confirm_methods: [封存样本, 与林向导核对旧桥记录, 后续实验]
+    unlock:
+      required_clocks:
+        clock:storm-front: 1
+      allow_clue_when_locked: true
+    risks:
+      - 未确认前可能误导封印破坏原因。
+      - 不能直接作为材料入库存。
+    uses: [封印线索, 后续研究]
+    save_as:
+      type: material
+      entity_id: mat:black-salt-trace
+      category: clue
+      default_quantity: 1
+      unit: 粒
+
+  - id: pal:mat:sealed-copper-dust
+    name: 封存铜尘
+    summary: 旧信号架核心里可能存在的铜色粉尘，只有拆检核心后才能确认。
+    rarity: rare
+    locations: [loc:watch-hill]
+    intents: [explore, craft]
+    discovery:
+      mode: confirm_required
+      clue_text: 信号架核心没有打开前，只能看到外壳上有旧铜绿。
+      confirm_methods: [拆检信号架核心, 询问林向导旧维护记录]
+    unlock:
+      required_clocks:
+        clock:storm-front: 3
+      allow_clue_when_locked: false
+    risks:
+      - 未拆检前不能描述为已发现材料，也不能用于制作。
+    uses: [精修信号镜座, 判断信号架旧损伤]
+    save_as:
+      type: material
+      entity_id: mat:sealed-copper-dust
+      category: trace
+      default_quantity: 1
+      unit: 撮

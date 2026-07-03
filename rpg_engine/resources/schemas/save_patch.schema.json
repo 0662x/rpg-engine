@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AIGM V1 Save Patch",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["operations"],
+  "properties": {
+    "patch_schema_version": {
+      "type": "string",
+      "const": "1"
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 1
+    },
+    "operations": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["op", "entity_id", "name"],
+            "properties": {
+              "op": { "const": "set_entity_name" },
+              "entity_id": { "type": "string", "minLength": 1 },
+              "name": { "type": "string", "minLength": 1 }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["op", "entity_id", "summary"],
+            "properties": {
+              "op": { "const": "set_entity_summary" },
+              "entity_id": { "type": "string", "minLength": 1 },
+              "summary": { "type": "string", "minLength": 1 }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["op", "entity_id", "visibility"],
+            "properties": {
+              "op": { "const": "set_entity_visibility" },
+              "entity_id": { "type": "string", "minLength": 1 },
+              "visibility": { "type": "string", "enum": ["known", "hinted", "hidden"] }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["op", "entity_id", "alias"],
+            "properties": {
+              "op": { "enum": ["add_entity_alias", "remove_entity_alias"] },
+              "entity_id": { "type": "string", "minLength": 1 },
+              "alias": { "type": "string", "minLength": 1 }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["op", "entity_id", "key", "value"],
+            "properties": {
+              "op": { "const": "set_entity_detail" },
+              "entity_id": { "type": "string", "minLength": 1 },
+              "key": { "type": "string", "pattern": "^[A-Za-z0-9_.-]{1,64}$" },
+              "value": {}
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["op", "entity_id", "key"],
+            "properties": {
+              "op": { "const": "remove_entity_detail" },
+              "entity_id": { "type": "string", "minLength": 1 },
+              "key": { "type": "string", "pattern": "^[A-Za-z0-9_.-]{1,64}$" }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["op", "entity_id", "field", "value"],
+            "properties": {
+              "op": { "const": "set_character_field" },
+              "entity_id": { "type": "string", "minLength": 1 },
+              "field": { "type": "string", "enum": ["attitude", "trust", "health_state"] },
+              "value": {}
+            }
+          }
+        ]
+      }
+    }
+  }
+}

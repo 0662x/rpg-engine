@@ -1,0 +1,13 @@
+{
+  "changed": true,
+  "intent": "rest",
+  "summary": "Take a short rest at home.",
+  "user_text": "在菌丝复合屋休息一会儿",
+  "location_before": "loc:home-mycelium-house",
+  "location_after": "loc:home-mycelium-house",
+  "game_time_before": "第28天 · 上午",
+  "game_time_after": "第28天 · 上午",
+  "expected_turn_id": "turn:000040",
+  "events": [{"type":"rest","source":"rest_action","title":"休息","summary":"在菌丝复合屋短暂休息。","payload":{"duration":"short","needs_gm_resolution":true}}],
+  "meta": {"current_location_id":"loc:home-mycelium-house","current_time_block":"第28天 · 上午"}
+}

@@ -1,0 +1,14 @@
+clocks:
+  - id: clock:storm-front
+    name: Storm Front
+    clock_type: risk
+    segments_total: 4
+    segments_filled: 0
+    visibility: visible
+    summary: Bad weather is moving toward the river road.
+    trigger_when_full: The storm cuts off safe travel between the camp, bridge, and ridge.
+    tick_rules:
+      travel: 1
+      failed_risk: 1
+      overnight_rest: 1
+    aliases: [storm clock]

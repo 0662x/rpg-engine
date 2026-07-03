@@ -1,0 +1,78 @@
+## 采集/收获预演
+
+### 输入
+| 项目 | 值 |
+|------|----|
+| 原始行动 | 去空地药圃采集草药 |
+| 地点 | `loc:home-mycelium-house` 六边形菌丝复合屋 |
+| 目标 | `loc:home-clearing` 空地/家（location） |
+
+### 当前状态
+| 项目 | 当前 |
+|------|------|
+| 时间 | 第28天 · 上午 |
+| 地点安全 | defended |
+| 地点资源 | 菌丝床；厨房角；储物墙；竖井入口 |
+
+### 目标检查
+| 字段 | 值 |
+|------|----|
+| ID | `loc:home-clearing` |
+| 类型 | location |
+| 摘要 | 死亡森林中的天然林间空地，约十步见方，黑色腐殖土，边缘有大倒木，是当前基地核心。 |
+| 位置 | 未登记 |
+
+### 候选对象
+- 当前没有结构化候选对象；GM 需要根据地点资源手动判断。
+
+### 素材库候选
+- 没有符合当前地点和采集意图的素材库候选。
+
+### 必须确认
+- 保存前必须明确新增库存的 id/name/category/quantity/unit/location。
+
+### 推荐结算步骤
+1. 确认采集目标、工具、耗时和是否会离开当前位置。
+2. 对作物先确认可采部位、留根/留种、再生周期和水分状态。
+3. 对鱼笼/野外资源先确认是否有危险迹象和实际产出。
+4. 保存时明确新增物品、数量、单位、位置，以及目标资源是否被消耗或进入冷却。
+5. 若采集制造明显痕迹、靠近聚落或处理魔力植物，检查进度钟。
+
+### Delta 草案
+保存前必须由 GM 填入实际产出和资源状态变化；当前草案不自动新增库存。
+
+```json
+{
+  "changed": true,
+  "command_id": "preview-gather:turn-000039-dbb731d291492478",
+  "events": [
+    {
+      "payload": {
+        "crop_plot": null,
+        "from_location_id": "loc:home-mycelium-house",
+        "location_id": "loc:home-mycelium-house",
+        "needs_gm_resolution": true,
+        "output_quantity_required": true,
+        "resource_state_update_required": true,
+        "target_id": "loc:home-clearing",
+        "target_type": "location",
+        "travel_required": false
+      },
+      "source": "gather_preview",
+      "summary": "预演采集/收获：空地/家；实际产出和资源状态待 GM 确认。",
+      "title": "采集/收获结算",
+      "type": "gather"
+    }
+  ],
+  "expected_turn_id": "turn:000039",
+  "game_time_after": "第28天 · 上午 + 采集耗时（草案）",
+  "game_time_before": "第28天 · 上午",
+  "intent": "gather",
+  "location_after": "loc:home-mycelium-house",
+  "location_before": "loc:home-mycelium-house",
+  "summary": "预演采集/收获：空地/家；实际产出和资源状态待 GM 确认。",
+  "tick_clocks": [],
+  "upsert_entities": [],
+  "user_text": "去空地药圃采集草药"
+}
+```

@@ -1,0 +1,39 @@
+{
+  "changed": true,
+  "intent": "craft",
+  "summary": "Use the kitchen corner to brew some pine needle tea.",
+  "user_text": "在厨房角用松针泡点茶",
+  "location_before": "loc:home-mycelium-house",
+  "location_after": "loc:home-mycelium-house",
+  "game_time_before": "第28天 · 上午",
+  "game_time_after": "第28天 · 上午",
+  "expected_turn_id": "turn:000041",
+  "events": [
+    {
+      "type": "craft",
+      "source": "craft_action",
+      "title": "烹饪：松针茶",
+      "summary": "在厨房角用松针和热水泡茶。",
+      "payload": {
+        "project": "松针茶",
+        "target": "松针茶",
+        "materials": "松针,热水",
+        "time_cost": "5分钟",
+        "needs_gm_resolution": true
+      }
+    }
+  ],
+  "upsert_entities": [
+    {
+      "id": "item:pine-tea",
+      "type": "item",
+      "name": "松针茶",
+      "status": "active",
+      "summary": "新鲜泡制的松针茶。"
+    }
+  ],
+  "meta": {
+    "current_location_id": "loc:home-mycelium-house",
+    "current_time_block": "第28天 · 上午"
+  }
+}

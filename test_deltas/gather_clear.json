@@ -1,0 +1,33 @@
+{
+  "changed": true,
+  "command_id": "preview-gather:turn-000039-dbb731d291492478",
+  "events": [
+    {
+      "payload": {
+        "crop_plot": null,
+        "from_location_id": "loc:home-mycelium-house",
+        "location_id": "loc:home-mycelium-house",
+        "needs_gm_resolution": true,
+        "output_quantity_required": true,
+        "resource_state_update_required": true,
+        "target_id": "loc:home-clearing",
+        "target_type": "location",
+        "travel_required": false
+      },
+      "source": "gather_preview",
+      "summary": "预演采集/收获：空地/家；实际产出和资源状态待 GM 确认。",
+      "title": "采集/收获结算",
+      "type": "gather"
+    }
+  ],
+  "expected_turn_id": "turn:000039",
+  "game_time_after": "第28天 · 上午 + 采集耗时（草案）",
+  "game_time_before": "第28天 · 上午",
+  "intent": "gather",
+  "location_after": "loc:home-mycelium-house",
+  "location_before": "loc:home-mycelium-house",
+  "summary": "预演采集/收获：空地/家；实际产出和资源状态待 GM 确认。",
+  "tick_clocks": [],
+  "upsert_entities": [],
+  "user_text": "去空地药圃采集草药"
+}

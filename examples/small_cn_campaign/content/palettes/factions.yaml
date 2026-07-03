@@ -1,0 +1,65 @@
+factions:
+  - id: pal:faction:bridge-wardens
+    name: 旧桥守路人
+    summary: 传闻中维护旧河路封印的人群，只能先作为符号和传闻出现。
+    rarity: rare
+    locations: [loc:old-bridge]
+    intents: [explore, social]
+    discovery:
+      mode: clue_only
+      clue_text: 破损封印背面有一道不像营地标记的刻痕。
+      confirm_methods: [询问林向导, 对比旧桥记录, 找到第二处同样刻痕]
+    risks:
+      - 单一刻痕不能确认势力存在。
+      - 直接公开推断会提高营地疑虑。
+    save_as:
+      type: faction
+      entity_id: faction:bridge-wardens
+
+  - id: pal:faction:ridge-signalers
+    name: 山岗传信者
+    summary: 可能使用山岗信号架传递短促信号的小团体或个人网络。
+    rarity: uncommon
+    locations: [loc:watch-hill]
+    intents: [explore, social]
+    discovery:
+      mode: confirm_required
+      clue_text: 信号架附近的绳结打得很新，和营地常用结法不同。
+      confirm_methods: [检查信号架, 询问乔商人, 找到信号码]
+    risks:
+      - 也可能只是任斥候临时修理留下的痕迹。
+    save_as:
+      type: faction_state
+      entity_id: faction:ridge-signalers
+
+  - id: pal:faction:river-salvagers
+    name: 河道拾荒队
+    summary: 风暴前后沿河拾取旧物的小队，可能和乔商人有交易关系。
+    rarity: uncommon
+    biomes: [river crossing, riverside camp]
+    intents: [social, explore, travel]
+    discovery:
+      mode: confirm_required
+      clue_text: 河岸泥里有一枚磨平的铜扣，像是拾荒队常用的衣扣。
+      confirm_methods: [询问乔商人, 寻找第二枚铜扣, 检查河岸脚印]
+    risks:
+      - 与普通旅人遗失物混淆。
+    save_as:
+      type: faction
+      entity_id: faction:river-salvagers
+
+  - id: pal:faction:storm-road-patrol
+    name: 风暴路巡
+    summary: 营地上级的巡路制度，不是新势力，但可作为规则和压力来源。
+    rarity: known
+    locations: [loc:camp]
+    intents: [social]
+    discovery:
+      mode: direct
+      clue_text: 林向导提到，风暴前的巡路记录必须有证据才能上报。
+      confirm_methods: [询问林向导, 查看地图板]
+    risks:
+      - 上报不实会损害营地信任。
+    save_as:
+      type: faction_state
+      entity_id: faction:storm-road-patrol

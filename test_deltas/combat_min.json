@@ -1,0 +1,29 @@
+{
+  "changed": true,
+  "intent": "combat",
+  "summary": "Ready crossbow and scan surroundings from the house entrance.",
+  "user_text": "拿起弩在门口戒备一下",
+  "location_before": "loc:home-mycelium-house",
+  "location_after": "loc:home-mycelium-house",
+  "game_time_before": "第28天 · 上午",
+  "game_time_after": "第28天 · 上午",
+  "expected_turn_id": "turn:000041",
+  "events": [
+    {
+      "type": "combat",
+      "source": "combat_action",
+      "title": "戒备",
+      "summary": "拿起终极复合弩在门口戒备。",
+      "payload": {
+        "weapon": "item:ultimate-compound-crossbow",
+        "distance": "close",
+        "ready_state": "weapon_ready",
+        "needs_gm_resolution": true
+      }
+    }
+  ],
+  "meta": {
+    "current_location_id": "loc:home-mycelium-house",
+    "current_time_block": "第28天 · 上午"
+  }
+}

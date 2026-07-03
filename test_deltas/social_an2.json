@@ -1,0 +1,32 @@
+{
+  "changed": true,
+  "intent": "social",
+  "summary": "和An闲聊，了解灰藓族近况。",
+  "user_text": "找An聊聊天，问问最近怎么样",
+  "location_before": "loc:home-mycelium-house",
+  "location_after": "loc:home-mycelium-house",
+  "game_time_before": "第28天 · 上午",
+  "game_time_after": "第28天 · 上午",
+  "expected_turn_id": "turn:000039",
+  "events": [
+    {
+      "type": "social",
+      "source": "social_interaction",
+      "title": "社交：和An闲聊",
+      "summary": "在菌丝复合屋和An闲聊，了解灰藓族近况和石板沟通进展。",
+      "payload": {
+        "npc_id": "char:an",
+        "topic": "asking about recent status",
+        "approach": "casual talk",
+        "needs_gm_resolution": true
+      }
+    }
+  ],
+  "upsert_entities": [
+    {"id": "char:an", "type": "character", "name": "An", "status": "active", "summary": "与亚交流近况。"}
+  ],
+  "meta": {
+    "current_location_id": "loc:home-mycelium-house",
+    "current_time_block": "第28天 · 上午"
+  }
+}

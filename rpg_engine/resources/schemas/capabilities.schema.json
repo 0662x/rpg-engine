@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AIGM V1 Campaign Capabilities",
+  "type": "array",
+  "uniqueItems": true,
+  "items": {
+    "type": "string",
+    "enum": [
+      "query",
+      "explore",
+      "social",
+      "travel",
+      "clock",
+      "random_table",
+      "clue",
+      "risk",
+      "inventory_resource",
+      "project_task",
+      "rest_time",
+      "trade_exchange",
+      "gather_search",
+      "combat"
+    ]
+  }
+}

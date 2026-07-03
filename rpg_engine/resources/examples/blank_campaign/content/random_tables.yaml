@@ -1,0 +1,7 @@
+random_tables:
+  - id: table:minor-detail
+    name: Minor Detail
+    visibility: known
+    entries:
+      - result: A small environmental detail asks for attention.
+        weight: 1

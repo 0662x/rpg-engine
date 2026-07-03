@@ -1,0 +1,33 @@
+routes:
+  - id: route:camp-bridge
+    from_location_id: loc:watch-camp
+    to_location_id: loc:old-bridge
+    travel_minutes: 30
+    difficulty: normal
+    hazards:
+      - slick stones near the river
+      - broken warning posts
+    requirements:
+      - daylight or a careful pace
+
+  - id: route:bridge-ridge
+    from_location_id: loc:old-bridge
+    to_location_id: loc:watchtower-ridge
+    travel_minutes: 25
+    difficulty: risky
+    hazards:
+      - exposed ridge wind
+      - unstable tower debris
+    requirements:
+      - visible route or scout directions
+
+  - id: route:camp-ridge
+    from_location_id: loc:watch-camp
+    to_location_id: loc:watchtower-ridge
+    travel_minutes: 45
+    difficulty: risky
+    hazards:
+      - steep side trail
+      - storm exposure
+    requirements:
+      - enough daylight

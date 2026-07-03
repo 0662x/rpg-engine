@@ -1,0 +1,21 @@
+rules:
+  - id: rule:player-agency
+    name: Player Agency
+    category: safety
+    scope: table
+    statement: Do not decide major player intent, promises, risk acceptance, travel destination, trade agreement, or clue interpretation without confirmation.
+    examples:
+      - Offer visible options after describing risk.
+      - Record consequences in a delta before treating them as true.
+    exceptions:
+      - Minor sensory details may be narrated if they do not change state.
+    aliases: [agency rule]
+
+  - id: rule:structured-fuzzy
+    name: Structured Fuzzy Resolution
+    category: gameplay
+    scope: campaign
+    statement: Use exact values where the save has them, and use fuzzy risk bands for uncertain outcomes until a saved delta records the result.
+    examples:
+      - Rations have exact packs; storm pressure is tracked by a clock.
+      - Social trust may be numeric, but the narration should still respect attitude and known facts.

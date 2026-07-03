@@ -1,0 +1,80 @@
+locations:
+  - id: pal:loc:under-bridge-bank
+    name: 桥下碎石滩
+    summary: 旧桥下方的狭窄碎石滩，可能藏有落下的封印碎片。
+    rarity: uncommon
+    locations: [loc:old-bridge]
+    intents: [explore, travel]
+    discovery:
+      mode: confirm_required
+      clue_text: 从桥缘往下看，能瞥见一条被水雾遮住的碎石滩。
+      confirm_methods: [用绳索固定后观察, 从河岸绕路确认]
+    risks:
+      - 直接下探有坠落和涨水风险。
+    save_as:
+      type: location
+      entity_id: loc:under-bridge-bank
+      safety_level: risky
+      travel_minutes_from_home: 35
+      exits: [旧桥]
+      resources: [封印碎片, 河石]
+
+  - id: pal:loc:reed-bend
+    name: 芦苇河湾
+    summary: 营地到旧桥之间的浅河湾，适合采芦苇，也容易留下脚印。
+    rarity: common
+    biomes: [riverside camp, river crossing]
+    intents: [explore, gather, travel]
+    discovery:
+      mode: confirm_required
+      clue_text: 泥路旁有一条通向芦苇丛的小径，水面很浅。
+      confirm_methods: [沿小径观察, 检查脚印, 询问林向导]
+    risks:
+      - 湿地会拖慢旅行。
+    save_as:
+      type: location
+      entity_id: loc:reed-bend
+      safety_level: uncertain
+      travel_minutes_from_home: 15
+      exits: [河道巡查营地, 旧桥]
+      resources: [苦芦苇, 灰蓝河泥]
+
+  - id: pal:loc:old-marker-stone
+    name: 旧界石
+    summary: 路边半埋的旧界石，可能记录旧河路维护者的标记。
+    rarity: uncommon
+    locations: [loc:old-bridge]
+    intents: [explore]
+    discovery:
+      mode: clue_only
+      clue_text: 桥头泥里露出半块刻线石头，不像新近放置。
+      confirm_methods: [清理泥土, 对比桥头封印刻痕, 询问林向导]
+    risks:
+      - 不能凭半块界石确认新势力或路线。
+    save_as:
+      type: location
+      entity_id: loc:old-marker-stone
+      safety_level: uncertain
+      travel_minutes_from_home: 30
+      exits: [旧桥]
+      resources: [刻痕线索]
+
+  - id: pal:loc:signal-frame-shadow
+    name: 信号架背风面
+    summary: 山岗信号架背风的一小片地面，可能保留灰烬和脚印。
+    rarity: common
+    locations: [loc:watch-hill]
+    intents: [explore, gather]
+    discovery:
+      mode: direct
+      clue_text: 信号架背风面泥土较干，灰烬和脚印更容易保留下来。
+      confirm_methods: [低身观察, 标记脚印]
+    risks:
+      - 站上风口会暴露身影。
+    save_as:
+      type: location
+      entity_id: loc:signal-frame-shadow
+      safety_level: exposed
+      travel_minutes_from_home: 45
+      exits: [山岗]
+      resources: [信号灰, 镜片碎屑]

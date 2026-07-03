@@ -1,0 +1,14 @@
+clocks:
+  - id: clock:storm-front
+    name: 风暴逼近
+    segments_total: 6
+    segments_filled: 1
+    visibility: visible
+    trigger_when_full: 风暴封住旧河路，旅行和救援风险显著上升。
+
+  - id: clock:camp-suspicion
+    name: 营地疑虑
+    segments_total: 4
+    segments_filled: 0
+    visibility: hinted
+    trigger_when_full: 营地人员开始质疑主角判断，社交行动变难。

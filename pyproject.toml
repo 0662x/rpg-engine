@@ -1,0 +1,77 @@
+[project]
+name = "aigm-kernel"
+version = "0.2.0"
+description = "Local persistent AI GM kernel for campaign and save packages"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = ["PyYAML>=6.0", "jsonschema>=4.20"]
+
+[project.optional-dependencies]
+mcp = ["mcp>=1.28,<2"]
+dev = [
+  "build>=1.2",
+  "coverage>=7.5",
+  "pytest>=8.2",
+  "ruff>=0.5",
+  "twine>=5.1",
+]
+
+[project.scripts]
+aigm = "rpg_engine.cli:main"
+rpg_engine = "rpg_engine.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["rpg_engine*"]
+
+[tool.setuptools.package-data]
+"rpg_engine.resources" = [
+  "migrations/*.sql",
+  "schemas/*.json",
+  "evals/*.yaml",
+  "examples/v1_minimal_adventure/**/*.yaml",
+  "examples/v1_minimal_adventure/**/*.md",
+  "examples/blank_campaign/**/*.yaml",
+  "examples/blank_campaign/**/*.md",
+  "examples/small_cn_campaign/**/*.yaml",
+  "examples/small_cn_campaign/**/*.md",
+]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+exclude = [
+  "**/__pycache__/**",
+  "build/**",
+  "dist/**",
+  "*.egg-info/**",
+]
+
+[tool.ruff.lint]
+select = ["E9", "F63", "F7", "F82"]
+
+[tool.coverage.run]
+branch = true
+parallel = true
+patch = ["subprocess"]
+source = ["rpg_engine"]
+omit = [
+  "rpg_engine/compat/importers/isekai_farm_v1.py",
+  "rpg_engine/importers/isekai_farm_v1.py",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = [
+  "build",
+  "dist",
+  "*.egg-info",
+  ".pytest_cache",
+]

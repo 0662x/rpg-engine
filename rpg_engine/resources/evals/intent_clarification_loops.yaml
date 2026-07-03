@@ -1,0 +1,573 @@
+loops:
+  - id: loop_action_mismatch_then_rest
+    expected:
+      step_count: 2
+      clarification_reasons: [external_internal_action_mismatch, none]
+      intent_resolved: true
+      closed: true
+      final_action: rest
+      final_status: ready
+      final_ready_to_save: true
+      final_selected_source: ai_consensus
+    steps:
+      - id: initial_clarification
+        text: 守夜到天亮
+        runtime:
+          intent_ai: consensus
+          external_intent_candidate:
+            kind: single
+            mode: action
+            action: rest
+            slots:
+              until: morning
+            plan: []
+            confidence: high
+            missing_slots: []
+            needs_confirmation: []
+            safety_flags: []
+            reason: 外部 AI 判断这是休息行动。
+        fake_internal_review:
+          kind: single
+          mode: action
+          action: routine
+          slots:
+            task: 整理背包
+          plan: []
+          confidence: high
+          missing_slots: []
+          needs_confirmation: []
+          safety_flags: []
+          reason: 内部 AI 错误地判断为 routine。
+          agreement_with_external: disagree
+          disagreements: [action mismatch]
+          external_candidate_quality: wrong_action
+        start:
+          mode: action
+          submode: routine
+          requires_preview: true
+          can_proceed: false
+          intent_kind: unresolved
+          intent_action: null
+          intent_status: needs_confirmation
+          clarification_reason: external_internal_action_mismatch
+          context_clarification_reason: external_internal_action_mismatch
+        preview:
+          action: act
+          status: needs_confirmation
+          ready_to_save: false
+          recommended_next_tool: ask_clarification
+          clarification_reason: external_internal_action_mismatch
+          clarification_choice_count: 2
+          clarification_question_contains: [哪类行动]
+          plan: []
+          selected_outcome:
+            source: ai_disagreement
+            mode: action
+            submode: routine
+            action: null
+      - id: player_answer_fresh_candidate
+        text: 我是想休息到天亮
+        runtime:
+          intent_ai: consensus
+          external_intent_candidate:
+            kind: single
+            mode: action
+            action: rest
+            slots:
+              until: 天亮
+            plan: []
+            confidence: high
+            missing_slots: []
+            needs_confirmation: []
+            safety_flags: []
+            reason: 玩家澄清后，外部 AI 重新生成完整 rest candidate。
+        fake_internal_review:
+          kind: single
+          mode: action
+          action: rest
+          slots:
+            until: 天亮
+          plan: []
+          confidence: high
+          missing_slots: []
+          needs_confirmation: []
+          safety_flags: []
+          reason: 玩家明确要休息到天亮。
+          agreement_with_external: agree
+          disagreements: []
+          external_candidate_quality: usable
+        start:
+          mode: action
+          submode: rest
+          requires_preview: true
+          can_proceed: true
+          intent_kind: single
+          intent_action: rest
+          intent_status: ready
+        preview:
+          action: rest
+          status: ready
+          ready_to_save: true
+          recommended_next_tool: validate_delta
+          plan: []
+          selected_outcome:
+            source: ai_consensus
+            mode: action
+            submode: rest
+            action: rest
+
+  - id: loop_mode_mismatch_then_social
+    expected:
+      step_count: 2
+      clarification_reasons: [external_internal_mode_mismatch, none]
+      intent_resolved: true
+      closed: true
+      final_action: social
+      final_status: ready
+      final_ready_to_save: true
+      final_selected_source: ai_consensus
+    steps:
+      - id: initial_clarification
+        text: 问 Mira 关于 Old Bridge 的情况
+        runtime:
+          intent_ai: consensus
+          external_intent_candidate:
+            kind: query
+            mode: query
+            action: ""
+            slots:
+              query_text: Old Bridge
+            plan: []
+            confidence: high
+            missing_slots: []
+            needs_confirmation: []
+            safety_flags: []
+            reason: 外部 AI 判断这是只读查询。
+        fake_internal_review:
+          kind: single
+          mode: action
+          action: social
+          slots:
+            npc: Mira
+            topic: Old Bridge
+          plan: []
+          confidence: high
+          missing_slots: []
+          needs_confirmation: []
+          safety_flags: []
+          reason: 玩家要向 Mira 询问 Old Bridge，属于社交行动。
+          agreement_with_external: disagree
+          disagreements: [mode mismatch]
+          external_candidate_quality: wrong_mode
+        start:
+          mode: action
+          submode: social
+          requires_preview: true
+          can_proceed: false
+          intent_kind: unresolved
+          intent_action: null
+          intent_status: needs_confirmation
+          clarification_reason: external_internal_mode_mismatch
+          context_clarification_reason: external_internal_mode_mismatch
+        preview:
+          action: act
+          status: needs_confirmation
+          ready_to_save: false
+          recommended_next_tool: ask_clarification
+          clarification_reason: external_internal_mode_mismatch
+          clarification_choice_count: 2
+          clarification_question_contains: [执行游戏行动]
+          plan: []
+          selected_outcome:
+            source: ai_disagreement
+            mode: action
+            submode: social
+            action: null
+      - id: player_answer_fresh_candidate
+        text: 这是行动，我要问 Mira 关于 Old Bridge
+        runtime:
+          intent_ai: consensus
+          external_intent_candidate:
+            kind: single
+            mode: action
+            action: social
+            slots:
+              npc: Mira
+              topic: Old Bridge
+              approach: direct question
+            plan: []
+            confidence: high
+            missing_slots: []
+            needs_confirmation: []
+            safety_flags: []
+            reason: 玩家澄清这是社交行动。
+        fake_internal_review:
+          kind: single
+          mode: action
+          action: social
+          slots:
+            npc: Warden Mira
+            topic: Old Bridge
+            approach: direct question
+          plan: []
+          confidence: high
+          missing_slots: []
+          needs_confirmation: []
+          safety_flags: []
+          reason: 内部 AI 复核为向 Mira 询问 Old Bridge。
+          agreement_with_external: agree
+          disagreements: []
+          external_candidate_quality: usable
+        start:
+          mode: action
+          submode: social
+          requires_preview: true
+          can_proceed: true
+          intent_kind: single
+          intent_action: social
+          intent_status: ready
+        preview:
+          action: social
+          status: ready
+          ready_to_save: true
+          recommended_next_tool: validate_delta
+          plan: []
+          selected_outcome:
+            source: ai_consensus
+            mode: action
+            submode: social
+            action: social
+
+  - id: loop_missing_destination_then_travel
+    expected:
+      step_count: 2
+      clarification_reasons: [missing_slots, none]
+      intent_resolved: true
+      closed: true
+      final_action: travel
+      final_status: ready
+      final_ready_to_save: true
+      final_selected_source: ai_consensus
+    steps:
+      - id: initial_clarification
+        text: 去不存在的白塔
+        runtime:
+          intent_ai: consensus
+          external_intent_candidate:
+            kind: single
+            mode: action
+            action: travel
+            slots:
+              destination: 不存在的白塔
+            plan: []
+            confidence: high
+            missing_slots: []
+            needs_confirmation: []
+            safety_flags: []
+            reason: 外部 AI 判断这是 travel。
+        fake_internal_review:
+          kind: single
+          mode: action
+          action: travel
+          slots:
+            destination: 不存在的白塔
+          plan: []
+          confidence: high
+          missing_slots: []
+          needs_confirmation: []
+          safety_flags: []
+          reason: 玩家想去一个无法绑定的地点。
+          agreement_with_external: agree
+          disagreements: []
+          external_candidate_quality: usable
+        start:
+          mode: action
+          submode: travel
+          requires_preview: true
+          can_proceed: false
+          intent_kind: unresolved
+          intent_action: null
+          intent_status: needs_confirmation
+          clarification_reason: missing_slots
+          context_clarification_reason: missing_slots
+        preview:
+          action: act
+          status: needs_confirmation
+          ready_to_save: false
+          recommended_next_tool: ask_clarification
+          clarification_reason: missing_slots
+          clarification_choice_count: 2
+          clarification_question_contains: [destination]
+          plan: []
+          selected_outcome:
+            source: ai_consensus_unbound
+            mode: action
+            submode: travel
+            action: null
+      - id: player_answer_fresh_candidate
+        text: 我其实要去 Old Bridge
+        runtime:
+          intent_ai: consensus
+          external_intent_candidate:
+            kind: single
+            mode: action
+            action: travel
+            slots:
+              destination: Old Bridge
+            plan: []
+            confidence: high
+            missing_slots: []
+            needs_confirmation: []
+            safety_flags: []
+            reason: 玩家澄清目的地是 Old Bridge。
+        fake_internal_review:
+          kind: single
+          mode: action
+          action: travel
+          slots:
+            destination: Old Bridge
+          plan: []
+          confidence: high
+          missing_slots: []
+          needs_confirmation: []
+          safety_flags: []
+          reason: 内部 AI 复核目的地是 Old Bridge。
+          agreement_with_external: agree
+          disagreements: []
+          external_candidate_quality: usable
+        start:
+          mode: action
+          submode: travel
+          requires_preview: true
+          can_proceed: true
+          intent_kind: single
+          intent_action: travel
+          intent_status: ready
+        preview:
+          action: travel
+          status: ready
+          ready_to_save: true
+          recommended_next_tool: validate_delta
+          plan: []
+          selected_outcome:
+            source: ai_consensus
+            mode: action
+            submode: travel
+            action: travel
+
+  - id: loop_internal_rules_fast_path_then_external_confirms
+    expected:
+      step_count: 2
+      clarification_reasons: [none, none]
+      intent_resolved: true
+      closed: true
+      final_action: travel
+      final_status: ready
+      final_ready_to_save: true
+      final_selected_source: ai_consensus
+    steps:
+      - id: initial_clarification
+        text: 去 Old Bridge 吧
+        runtime:
+          intent_ai: consensus
+        fake_internal_review:
+          kind: single
+          mode: action
+          action: travel
+          slots:
+            destination: Old Bridge
+          plan: []
+          confidence: high
+          missing_slots: []
+          needs_confirmation: []
+          safety_flags: []
+          reason: 内部 AI 判断玩家要前往 Old Bridge。
+          agreement_with_external: no_external
+          disagreements: []
+          external_candidate_quality: no_external
+        start:
+          mode: action
+          submode: travel
+          requires_preview: true
+          can_proceed: true
+          intent_kind: single
+          intent_action: travel
+          intent_status: ready
+        preview:
+          action: travel
+          status: ready
+          ready_to_save: true
+          recommended_next_tool: validate_delta
+          plan: []
+          selected_outcome:
+            source: ai_single_source_internal_fast
+            mode: action
+            submode: travel
+            action: travel
+      - id: player_answer_fresh_candidate
+        text: 确认，我要去 Old Bridge
+        runtime:
+          intent_ai: consensus
+          external_intent_candidate:
+            kind: single
+            mode: action
+            action: travel
+            slots:
+              destination: Old Bridge
+            plan: []
+            confidence: high
+            missing_slots: []
+            needs_confirmation: []
+            safety_flags: []
+            reason: 外部 AI 在玩家确认后生成 travel candidate。
+        fake_internal_review:
+          kind: single
+          mode: action
+          action: travel
+          slots:
+            destination: Old Bridge
+          plan: []
+          confidence: high
+          missing_slots: []
+          needs_confirmation: []
+          safety_flags: []
+          reason: 内部 AI 复核玩家要去 Old Bridge。
+          agreement_with_external: agree
+          disagreements: []
+          external_candidate_quality: usable
+        start:
+          mode: action
+          submode: travel
+          requires_preview: true
+          can_proceed: true
+          intent_kind: single
+          intent_action: travel
+          intent_status: ready
+        preview:
+          action: travel
+          status: ready
+          ready_to_save: true
+          recommended_next_tool: validate_delta
+          plan: []
+          selected_outcome:
+            source: ai_consensus
+            mode: action
+            submode: travel
+            action: travel
+
+  - id: loop_missing_gather_target_then_resolver_confirmation
+    expected:
+      step_count: 2
+      clarification_reasons: [missing_slots, none]
+      intent_resolved: true
+      closed: false
+      final_action: gather
+      final_status: ready
+      final_ready_to_save: false
+      final_selected_source: ai_consensus
+    steps:
+      - id: initial_clarification
+        text: 采一点东西
+        runtime:
+          intent_ai: consensus
+          external_intent_candidate:
+            kind: single
+            mode: action
+            action: gather
+            slots: {}
+            plan: []
+            confidence: medium
+            missing_slots: [target]
+            needs_confirmation: []
+            safety_flags: []
+            reason: 外部 AI 判断为采集，但不知道目标。
+        fake_internal_review:
+          kind: single
+          mode: action
+          action: gather
+          slots: {}
+          plan: []
+          confidence: medium
+          missing_slots: [target]
+          needs_confirmation: []
+          safety_flags: []
+          reason: 内部 AI 也缺少采集目标。
+          agreement_with_external: agree
+          disagreements: []
+          external_candidate_quality: incomplete
+        start:
+          mode: action
+          submode: gather
+          requires_preview: true
+          can_proceed: false
+          intent_kind: unresolved
+          intent_action: null
+          intent_status: needs_confirmation
+          clarification_reason: missing_slots
+          context_clarification_reason: missing_slots
+        preview:
+          action: act
+          status: needs_confirmation
+          ready_to_save: false
+          recommended_next_tool: ask_clarification
+          clarification_reason: missing_slots
+          clarification_choice_count: 2
+          clarification_question_contains: [target]
+          plan: []
+          selected_outcome:
+            source: ai_consensus_unbound
+            mode: action
+            submode: gather
+            action: null
+      - id: player_answer_fresh_candidate
+        text: 采 Moon Herb
+        runtime:
+          intent_ai: consensus
+          external_intent_candidate:
+            kind: single
+            mode: action
+            action: gather
+            slots:
+              target: Moon Herb
+              location: Watch Camp
+            plan: []
+            confidence: high
+            missing_slots: []
+            needs_confirmation: []
+            safety_flags: []
+            reason: 玩家澄清采集目标是 Moon Herb。
+        fake_internal_review:
+          kind: single
+          mode: action
+          action: gather
+          slots:
+            target: Moon Herb
+            location: Watch Camp
+          plan: []
+          confidence: high
+          missing_slots: []
+          needs_confirmation: []
+          safety_flags: []
+          reason: 内部 AI 复核采集 Moon Herb。
+          agreement_with_external: agree
+          disagreements: []
+          external_candidate_quality: usable
+        start:
+          mode: action
+          submode: gather
+          requires_preview: true
+          can_proceed: true
+          intent_kind: single
+          intent_action: gather
+          intent_status: ready
+        preview:
+          action: gather
+          status: needs_confirmation
+          ready_to_save: false
+          recommended_next_tool: ask_clarification
+          plan: []
+          selected_outcome:
+            source: ai_consensus
+            mode: action
+            submode: gather
+            action: gather

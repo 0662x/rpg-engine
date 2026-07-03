@@ -1,0 +1,29 @@
+{
+  "changed": true,
+  "intent": "explore",
+  "summary": "Inspect the storage wall in the house for useful items.",
+  "user_text": "仔细检查菌丝复合屋的储物墙",
+  "location_before": "loc:home-mycelium-house",
+  "location_after": "loc:home-mycelium-house",
+  "game_time_before": "第28天 · 上午",
+  "game_time_after": "第28天 · 上午",
+  "expected_turn_id": "turn:000041",
+  "events": [
+    {
+      "type": "explore",
+      "source": "explore_action",
+      "title": "探索储物墙",
+      "summary": "检查储物墙中是否有可用的物品。",
+      "payload": {
+        "target": "loc:home-mycelium-house",
+        "location": "loc:home-mycelium-house",
+        "approach": "careful inspection",
+        "needs_gm_resolution": true
+      }
+    }
+  ],
+  "meta": {
+    "current_location_id": "loc:home-mycelium-house",
+    "current_time_block": "第28天 · 上午"
+  }
+}

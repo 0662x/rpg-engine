@@ -1,0 +1,31 @@
+routes:
+  - id: route:camp--old-bridge
+    from_location_id: loc:camp
+    to_location_id: loc:old-bridge
+    travel_minutes: 30
+    difficulty: normal
+    hazards:
+      - 河边湿滑
+      - 风暴前的低雾
+    requirements: []
+
+  - id: route:camp--watch-hill
+    from_location_id: loc:camp
+    to_location_id: loc:watch-hill
+    travel_minutes: 45
+    difficulty: wary
+    hazards:
+      - 暴露在风中
+      - 视线受雾影响
+    requirements: []
+
+  - id: route:old-bridge--watch-hill
+    from_location_id: loc:old-bridge
+    to_location_id: loc:watch-hill
+    travel_minutes: 25
+    difficulty: risky
+    hazards:
+      - 旧桥碎石
+      - 高处落差
+    requirements:
+      - 建议携带绳索

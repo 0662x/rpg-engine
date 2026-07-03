@@ -1,0 +1,17 @@
+entities:
+  - id: project:repair-signal
+    type: project
+    name: 修复山岗信号架
+    status: active
+    visibility: known
+    location_id: loc:watch-hill
+    summary: 修好山岗信号架，能在风暴封路前向营地求援。
+    aliases: [修信号架, 信号架, 修复项目]
+    details:
+      gameplay_role: project_task
+      stage: needs materials
+      progress: 0/3
+      tasks:
+        - 找到山岗。
+        - 收集干木或旧桥残料。
+        - 花一个回合修复横梁。

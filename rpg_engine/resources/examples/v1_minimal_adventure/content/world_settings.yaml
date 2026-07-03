@@ -1,0 +1,22 @@
+world_settings:
+  - id: world:river-road
+    name: River Road Premise
+    category: truth
+    scope: campaign
+    visibility: known
+    priority: 50
+    summary: The river road can reopen only if the camp understands the broken seal and controls storm risk.
+    content:
+      premise: A small road crew is isolated by a damaged bridge seal and incoming storm.
+      tone: grounded, practical, investigative
+      core_loop: query facts, preview action, save consequences, re-enter context
+    linked_rules:
+      - rule:player-agency
+      - rule:structured-fuzzy
+    linked_clocks:
+      - clock:storm-front
+    linked_entities:
+      - loc:watch-camp
+      - loc:old-bridge
+      - project:repair-signal
+    aliases: [river road premise]

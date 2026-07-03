@@ -1,0 +1,27 @@
+{
+  "changed": true,
+  "intent": "routine",
+  "summary": "Check base maintenance status and water crops.",
+  "user_text": "检查基地维护状态，给十六畦浇水",
+  "location_before": "loc:home-mycelium-house",
+  "location_after": "loc:home-mycelium-house",
+  "game_time_before": "第28天 · 上午",
+  "game_time_after": "第28天 · 上午",
+  "expected_turn_id": "turn:000041",
+  "events": [
+    {
+      "type": "routine",
+      "source": "routine_action",
+      "title": "日常维护",
+      "summary": "检查十六畦浇水、基地维护状态。",
+      "payload": {
+        "domain": "base_maintenance",
+        "needs_gm_resolution": true
+      }
+    }
+  ],
+  "meta": {
+    "current_location_id": "loc:home-mycelium-house",
+    "current_time_block": "第28天 · 上午"
+  }
+}

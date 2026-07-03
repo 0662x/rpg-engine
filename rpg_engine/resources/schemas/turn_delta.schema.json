@@ -1,0 +1,164 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RPG Engine Turn Delta",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["user_text", "intent", "summary"],
+  "properties": {
+    "turn_id": {
+      "type": "string",
+      "pattern": "^turn:(seed|[0-9]{6})$"
+    },
+    "expected_turn_id": {
+      "type": "string",
+      "pattern": "^turn:(seed|[0-9]{6})$"
+    },
+    "command_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{2,127}$"
+    },
+    "session_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "user_text": {
+      "type": "string",
+      "minLength": 1
+    },
+    "intent": {
+      "type": "string",
+      "minLength": 1
+    },
+    "changed": {
+      "type": "boolean",
+      "default": true
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "game_time_before": {
+      "type": "string"
+    },
+    "game_time_after": {
+      "type": "string"
+    },
+    "location_before": {
+      "type": "string"
+    },
+    "location_after": {
+      "type": "string"
+    },
+    "events": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["type", "title", "summary", "source"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^event:([0-9]{6}|seed):[0-9]{3}$|^event:seed$"
+          },
+          "game_time": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "minLength": 1
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1
+          },
+          "payload": {
+            "type": ["object", "array"]
+          },
+          "source": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "upsert_entities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["id", "type", "name", "summary"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z]+:[A-Za-z0-9_.-]+$"
+          },
+          "type": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "type": "string"
+          },
+          "visibility": {
+            "type": "string"
+          },
+          "location_id": {
+            "type": "string"
+          },
+          "owner_id": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1
+          },
+          "aliases": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "details": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "tick_clocks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["id", "delta"],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "delta": {
+            "type": "integer",
+            "not": {
+              "const": 0
+            }
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "meta": {
+      "type": "object",
+      "additionalProperties": {
+        "type": ["string", "number", "boolean"]
+      }
+    }
+  }
+}

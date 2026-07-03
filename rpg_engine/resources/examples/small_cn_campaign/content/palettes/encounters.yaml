@@ -1,0 +1,78 @@
+encounters:
+  - id: pal:enc:rope-snap
+    name: 警示绳急响
+    summary: 旧桥警示绳突然抽打石面，提醒玩家检查风势或绳桩。
+    rarity: common
+    locations: [loc:old-bridge]
+    intents: [explore, travel]
+    discovery:
+      mode: direct
+      clue_text: 河风一紧，警示绳啪地抽在石面上。
+      confirm_methods: [检查绳桩, 观察风向]
+    risks:
+      - 忽视绳索会增加桥边行动风险。
+
+  - id: pal:enc:camp-impatient-question
+    name: 营地追问
+    summary: 营地里有人要求玩家说明证据来源，推动社交压力。
+    rarity: common
+    locations: [loc:camp]
+    intents: [social, explore]
+    discovery:
+      mode: direct
+      clue_text: 有人看着旧桥方向，低声问你到底找到了什么。
+      confirm_methods: [展示证据, 询问林向导]
+    risks:
+      - 含糊回答可能推动营地疑虑。
+
+  - id: pal:enc:bridge-under-sound
+    name: 桥下碎石声
+    summary: 桥下传来短促落石声，只能作为未知线索探索。
+    rarity: uncommon
+    locations: [loc:old-bridge]
+    intents: [explore]
+    discovery:
+      mode: confirm_required
+      clue_text: 桥下响起一声短促碎石落水声，随后又安静下来。
+      confirm_methods: [蹲身观察, 用绳索固定后靠近, 从另一侧听声]
+    risks:
+      - 靠近桥缘有坠落风险。
+
+  - id: pal:enc:hill-short-whistle
+    name: 山岗短哨
+    summary: 山岗方向传来一次短哨，可能是风声，也可能有人发信号。
+    rarity: uncommon
+    locations: [loc:camp, loc:old-bridge]
+    intents: [explore, social]
+    discovery:
+      mode: clue_only
+      clue_text: 山岗方向像是传来一次很短的哨声。
+      confirm_methods: [询问乔商人, 前往山岗, 等待第二次声响]
+    risks:
+      - 过早断定有人发信号会误导营地判断。
+
+  - id: pal:enc:wet-footprint
+    name: 新湿脚印
+    summary: 泥路边出现新湿脚印，可能来自营地成员或昨夜经过的人。
+    rarity: uncommon
+    locations: [loc:camp, loc:old-bridge]
+    intents: [explore, gather]
+    discovery:
+      mode: confirm_required
+      clue_text: 泥路边有半枚还没被雾气吹干的脚印。
+      confirm_methods: [拓印, 与营地鞋底对比]
+    risks:
+      - 风雨会很快破坏脚印。
+
+  - id: pal:enc:merchant-offer
+    name: 乔商人的交换提议
+    summary: 乔商人愿意用口粮或绳索换桥边残留物。
+    rarity: common
+    locations: [loc:camp]
+    intents: [social]
+    discovery:
+      mode: direct
+      clue_text: 乔商人提到，如果你带回桥边残留物，他可以换些补给。
+      confirm_methods: [明确交换物, 记录承诺]
+    risks:
+      - 交易承诺必须结构化保存，否则后续容易遗忘。

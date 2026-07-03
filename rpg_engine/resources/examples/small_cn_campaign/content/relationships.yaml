@@ -1,0 +1,20 @@
+relationships:
+  - id: rel:pc-guide-lin
+    name: 旅人与林向导
+    source_id: pc:traveler
+    target_id: npc:guide-lin
+    state: cautious ally
+    trust: 20
+    visibility: known
+    summary: 林向导会协助路线判断，但需要主角提供具体观察。
+    aliases: [林关系, 向导关系]
+
+  - id: rel:pc-merchant-qiao
+    name: 旅人与乔商人
+    source_id: pc:traveler
+    target_id: npc:merchant-qiao
+    state: neutral trader
+    trust: 10
+    visibility: known
+    summary: 乔商人愿意用口粮和绳索交换旧桥证据。
+    aliases: [乔关系, 商人关系]

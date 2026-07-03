@@ -1,0 +1,7 @@
+random_tables:
+  - id: table:quiet-room-detail
+    name: Quiet Room Detail
+    visibility: known
+    entries:
+      - result: A faint draft moves through the quiet room.
+        weight: 1

@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ReflectionDraft",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["title", "summary", "key_points", "source_event_ids"],
+  "properties": {
+    "title": { "type": "string" },
+    "summary": { "type": "string" },
+    "key_points": { "type": "array", "items": { "type": "string" } },
+    "source_event_ids": { "type": "array", "items": { "type": "string" } }
+  }
+}

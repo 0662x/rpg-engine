@@ -1,0 +1,3 @@
+rules:
+  - id: rule:player-agency
+    statement: Do not decide major player intent without confirmation.
