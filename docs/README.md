@@ -18,7 +18,7 @@
 | 接入 MCP / AI 客户端 | [`specs/mcp-adapter.md`](specs/mcp-adapter.md)、[`prompts/ai-client-prompt.md`](prompts/ai-client-prompt.md) |
 | 让外部 AI 辅助写剧本 | [`prompts/author-ai-prompt.md`](prompts/author-ai-prompt.md) |
 | 维护候选素材、内容生成和 proposal 边界 | [`governance/content-generation.md`](governance/content-generation.md) |
-| 理解当前架构 | [`architecture/game-engine.md`](architecture/game-engine.md)、[`architecture/review.md`](architecture/review.md)、[`architecture/turn-flow-architecture.md`](architecture/turn-flow-architecture.md)、[`architecture/external-projects-review.md`](architecture/external-projects-review.md) |
+| 理解当前架构 | [`architecture/game-engine.md`](architecture/game-engine.md)、[`architecture/review.md`](architecture/review.md)、[`architecture/turn-flow-architecture.md`](architecture/turn-flow-architecture.md)、[`architecture/intent-coordinator-refactor-plan.md`](architecture/intent-coordinator-refactor-plan.md)、[`architecture/external-projects-review.md`](architecture/external-projects-review.md) |
 
 ## Current Docs
 
@@ -61,6 +61,7 @@
 - [`architecture/module-map.md`](architecture/module-map.md)：源码模块责任图和编辑入口。
 - [`architecture/review.md`](architecture/review.md)：当前架构风险、legacy/admin 边界和后续整理顺序。
 - [`architecture/turn-flow-architecture.md`](architecture/turn-flow-architecture.md)：从玩家输入到意图、预演、delta、校验、保存、投影和输出的全链路设计说明、阶段落地记录和 Phase 7.1 hardening 落地记录。
+- [`architecture/intent-coordinator-refactor-plan.md`](architecture/intent-coordinator-refactor-plan.md)：AI intent 编排收拢的详细施工计划、阶段边界、验收测试和回滚策略。
 - [`architecture/external-projects-review.md`](architecture/external-projects-review.md)：对照 Ink、Ren'Py、Foundry VTT、MCP、LangGraph、Temporal 等外部项目经验的 Phase 3 前专家评审清单。
 
 ## Archive
