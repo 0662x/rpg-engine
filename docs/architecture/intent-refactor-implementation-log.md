@@ -530,3 +530,114 @@ Documentation sync:
   scope and intentionally defers MCP/CLI/SaveManager call-site bundling to
   Phase 3c.
 - Final Round 5 expert review is complete with no blockers.
+
+## Round 6: Phase 3c1 MCP Low-Level Intent Input Bundling
+
+Status: **COMPLETE**
+
+Goal:
+
+Start Phase 3c by bundling the low-level MCP adapter's Runtime intent inputs
+without changing MCP tool signatures, audit request shape, profile gates, or
+SaveManager/CLI/platform entry points.
+
+Code scope:
+
+- `rpg_engine/mcp_adapter.py`
+- `tests/test_mcp_adapter.py`
+
+Runtime behavior impact:
+
+- `AIGMMCPAdapter.start_turn()` now validates effective intent settings with
+  `IntentAIConfig` and creates `IntentRequestMeta` inside the audited callback
+  after MCP profile/freshness gates and after resolving the Runtime save.
+- `start_turn()` still passes the effective display values through to
+  Runtime/ContextBuilder so `context.request["intent_ai"]` remains compatible
+  while `decision_trace["intent_ai"]` carries normalized routing values.
+- `AIGMMCPAdapter.preview_from_text()` now creates `IntentRequestMeta` inside
+  the audited callback and uses `IntentAIConfig` for non-empty text.
+- Empty `preview_from_text()` input intentionally keeps intent config
+  validation inside `GMRuntime.preview_from_text()` so the existing "describe
+  your action" clarification still wins over invalid backend settings.
+- MCP public arguments, request/audit fields, low-level tool availability,
+  player-profile override checks, and pending clarification handling are
+  unchanged.
+- External candidate input remains separate from passive `IntentRequestMeta`.
+- CLI, SaveManager, platform, ContextBuilder, Runtime, preflight-cache,
+  resolver, validation, and commit code are unchanged.
+
+Added regression coverage:
+
+- `test_mcp_preview_empty_text_keeps_clarification_before_intent_config_validation`
+  - Confirms MCP text preview still returns the empty-user-text clarification
+    even when a bad intent backend override is supplied.
+  - Guards against moving intent config validation ahead of the Runtime
+    empty-text boundary.
+- `test_mcp_start_turn_bundling_preserves_request_surface_aliases`
+  - Confirms MCP `start_turn()` preserves request-surface alias/case values for
+    display while the decision trace keeps normalized internal routing values.
+  - Guards against adapter-level bundling changing the public response surface.
+
+Verification so far:
+
+```bash
+python3 -m py_compile rpg_engine/mcp_adapter.py tests/test_mcp_adapter.py
+
+python3 -m pytest -q tests/test_mcp_adapter.py \
+  -k "start_turn_bundling_preserves_request_surface_aliases or empty_text_keeps_clarification or direct_options or player_profile_start"
+
+python3 -m pytest -q tests/test_mcp_adapter.py tests/test_save_manager.py \
+  -k "player_profile or player_turn or player_act or player_workflow or standard_entry or external_candidate"
+
+python3 -m pytest -q tests/test_mcp_adapter.py
+
+git diff --check
+```
+
+Result:
+
+```text
+py_compile passed
+4 passed, 19 deselected
+13 passed, 20 deselected, 17 subtests passed
+23 passed
+git diff --check passed
+```
+
+Expert code review:
+
+- Initial QA review found a blocking response-surface regression in MCP
+  `start_turn()` when normalized intent config kwargs were passed into Runtime.
+  The fix keeps Runtime/ContextBuilder display kwargs as effective call values
+  while retaining adapter-side config validation and bundled request metadata.
+- Engine boundary: pass. Confirmed the response-surface regression is fixed and
+  `start_turn()` no longer passes normalized config kwargs into Runtime.
+- AI intent safety: pass. Confirmed `external_intent_candidate` remains separate
+  from passive `IntentRequestMeta`, empty preview still clarifies first, and
+  non-empty preview normalization does not expose a context request surface.
+- Gameplay turn flow: pass. Confirmed player profile gates and pending
+  clarification freshness still run before adapter-side validation/bundling.
+- Platform/MCP integration: pass. Confirmed MCP signatures, profile tool
+  registration, audit capture, SaveManager, and platform entry paths remain
+  unchanged.
+- QA/regression: pass. Confirmed the new start-turn alias/case regression test
+  covers the fixed blocker and current coverage is sufficient for this diff.
+- Repo/docs: pass. Confirmed the implementation log matches the final diff,
+  verification results, scope, and deferrals.
+
+Residual risks:
+
+- `start_turn()` now validates intent settings in the MCP adapter and again in
+  ContextBuilder; future field additions must keep those helper mappings in
+  sync.
+- Non-empty `preview_from_text()` still passes normalized intent kwargs into
+  Runtime. That is acceptable because it does not expose the same
+  `context.request` surface as `start_turn()`, but future preview API changes
+  should add alias-preservation coverage if such a surface appears.
+
+Documentation sync:
+
+- This implementation log records the Phase 3c1 MCP low-level adapter-only
+  bundling scope and intentionally defers CLI/SaveManager call-site bundling to
+  later Phase 3c rounds.
+- Final Round 6 expert review is complete with no blockers.

@@ -335,6 +335,96 @@ class MCPAdapterTests(unittest.TestCase):
             self.assertTrue(started["can_proceed"], started)
             self.assertTrue(preview["ok"], preview)
 
+    def test_mcp_preview_empty_text_keeps_clarification_before_intent_config_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            campaign_dir = root / "campaigns" / "minimal"
+            save_dir = root / "saves" / "run"
+            shutil.copytree(MINIMAL_FIXTURE, campaign_dir)
+            init_v1_save(campaign_dir, save_dir)
+            adapter = AIGMMCPAdapter(
+                MCPAdapterConfig.from_values(
+                    root,
+                    default_campaign="campaigns/minimal",
+                    default_save="saves/run",
+                    mcp_profile="developer",
+                )
+            )
+
+            result = adapter.preview_from_text("   ", intent_backend="not-a-backend")
+
+            self.assertFalse(result["ok"], result)
+            self.assertEqual(result["status"], "clarify")
+            self.assertEqual(result["missing_required"], ["user_text"])
+            self.assertEqual(result["errors"], [])
+
+    def test_mcp_start_turn_bundling_preserves_request_surface_aliases(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            campaign_dir = root / "campaigns" / "minimal"
+            save_dir = root / "saves" / "run"
+            shutil.copytree(MINIMAL_FIXTURE, campaign_dir)
+            init_v1_save(campaign_dir, save_dir)
+            old_path = install_fake_hermes(
+                root,
+                '{"kind":"single","mode":"action","action":"rest","slots":{"until":"morning"},"plan":[],"confidence":"high","missing_slots":[],"needs_confirmation":[],"safety_flags":[],"reason":"MCP start_turn agrees.","agreement_with_external":"agree","disagreements":[],"external_candidate_quality":"usable"}',
+            )
+            adapter = AIGMMCPAdapter(
+                MCPAdapterConfig.from_values(
+                    root,
+                    default_campaign="campaigns/minimal",
+                    default_save="saves/run",
+                    mcp_profile="developer",
+                )
+            )
+            external = {
+                "kind": "single",
+                "mode": "action",
+                "action": "rest",
+                "slots": {"until": "morning"},
+                "plan": [],
+                "confidence": "high",
+                "missing_slots": [],
+                "needs_confirmation": [],
+                "safety_flags": [],
+                "reason": "外部 AI 判断这是休息行动。",
+            }
+            try:
+                result = adapter.start_turn(
+                    "休息到早上",
+                    intent_ai="CONSENSUS",
+                    intent_backend="hermes",
+                    intent_provider="deepseek",
+                    intent_model="deepseek-v4-flash",
+                    intent_timeout=1,
+                    intent_base_url="https://ai.example.test/v1",
+                    intent_api_key_env="AIGM_TEST_KEY",
+                    intent_fallback_backend="hermes",
+                    external_intent_candidate=external,
+                    message_id="msg:mcp-start-bundle",
+                    platform="qq",
+                    session_key="room:mcp-start-bundle",
+                    preflight_pending_wait_ms=-5,
+                )
+            finally:
+                os.environ["PATH"] = old_path
+
+            self.assertTrue(result["can_proceed"], result)
+            request_ai = result["context"]["request"]["intent_ai"]
+            trace = result["decision_trace"]["intent_ai"]
+            self.assertEqual(request_ai["mode"], "CONSENSUS")
+            self.assertEqual(request_ai["backend"], "hermes")
+            self.assertEqual(request_ai["provider"], "deepseek")
+            self.assertEqual(request_ai["model"], "deepseek-v4-flash")
+            self.assertEqual(request_ai["timeout"], 3)
+            self.assertEqual(request_ai["base_url"], "https://ai.example.test/v1")
+            self.assertEqual(request_ai["api_key_env"], "AIGM_TEST_KEY")
+            self.assertEqual(request_ai["fallback_backend"], "hermes")
+            self.assertEqual(request_ai["preflight_pending_wait_ms"], 0)
+            self.assertEqual(trace["mode"], "consensus")
+            self.assertEqual(trace["backend"], "hermes_z")
+            self.assertEqual(trace["fallback_backend"], "hermes_z")
+
     def test_mcp_developer_preview_from_text_can_use_intent_consensus(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

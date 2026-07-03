@@ -22,7 +22,8 @@ from .campaign_validation import validate_campaign_package
 from .db import utc_now
 from .game_session import hash_identity
 from .intent_manifest import build_intent_manifest
-from .runtime import GMRuntime
+from .intent_router import make_intent_ai_config, make_intent_request_meta
+from .runtime import GMRuntime, intent_ai_config_kwargs, intent_request_meta_kwargs
 from .save_manager import SaveManager
 from .save_service import inspect_v1_save
 from .validation_issues import issues_from_messages
@@ -617,6 +618,25 @@ class AIGMMCPAdapter:
             )
             self.require_fresh_clarification_repreview("start_turn", save, request)
             runtime = self.runtime_for_save(save)
+            # Validate here, but preserve Runtime/ContextBuilder request display values.
+            make_intent_ai_config(
+                intent_ai=effective_intent_ai,
+                intent_backend=effective_intent_backend,
+                intent_provider=effective_intent_provider,
+                intent_model=effective_intent_model,
+                intent_timeout=effective_intent_timeout,
+                intent_base_url=effective_intent_base_url,
+                intent_api_key_env=effective_intent_api_key_env,
+                intent_fallback_backend=effective_intent_fallback_backend,
+            )
+            request_meta = make_intent_request_meta(
+                preflight_id=preflight_id,
+                message_id=message_id,
+                platform=platform,
+                session_key=session_key,
+                source_user_text_hash=source_user_text_hash,
+                preflight_pending_wait_ms=preflight_pending_wait_ms,
+            )
             result = runtime.start_turn(
                 user_text,
                 mode=mode,
@@ -637,12 +657,7 @@ class AIGMMCPAdapter:
                 intent_api_key_env=effective_intent_api_key_env,
                 intent_fallback_backend=effective_intent_fallback_backend,
                 external_intent_candidate=external_intent_candidate,
-                preflight_id=preflight_id,
-                message_id=message_id,
-                platform=platform,
-                session_key=session_key,
-                source_user_text_hash=source_user_text_hash,
-                preflight_pending_wait_ms=preflight_pending_wait_ms,
+                **intent_request_meta_kwargs(request_meta),
             ).to_dict()
             self.update_pending_clarification(save, request, result)
             return result
@@ -754,6 +769,36 @@ class AIGMMCPAdapter:
             )
             self.require_fresh_clarification_repreview("preview_from_text", save, request)
             runtime = self.runtime_for_save(save)
+            intent_kwargs = {
+                "intent_ai": effective_intent_ai,
+                "intent_backend": effective_intent_backend,
+                "intent_provider": effective_intent_provider,
+                "intent_model": effective_intent_model,
+                "intent_timeout": effective_intent_timeout,
+                "intent_base_url": effective_intent_base_url,
+                "intent_api_key_env": effective_intent_api_key_env,
+                "intent_fallback_backend": effective_intent_fallback_backend,
+            }
+            if isinstance(user_text, str) and user_text.strip():
+                intent_config = make_intent_ai_config(
+                    intent_ai=effective_intent_ai,
+                    intent_backend=effective_intent_backend,
+                    intent_provider=effective_intent_provider,
+                    intent_model=effective_intent_model,
+                    intent_timeout=effective_intent_timeout,
+                    intent_base_url=effective_intent_base_url,
+                    intent_api_key_env=effective_intent_api_key_env,
+                    intent_fallback_backend=effective_intent_fallback_backend,
+                )
+                intent_kwargs = intent_ai_config_kwargs(intent_config)
+            request_meta = make_intent_request_meta(
+                preflight_id=preflight_id,
+                message_id=message_id,
+                platform=platform,
+                session_key=session_key,
+                source_user_text_hash=source_user_text_hash,
+                preflight_pending_wait_ms=preflight_pending_wait_ms,
+            )
             result = runtime.preview_from_text(
                 user_text,
                 mode=mode,
@@ -762,21 +807,9 @@ class AIGMMCPAdapter:
                 semantic_provider=effective_semantic_provider,
                 semantic_model=effective_semantic_model,
                 semantic_timeout=effective_semantic_timeout,
-                intent_ai=effective_intent_ai,
-                intent_backend=effective_intent_backend,
-                intent_provider=effective_intent_provider,
-                intent_model=effective_intent_model,
-                intent_timeout=effective_intent_timeout,
-                intent_base_url=effective_intent_base_url,
-                intent_api_key_env=effective_intent_api_key_env,
-                intent_fallback_backend=effective_intent_fallback_backend,
+                **intent_kwargs,
                 external_intent_candidate=external_intent_candidate,
-                preflight_id=preflight_id,
-                message_id=message_id,
-                platform=platform,
-                session_key=session_key,
-                source_user_text_hash=source_user_text_hash,
-                preflight_pending_wait_ms=preflight_pending_wait_ms,
+                **intent_request_meta_kwargs(request_meta),
             ).to_dict()
             self.update_pending_clarification(save, request, result)
             return result
