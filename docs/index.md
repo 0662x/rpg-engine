@@ -18,6 +18,7 @@
 | 理解 Save / Campaign 包边界 | [Save 与 Campaign Package](save-and-campaign-packages.md) |
 | 理解数据模型 | [数据模型](data-models.md) |
 | 理解 CLI 合同 | [CLI 合同](cli-contracts.md) |
+| 理解 MCP 合同 | [MCP 合同](mcp-contracts.md) |
 | 开始开发 | [开发指南](development-guide.md) |
 | 选择测试和门禁 | [测试与质量门禁](testing-and-quality-gates.md) |
 | 读取 AI agent 项目宪法 | [项目上下文](project-context.md) |
@@ -39,8 +40,9 @@ confirm 和 commit 权威。`SaveManager.player_turn()` 可以产生 pending pro
 ## BMAD 文档迁移状态
 
 Round 1 Deep Scan 已完成，扫描材料保留在 [`../_bmad-output/`](../_bmad-output/)。
-本轮 Round 2 已建立 canonical docs 骨架。旧文档暂时不移动、不删除，后续 Round 3
-会逐步把仍然有效的领域内容合并到少数长期文档。
+Round 2 已建立 canonical docs 骨架。Round 3 已把 AI intent、Save/Campaign、数据模型、
+CLI 和 MCP 领域内容合并到 canonical 文档。旧文档暂时不移动、不删除，后续 Round 4 会把
+已迁移内容归档或改成兼容入口。
 
 当前 canonical 文档：
 
@@ -52,6 +54,7 @@ Round 1 Deep Scan 已完成，扫描材料保留在 [`../_bmad-output/`](../_bma
 - [Save 与 Campaign Package](save-and-campaign-packages.md)
 - [数据模型](data-models.md)
 - [CLI 合同](cli-contracts.md)
+- [MCP 合同](mcp-contracts.md)
 - [开发指南](development-guide.md)
 - [测试与质量门禁](testing-and-quality-gates.md)
 - [项目上下文](project-context.md)
@@ -85,8 +88,9 @@ Round 1 Deep Scan 已完成，扫描材料保留在 [`../_bmad-output/`](../_bma
 7. [Save 与 Campaign Package](save-and-campaign-packages.md)
 8. [数据模型](data-models.md)
 9. [CLI 合同](cli-contracts.md)
-10. touched surface 对应的旧 spec / architecture 文档
-11. [测试与质量门禁](testing-and-quality-gates.md)
+10. [MCP 合同](mcp-contracts.md)
+11. touched surface 对应的旧 spec / architecture 文档
+12. [测试与质量门禁](testing-and-quality-gates.md)
 
 AI intent、SaveManager、CLI、MCP、platform、schema、migration 或 hidden-content 相关改动
 必须按 BMAD P0/P1 流程留下 plan、story、test/review 和 docs sync 证据。

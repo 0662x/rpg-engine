@@ -1,8 +1,8 @@
 # BMAD 文档体系迁移计划
 
-文档状态：**ACTIVE：Round 3 领域文档合并中**
+文档状态：**ACTIVE：Round 3 已完成，Round 4 归档准备中**
 
-日期：2026-07-03
+日期：2026-07-04
 
 ## 执行状态
 
@@ -11,11 +11,11 @@
 - Round 2：已执行。`docs/` 下已建立 canonical docs 骨架，`docs/README.md` 已收敛为
   指向 `docs/index.md` 的兼容入口。同步记录见
   [`../round-2-canonical-docs-report.md`](../round-2-canonical-docs-report.md)。
-- Round 3：执行中。`docs/ai-intent-chain.md` 已合并 AI intent / prewarm / surface
+- Round 3：已执行。`docs/ai-intent-chain.md` 已合并 AI intent / prewarm / surface
   领域内容；`docs/save-and-campaign-packages.md` 已合并 Campaign / Save / SaveManager
   包边界内容；`docs/data-models.md` 已合并 SQLite / manifest / proposal / registry
   数据模型内容；`docs/cli-contracts.md` 已合并当前 CLI public / low-level / admin
-  合同内容；其余领域文档仍待执行。
+  合同内容；`docs/mcp-contracts.md` 已合并 MCP profile / tool / adapter 合同内容。
 - Round 4 及以后：待执行。旧 `docs/architecture`、`docs/specs`、`docs/guides`、
   `docs/prompts` 仍保留为迁移来源，尚未归档。
 
@@ -170,6 +170,8 @@ docs/
 - `player_turn -> pending/no save` 和 `player_confirm -> commit` 边界不改写。
 - 旧文档重要结论能在新文档找到位置。
 - CLI public surface、low-level `play` surface、platform sidecar 和 legacy/admin surface
+  的权限边界不混写。
+- MCP player-safe tools、low-level tools、hidden-read gate、path boundary 和 commit gate
   的权限边界不混写。
 
 ### Round 4：归档旧分类

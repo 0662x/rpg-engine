@@ -1,9 +1,9 @@
 # Round 3 领域文档合并同步记录
 
-文档状态：DRAFT / Round 3 Domain Docs In Progress
+文档状态：CURRENT / Round 3 Domain Docs Complete
 语言：zh-CN
-迁移阶段：BMAD canonical domain docs 合并中
-日期：2026-07-03
+迁移阶段：BMAD canonical domain docs 已合并
+日期：2026-07-04
 
 ## 本轮目标
 
@@ -142,6 +142,35 @@
 - `rpg_engine/platform_prewarm.py`
 - `pyproject.toml`
 
+### MCP contracts
+
+已新增：
+
+- [`docs/mcp-contracts.md`](../docs/mcp-contracts.md)
+
+已更新：
+
+- [`docs/index.md`](../docs/index.md)
+- [`_bmad-output/planning-artifacts/bmad-documentation-migration-plan.md`](planning-artifacts/bmad-documentation-migration-plan.md)
+
+主要来源：
+
+- [`docs/specs/mcp-adapter.md`](../docs/specs/mcp-adapter.md)
+- [`docs/ai-intent-chain.md`](../docs/ai-intent-chain.md)
+- [`docs/cli-contracts.md`](../docs/cli-contracts.md)
+- [`docs/save-and-campaign-packages.md`](../docs/save-and-campaign-packages.md)
+- [`docs/testing-and-quality-gates.md`](../docs/testing-and-quality-gates.md)
+
+代码事实校验：
+
+- `rpg_engine/mcp_adapter.py`
+- `rpg_engine/cli_v1.py`
+- `rpg_engine/save_manager.py`
+- `rpg_engine/runtime.py`
+- `rpg_engine/intent_router.py`
+- `rpg_engine/preflight_cache.py`
+- `tests/test_mcp_adapter.py`
+
 ## 不改范围
 
 - 不移动或归档旧文档。
@@ -175,10 +204,18 @@
 - `play *` 仍是低层 runtime / developer / trusted-gm 工具，不写成普通玩家默认入口。
 - `platform message` / prewarm 仍是 advisory，不写成事实提交入口。
 - `mcp serve` / `mcp print-config` 仍只启动和配置 MCP；具体 MCP 工具权限仍由 profile gate 决定。
+- MCP adapter 仍是 thin wrapper，不依赖 CLI handlers，也不暴露 package upgrade、migration apply、
+  projection repair、plugin loading 或任意文件读写。
+- MCP player profile 仍只注册 player-safe tools；低层 preview/validate/commit/preflight 工具仍只在
+  low-level profiles 注册。
+- MCP hidden-read gate 仍与 low-level tool gate 分开；developer profile 不等同于 hidden / GM view access。
+- MCP path boundary 仍要求 root 下相对路径，拒绝 absolute path 和 `..`。
+- MCP `commit_turn` 仍是 low-level 写入工具，默认保留 backup 和 state audit guard。
 
-## 待完成 Round 3 文档
+## Round 3 完成状态
 
-- `docs/mcp-contracts.md`
+Round 3 canonical domain docs 已完成。下一步进入 Round 4：归档旧 `docs/architecture`、
+`docs/specs`、`docs/guides` 和 `docs/prompts` 分类中的已迁移内容。
 
 ## Review Gate
 
@@ -193,6 +230,7 @@
 | Package / Save Boundary | 通过。Campaign Package、Save Package、workspace registry、projection 和 `.aigmsave` 的事实权威边界分开记录。 |
 | Data Model Boundary | 通过。SQLite facts、turn delta、TurnProposal、validation/projection reports、registry、archive 和 preflight cache 的权威关系分开记录。 |
 | CLI Contract Boundary | 通过。V1 public groups、low-level `play`、platform sidecar、MCP launch 和 legacy/admin surface 的职责分开记录。 |
+| MCP Contract Boundary | 通过。player-safe tools、low-level tools、hidden-read gate、path boundary、preflight、clarification guard、commit 和 audit 合同分开记录。 |
 
 ## 验证记录
 
@@ -205,21 +243,23 @@ python3 scripts/check_markdown_links.py docs _bmad-output
 python3 -m pytest -q tests/test_save_manager.py tests/test_campaign_validation.py tests/test_package_cli.py tests/test_package_save_condition_coverage.py tests/test_projection_service.py tests/test_current_native_visibility.py tests/test_save_patch.py
 python3 -m pytest -q tests/test_validation_pipeline.py tests/test_projection_service.py tests/test_current_native_package.py tests/test_current_native_write_safety.py tests/test_current_native_visibility.py tests/test_save_manager.py tests/test_package_cli.py tests/test_package_merge.py tests/test_package_save_condition_coverage.py tests/test_ai_intent.py tests/test_preflight_cache.py
 python3 -m pytest -q tests/test_v1_cli.py tests/test_save_manager.py tests/test_mcp_adapter.py tests/test_platform_sidecar.py tests/test_platform_prewarm.py
+python3 -m pytest -q tests/test_mcp_adapter.py tests/test_save_manager.py tests/test_ai_intent.py tests/test_preflight_cache.py
 ```
 
 结果：
 
 - `git diff --check`：通过。
-- Markdown 链接检查：`checked 67 markdown files; local links ok`。
+- Markdown 链接检查：`checked 68 markdown files; local links ok`。
 - Focused package/save tests：`55 passed, 28 subtests passed`。
 - Focused data-model tests：`130 passed, 45 subtests passed`。
 - Focused CLI contract tests：`58 passed, 17 subtests passed`。
+- Focused MCP contract tests：`92 passed, 17 subtests passed`。
 
 未执行：
 
-- 全量 `python3 -m pytest`。原因：本切片仅改 Markdown 文档和 BMAD 计划产物；已补跑
+- 全量 `python3 -m pytest`。原因：Round 3 仅改 Markdown 文档和 BMAD 计划产物；已补跑
   SaveManager、Campaign validation、package CLI、projection、visibility、safe patch、
   validation pipeline、current native package/write safety、package merge、AI intent 和 preflight cache
-  相关 focused tests。
+  以及 MCP adapter 相关 focused tests。
 
-如后续领域文档引入新的 CLI/MCP 命令示例，再补对应 focused tests。
+如 Round 4 归档移动旧文档或新增 compatibility stub，需要重新跑 Markdown 链接检查。
