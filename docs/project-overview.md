@@ -115,5 +115,10 @@ V1 明确不做：
 ## 当前文档状态
 
 BMAD / Game Dev Studio 已作为强流程层安装在 [`../_bmad/`](../_bmad/)。Round 1 Deep
-Scan 产物位于 [`../_bmad-output/`](../_bmad-output/)。本文件是 Round 2 迁入
-`docs/` 的 canonical 概览，后续领域文档会继续从旧 `docs/` 中审查和合并。
+Scan 和后续迁移产物位于 [`../_bmad-output/`](../_bmad-output/)。Round 4C 后，旧
+`docs/architecture/`、`docs/specs/` 和 `docs/guides/` 正文已归档到
+[`archive/pre-bmad-docs-2026-07-03/`](archive/pre-bmad-docs-2026-07-03/)，旧路径只保留
+compatibility stubs。
+
+当前长期入口是 [文档索引](index.md)。本文件是 canonical 概览；日常开发以 canonical docs 和当前代码事实
+为准，归档原文只作历史证据。

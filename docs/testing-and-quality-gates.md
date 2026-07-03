@@ -44,6 +44,8 @@ python3 -m json.tool _bmad-output/project-scan-report.json >/dev/null
 python3 -m pytest
 ```
 
+Round 6 本地基线（2026-07-04）：`python3 -m pytest -q` 通过，`449 passed, 483 subtests passed`。
+
 当前 native campaign/save 回归：
 
 ```bash
@@ -76,6 +78,13 @@ python3 -m pytest -q \
   tests/test_current_native_context.py \
   tests/test_context_quality.py
 ```
+
+Surface / intent 基线材料：
+
+- `tests/fixtures/intent_router_gold_set.yaml`
+- `tests/fixtures/mcp_external_agent_transcripts.yaml`
+- `docs/architecture/phase-0-performance-baseline.md` 是归档 stub；原始本机性能基线已随
+  `phase-0-performance-baseline.md` 归档到 `docs/archive/pre-bmad-docs-2026-07-03/`。
 
 Campaign smoke：
 

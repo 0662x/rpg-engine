@@ -115,24 +115,51 @@ class SurfaceInventoryTests(unittest.TestCase):
         self.assertIn("`docs/prompts/ai-client-prompt.md`", report)
         self.assertIn("`aigm package upgrade`", report)
 
-    def test_phase_zero_document_mentions_all_inventory_entries(self) -> None:
-        document = (ENGINE_ROOT / "docs" / "architecture" / "phase-0-surface-inventory.md").read_text(
-            encoding="utf-8"
+    def test_canonical_contract_docs_mention_all_inventory_entries(self) -> None:
+        mcp_document = (ENGINE_ROOT / "docs" / "mcp-contracts.md").read_text(encoding="utf-8")
+        prompt_document = "\n".join(
+            [
+                (ENGINE_ROOT / "docs" / "prompt-contracts.md").read_text(encoding="utf-8"),
+                (ENGINE_ROOT / "docs" / "authoring-guide.md").read_text(encoding="utf-8"),
+            ]
         )
+        cli_document = (ENGINE_ROOT / "docs" / "cli-contracts.md").read_text(encoding="utf-8")
+        testing_document = (ENGINE_ROOT / "docs" / "testing-and-quality-gates.md").read_text(encoding="utf-8")
 
-        for entry in (*MCP_SURFACE_INVENTORY, *AI_PROMPT_SURFACE_INVENTORY, *PACKAGE_SURFACE_INVENTORY):
+        for entry in MCP_SURFACE_INVENTORY:
             with self.subTest(entry=entry.name):
-                self.assertIn(f"`{entry.name}`", document)
+                self.assertIn(f"`{entry.name}`", mcp_document)
 
-        self.assertIn("tests/fixtures/intent_router_gold_set.yaml", document)
-        self.assertIn("tests/fixtures/mcp_external_agent_transcripts.yaml", document)
-        self.assertIn("phase-0-performance-baseline.md", document)
+        for entry in AI_PROMPT_SURFACE_INVENTORY:
+            with self.subTest(entry=entry.name):
+                self.assertIn(f"`{entry.name}`", prompt_document)
 
-    def test_architecture_doc_records_phase_zero_to_four_expert_review(self) -> None:
-        document = (ENGINE_ROOT / "docs" / "architecture" / "turn-flow-architecture.md").read_text(
+        for entry in PACKAGE_SURFACE_INVENTORY:
+            with self.subTest(entry=entry.name):
+                self.assertIn(f"`{entry.name}`", cli_document)
+
+        self.assertIn("tests/fixtures/intent_router_gold_set.yaml", testing_document)
+        self.assertIn("tests/fixtures/mcp_external_agent_transcripts.yaml", testing_document)
+        self.assertIn("phase-0-performance-baseline.md", testing_document)
+
+    def test_archived_architecture_review_remains_discoverable_from_stub(self) -> None:
+        stub = (ENGINE_ROOT / "docs" / "architecture" / "turn-flow-architecture.md").read_text(
+            encoding="utf-8"
+        )
+        document = (
+            ENGINE_ROOT
+            / "docs"
+            / "archive"
+            / "pre-bmad-docs-2026-07-03"
+            / "architecture"
+            / "turn-flow-architecture.md"
+        ).read_text(
             encoding="utf-8"
         )
 
+        self.assertIn("archive/pre-bmad-docs-2026-07-03/architecture/turn-flow-architecture.md", stub)
+        self.assertIn("[架构](../architecture.md)", stub)
+        self.assertIn("历史材料仅作证据", stub)
         self.assertIn("### 14.5 Phase 0-4 实现后多角色复审", document)
         for phrase in (
             "Phase 0 inventory/baseline",

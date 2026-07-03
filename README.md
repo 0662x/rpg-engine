@@ -43,9 +43,9 @@ mcp       print-config/serve
 
 Legacy/admin 入口仍保留用于维护、迁移和调试，例如 `content`、`proposal`、`palette`、`projection`、`migrate`、`package`、`plugin`、`importer`。
 
-Phase 0-7.1 主路径和 projection hardening 已落地：intent、contract、proposal、validation、commit 和 projection 都有集中 owner。Commit 后 snapshots/cards/memory/reports 等事务后投影由 `ProjectionService` 生成 `ProjectionReport`，旧 artifact 命令保留为 legacy/admin/maintenance profile。
+Phase 0-7.1 的内部合同、普通玩家主路径骨架和 projection 状态语义已阶段性落地：intent、contract、proposal、validation、commit 和 projection 都有集中 owner。Commit 后 snapshots/cards/memory/reports 等事务后投影由 `ProjectionService` 生成 `ProjectionReport`，旧 artifact 命令保留为 legacy/admin/maintenance profile。
 
-Phase 7.1 已硬化 projection 事务边界、targeted repair、commit/projection 状态 API、stale/version repair 和指标字段。下一步进入完整 `TurnCoordinator`、目标工具协议、semantic AI parity 和 import/migration 批量 profile 报告。
+Phase 7.1 已硬化 projection 事务边界、targeted repair、commit/projection 状态 API、stale/version repair 和指标字段。这不等于完整产品成熟度已经完成；下一步仍是完整 `TurnCoordinator`、目标工具协议、semantic AI parity、发布/回滚证据和 import/migration 批量 profile 报告。
 
 ## Documentation
 
@@ -70,10 +70,10 @@ Phase 7.1 已硬化 projection 事务边界、targeted repair、commit/projectio
 ## Test
 
 ```bash
-python3 -m unittest discover tests
+python3 -m pytest
 ```
 
-当前基准：`251 tests OK (77 skipped)`；`pytest` 基准为 `174 passed, 77 skipped`。
+当前 Round 6 本地基准：`449 passed, 483 subtests passed`。
 
 ## Boundaries
 

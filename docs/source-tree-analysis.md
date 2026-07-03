@@ -10,7 +10,7 @@
 ├── .github/workflows/         # GitHub Actions CI
 ├── _bmad/                     # BMAD 配置与生成资源
 ├── _bmad-output/              # BMAD 扫描、规划和实施产物
-├── docs/                      # canonical 文档与待迁移旧文档
+├── docs/                      # canonical 文档、active prompts、archive stubs
 ├── examples/                  # 仓库级示例
 ├── migrations/                # 根级迁移/历史材料
 ├── reports/                   # 日期化报告和 probe 输出

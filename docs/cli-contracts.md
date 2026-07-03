@@ -297,6 +297,23 @@ importer
 - `save-turn`、`turn accept-response`、`proposal apply`、`apply-content-delta`、`package upgrade` 等写入命令
   只能在 trusted maintenance / GM / migration 场景使用。
 
+`rpg_engine.surface_inventory` 的 package / maintenance surface 测试哨兵使用以下精确名称：
+
+- `aigm campaign validate`
+- `aigm campaign test`
+- `aigm campaign new`
+- `aigm campaign doctor`
+- `aigm save init`
+- `aigm save inspect`
+- `aigm save validate`
+- `aigm save export`
+- `aigm save import`
+- `aigm save patch`
+- `aigm package upgrade`
+- `aigm migrate apply`
+- `aigm projection repair`
+- `aigm plugin validate`
+
 ## AI 和 Preflight 参数
 
 相关参数族：

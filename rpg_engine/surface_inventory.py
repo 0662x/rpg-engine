@@ -426,7 +426,7 @@ PACKAGE_SURFACE_INVENTORY = (
         description="Apply or dry-run a package upgrade against a campaign save.",
     ),
     SurfaceEntry(
-        name="aigm migration apply",
+        name="aigm migrate apply",
         surface="cli_admin",
         category="database_migration",
         profile="admin_maintenance",
