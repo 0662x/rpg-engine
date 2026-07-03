@@ -31,6 +31,28 @@ player text
 
 No AI candidate is allowed to skip binder, resolver, validation, pending action, or commit guard.
 
+## Single Management Rule
+
+The AI intent layer is an engine-owned subsystem, not a platform-owned or
+external-AI-owned subsystem. External clients, MCP tools, CLI commands, and
+platform sidecars may supply inputs, configuration, passive identifiers, or
+advisory cache requests. They must not become alternate intent authorities.
+
+New code should keep this split:
+
+- Player-facing natural language enters `player_turn` or the low-level
+  `preview_from_text` path.
+- Final `mode/submode/action/options` decisions flow through
+  `rpg_engine.intent_router.route_intent()` and `rpg_engine.ai_intent`.
+- Advisory preflight may only cache internal review output. It must still be
+  consumed through arbitration, binding, preview, validation, and confirmation.
+- Platform code may enqueue prewarm and forward message identity. It must not
+  decide final game intent or write game facts.
+- If a future refactor adds an intent coordinator object, CLI, MCP,
+  `SaveManager`, `GMRuntime`, and platform sidecar should call that coordinator
+  instead of duplicating rule-candidate, internal-review, or preflight lifecycle
+  code.
+
 ## Internal Review Model
 
 The intended model is visible-external independent review, not blind review.

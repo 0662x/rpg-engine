@@ -13,7 +13,7 @@
 | 编写 Campaign Package | [`specs/campaign-package.md`](specs/campaign-package.md)、[`guides/author-guide.md`](guides/author-guide.md) |
 | 管理 Save Package | [`specs/save-package.md`](specs/save-package.md) |
 | 设计玩家入口和多存档体验 | [`specs/player-entry-save-manager.md`](specs/player-entry-save-manager.md) |
-| 理解正常游戏意图识别链路 | [`specs/standard-intent-chain.md`](specs/standard-intent-chain.md) |
+| 理解正常游戏意图识别链路 | [`specs/standard-intent-chain.md`](specs/standard-intent-chain.md)、[`specs/ai-intent-prewarm.md`](specs/ai-intent-prewarm.md) |
 | 使用 CLI | [`specs/cli.md`](specs/cli.md) |
 | 接入 MCP / AI 客户端 | [`specs/mcp-adapter.md`](specs/mcp-adapter.md)、[`prompts/ai-client-prompt.md`](prompts/ai-client-prompt.md) |
 | 让外部 AI 辅助写剧本 | [`prompts/author-ai-prompt.md`](prompts/author-ai-prompt.md) |
@@ -36,6 +36,7 @@
 - [`specs/save-package.md`](specs/save-package.md)：Save Package、`.aigmsave`、inspect/validate、safe patch。
 - [`specs/player-entry-save-manager.md`](specs/player-entry-save-manager.md)：首次开始游戏、继续游戏、多存档切换、Save Manager、onboarding 和玩家入口 MCP/CLI 设计。
 - [`specs/standard-intent-chain.md`](specs/standard-intent-chain.md)：正常游戏唯一标准意图识别链路，external AI 低信任候选、internal AI 可见外部候选独立复核、arbiter/preview/validation/confirm/commit 边界。
+- [`specs/ai-intent-prewarm.md`](specs/ai-intent-prewarm.md)：AI intent、internal review、advisory preflight、platform prewarm 的长期 authority、模块责任和维护护栏。
 - [`specs/cli.md`](specs/cli.md)：普通 CLI 主路径和 legacy/admin 边界。
 - [`specs/mcp-adapter.md`](specs/mcp-adapter.md)：MCP 工具白名单、参数、路径边界和推荐 AI 流程。
 

@@ -19,6 +19,10 @@ Current documentation starts at `docs/README.md`.
   validation.
 - AI output is always untrusted until routed through preview, validation, and
   commit.
+- AI intent recognition authority is documented in
+  `docs/specs/ai-intent-prewarm.md`. External AI may propose candidates, but
+  final routing, binding, preview, validation, and commit authority stay inside
+  the engine.
 - Hidden/GM-only content must not leak into player views, FTS, scene output, or
   normal query paths.
 - Ordinary play uses Campaign Package + Save Package + GMRuntime + CLI/MCP.
@@ -47,6 +51,9 @@ the relevant section of `docs/architecture/module-map.md`.
 - `rpg_engine/actions/`: action contracts and domain action resolution.
 - `rpg_engine/ai/` and `rpg_engine/ai_intent/`: AI candidate handling,
   arbitration, schema validation, and trust boundaries.
+- `rpg_engine/preflight_cache.py`, `rpg_engine/platform_prewarm.py`, and
+  `rpg_engine/platform_sidecar.py`: advisory preflight and platform entry only.
+  Do not put final intent policy or write authority here.
 - `rpg_engine/context/`: context collection, budgeting, rendering, semantic
   routing, and validation.
 - `rpg_engine/content_types/`: content registry and content type contracts.
@@ -105,4 +112,3 @@ python3 -m py_compile path/to/file.py
 - Check that docs and tests match the changed behavior.
 - Confirm no formal current save package was mutated.
 - Summarize the changed boundary, not just the changed files.
-

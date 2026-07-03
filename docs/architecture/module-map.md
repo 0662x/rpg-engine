@@ -33,6 +33,12 @@ replacement for the specs.
 | `rpg_engine/intent_manifest.py` | Player-visible intent/action capability manifest. |
 | `rpg_engine/ai_intent/` | External/internal AI intent candidate, review, binding, and arbitration. |
 | `rpg_engine/ai/` | AI provider/config/task support and state audits. |
+| `rpg_engine/preflight_cache.py` | Advisory internal-intent review cache state machine. |
+
+Primary authority for this area: `docs/specs/standard-intent-chain.md` and
+`docs/specs/ai-intent-prewarm.md`. New natural-language player entry behavior
+should flow through the standard intent chain instead of adding routing policy
+to CLI, MCP, platform, or save-manager surfaces.
 
 ## Context and Visibility
 
@@ -82,6 +88,17 @@ replacement for the specs.
 | `rpg_engine/package_lock.py` | Package lock compatibility surface. |
 | `rpg_engine/resource_paths.py` | Packaged resource lookup. |
 
+## Platform Entry and Prewarm
+
+| Module | Role |
+|---|---|
+| `rpg_engine/platform_sidecar.py` | Thin platform message facade, game-session gate, and act/confirm forwarding. |
+| `rpg_engine/platform_prewarm.py` | Lightweight platform advisory prewarm queue, worker, binding store, and metrics. |
+
+Platform modules should pass passive identifiers and player text into kernel
+services. They should not own final intent policy, hidden context visibility,
+preview approval, validation, or save commits.
+
 ## Compatibility and Legacy
 
 | Module | Role |
@@ -100,4 +117,3 @@ replacement for the specs.
   duplicated in the surface layer.
 - If a module name has both a package form and top-level wrapper, prefer the
   package form for new implementation and leave wrappers thin.
-
