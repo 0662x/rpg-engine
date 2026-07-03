@@ -33,7 +33,11 @@ from .context_audit import write_context_audit
 from .db import get_meta
 from .intent_router import (
     ActionIntent,
+    IntentAIConfig,
+    IntentRequestMeta,
     action_intent_to_dict,
+    make_intent_ai_config,
+    make_intent_request_meta,
     route_intent,
     turn_contract_for_intent,
     turn_contract_to_dict,
@@ -84,6 +88,8 @@ class BuildState:
     semantic_model: str
     semantic_provider: str
     semantic_timeout: int
+    intent_config: IntentAIConfig
+    request_meta: IntentRequestMeta
     intent_ai: str
     intent_backend: str
     intent_model: str
@@ -172,6 +178,39 @@ def build_context(
     audit_context_run_id: str | None = None,
 ) -> ContextBuildResult:
     del output_format
+    campaign_budget = int(campaign.context_budget or 2500)
+    budget_limit = max(500, int(budget if budget is not None else campaign.context_budget or 2500))
+    max_events_value = max(0, int(max_events))
+    max_depth_value = max(0, int(max_depth))
+    semantic_timeout_value = max(3, int(semantic_timeout))
+    intent_timeout_value = max(3, int(intent_timeout))
+    intent_base_url_value = str(intent_base_url or "")
+    intent_api_key_env_value = str(intent_api_key_env or "")
+    intent_fallback_backend_value = str(intent_fallback_backend or "off")
+    preflight_id_value = str(preflight_id or "")
+    message_id_value = str(message_id or "")
+    platform_value = str(platform or "")
+    session_key_value = str(session_key or "")
+    source_user_text_hash_value = str(source_user_text_hash or "")
+    preflight_pending_wait_ms_value = max(0, int(preflight_pending_wait_ms))
+    intent_config = make_intent_ai_config(
+        intent_ai=intent_ai,
+        intent_backend=intent_backend,
+        intent_provider=intent_provider,
+        intent_model=intent_model,
+        intent_timeout=intent_timeout_value,
+        intent_base_url=intent_base_url_value,
+        intent_api_key_env=intent_api_key_env_value,
+        intent_fallback_backend=intent_fallback_backend_value,
+    )
+    request_meta = make_intent_request_meta(
+        preflight_id=preflight_id_value,
+        message_id=message_id_value,
+        platform=platform_value,
+        session_key=session_key_value,
+        source_user_text_hash=source_user_text_hash_value,
+        preflight_pending_wait_ms=preflight_pending_wait_ms_value,
+    )
     state = BuildState(
         campaign=campaign,
         conn=conn,
@@ -179,31 +218,33 @@ def build_context(
         mode_arg=mode,
         submode_arg=submode,
         requested_budget=budget,
-        campaign_budget=int(campaign.context_budget or 2500),
-        budget_limit=max(500, int(budget if budget is not None else campaign.context_budget or 2500)),
-        max_events=max(0, int(max_events)),
-        max_depth=max(0, int(max_depth)),
+        campaign_budget=campaign_budget,
+        budget_limit=budget_limit,
+        max_events=max_events_value,
+        max_depth=max_depth_value,
         include_palettes=include_palettes,
         debug=debug,
         semantic_ai=semantic_ai,
         semantic_model=semantic_model,
         semantic_provider=semantic_provider,
-        semantic_timeout=max(3, int(semantic_timeout)),
+        semantic_timeout=semantic_timeout_value,
+        intent_config=intent_config,
+        request_meta=request_meta,
         intent_ai=intent_ai,
         intent_backend=intent_backend,
         intent_model=intent_model,
         intent_provider=intent_provider,
-        intent_timeout=max(3, int(intent_timeout)),
-        intent_base_url=str(intent_base_url or ""),
-        intent_api_key_env=str(intent_api_key_env or ""),
-        intent_fallback_backend=str(intent_fallback_backend or "off"),
+        intent_timeout=intent_timeout_value,
+        intent_base_url=intent_base_url_value,
+        intent_api_key_env=intent_api_key_env_value,
+        intent_fallback_backend=intent_fallback_backend_value,
         external_intent_candidate=external_intent_candidate,
-        preflight_id=str(preflight_id or ""),
-        message_id=str(message_id or ""),
-        platform=str(platform or ""),
-        session_key=str(session_key or ""),
-        source_user_text_hash=str(source_user_text_hash or ""),
-        preflight_pending_wait_ms=max(0, int(preflight_pending_wait_ms)),
+        preflight_id=preflight_id_value,
+        message_id=message_id_value,
+        platform=platform_value,
+        session_key=session_key_value,
+        source_user_text_hash=source_user_text_hash_value,
+        preflight_pending_wait_ms=preflight_pending_wait_ms_value,
     )
     return default_context_pipeline().run(
         state,
@@ -251,21 +292,21 @@ def classify_request(state: BuildState) -> None:
         semantic_provider=state.semantic_provider,
         semantic_model=state.semantic_model,
         semantic_timeout=state.semantic_timeout,
-        intent_ai=state.intent_ai,
-        intent_backend=state.intent_backend,
-        intent_provider=state.intent_provider,
-        intent_model=state.intent_model,
-        intent_timeout=state.intent_timeout,
-        intent_base_url=state.intent_base_url,
-        intent_api_key_env=state.intent_api_key_env,
-        intent_fallback_backend=state.intent_fallback_backend,
+        intent_ai=state.intent_config.mode,
+        intent_backend=state.intent_config.backend,
+        intent_provider=state.intent_config.provider,
+        intent_model=state.intent_config.model,
+        intent_timeout=state.intent_config.timeout,
+        intent_base_url=state.intent_config.base_url,
+        intent_api_key_env=state.intent_config.api_key_env,
+        intent_fallback_backend=state.intent_config.fallback_backend,
         external_intent_candidate=state.external_intent_candidate,
-        preflight_id=state.preflight_id,
-        message_id=state.message_id,
-        platform=state.platform,
-        session_key=state.session_key,
-        source_user_text_hash=state.source_user_text_hash,
-        preflight_pending_wait_ms=state.preflight_pending_wait_ms,
+        preflight_id=state.request_meta.preflight_id,
+        message_id=state.request_meta.message_id,
+        platform=state.request_meta.platform,
+        session_key=state.request_meta.session_key,
+        source_user_text_hash=state.request_meta.source_user_text_hash,
+        preflight_pending_wait_ms=state.request_meta.preflight_pending_wait_ms,
     )
     apply_intent_classification(state, intent)
 

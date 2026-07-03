@@ -440,3 +440,93 @@ Documentation sync:
 - This implementation log records the Phase 3a Runtime-only bundling scope and
   intentionally defers ContextBuilder/MCP/SaveManager bundling to Phases 3b/3c.
 - Final Round 4 expert review is complete with no blockers.
+
+## Round 5: Phase 3b ContextBuilder Intent Bundling
+
+Status: **COMPLETE**
+
+Goal:
+
+Bundle ContextBuilder's internal intent configuration and passive request
+identity into `IntentAIConfig` and `IntentRequestMeta` while preserving the
+existing `build_context()` public signature and rendered request shape.
+
+Code scope:
+
+- `rpg_engine/context_builder.py`
+- `tests/test_runtime.py`
+
+Runtime behavior impact:
+
+- `BuildState` now carries internal `intent_config` and `request_meta` value
+  objects.
+- `build_context()` still accepts the same public parameters.
+- `classify_request()` now passes normalized internal config/meta values from
+  those objects into `route_intent()`.
+- Existing rendered `request["intent_ai"]` fields continue to use the
+  pre-existing BuildState display fields, so this round does not change the
+  context packet surface.
+- External candidate input remains separate from passive request metadata.
+- Runtime, MCP, CLI, SaveManager, platform, preflight-cache, resolver,
+  validation, and commit code are unchanged.
+
+Added regression coverage:
+
+- `test_start_turn_bundles_context_builder_intent_config_without_changing_request_surface`
+  - Confirms `start_turn()` / ContextBuilder sends normalized intent config into
+    the intent route trace.
+  - Confirms the existing `context.request["intent_ai"]` display surface stays
+    compatible for raw backend/provider/model fields and clamped pending wait.
+
+Verification so far:
+
+```bash
+python3 -m compileall -q rpg_engine/context_builder.py tests/test_runtime.py
+
+python3 -m pytest -q tests/test_runtime.py \
+  -k "start_turn_bundles_context_builder_intent_config or start_turn_records_external_intent_candidate or preview_from_text_bundles_runtime_intent_config"
+
+python3 -m pytest -q tests/test_mcp_adapter.py tests/test_save_manager.py \
+  -k "player_profile or player_turn or player_act or player_workflow or standard_entry or external_candidate"
+
+python3 -m pytest -q tests/test_current_native_context.py tests/test_context_quality.py tests/test_runtime.py \
+  -k "context or start_turn or start_turn_bundles_context_builder_intent_config"
+
+python3 -m pytest -q tests/test_ai_intent.py tests/test_runtime.py tests/test_save_manager.py \
+  -k "intent_ai or intent_router or external_intent_candidate or semantic_suggestion or gold_set or candidate_preparation_characterization or route_preparation_cases_unsaved or prepare_intent_candidates or conflicting_external_candidate or start_turn_bundles_context_builder_intent_config"
+
+git diff --check
+```
+
+Result:
+
+```text
+compileall passed
+3 passed, 57 deselected
+13 passed, 18 deselected, 17 subtests passed
+24 passed, 56 deselected, 25 subtests passed
+21 passed, 88 deselected, 40 subtests passed
+git diff --check passed
+```
+
+Expert code review:
+
+- Engine boundary: pass. Confirmed normalized config/meta are internal only and
+  public/deferred boundaries remain untouched.
+- AI intent safety: pass. Confirmed `IntentRequestMeta` remains passive-only
+  and external candidate input stays separate.
+- Gameplay turn flow: pass. Confirmed `start_turn()` and context packet behavior
+  remain compatible.
+- Platform/MCP integration: pass. Confirmed no MCP, CLI, SaveManager, platform,
+  Runtime, preflight-cache, or intent-router files changed.
+- QA/regression: pass. Confirmed route trace normalization and existing context
+  request display behavior are covered.
+- Repo/docs: pass. Confirmed the implementation log matches the staged diff and
+  verification results.
+
+Documentation sync:
+
+- This implementation log records the Phase 3b ContextBuilder-only bundling
+  scope and intentionally defers MCP/CLI/SaveManager call-site bundling to
+  Phase 3c.
+- Final Round 5 expert review is complete with no blockers.

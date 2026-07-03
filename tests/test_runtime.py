@@ -1302,6 +1302,41 @@ class GMRuntimeTests(unittest.TestCase):
             self.assertEqual(start.decision_trace["intent_ai"]["external_candidate"]["action"], "rest")
             self.assertEqual(start.context.request["intent_ai"]["decision"]["source"], "rules_fallback")
 
+    def test_start_turn_bundles_context_builder_intent_config_without_changing_request_surface(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = GMRuntime.from_path(copy_minimal_campaign(tmp))
+
+            start = runtime.start_turn(
+                "休息到早上",
+                intent_backend="hermes",
+                intent_provider="",
+                intent_model="",
+                intent_timeout=1,
+                intent_base_url="https://ai.example.test/v1",
+                intent_api_key_env="TEST_AI_KEY",
+                intent_fallback_backend="hermes",
+                message_id="msg:context-bundle",
+                platform="qq",
+                session_key="room:context-bundle",
+                preflight_pending_wait_ms=-5,
+            )
+
+            request_ai = start.context.request["intent_ai"]
+            trace = start.decision_trace["intent_ai"]
+            self.assertEqual(request_ai["backend"], "hermes")
+            self.assertEqual(request_ai["provider"], "")
+            self.assertEqual(request_ai["model"], "")
+            self.assertEqual(request_ai["timeout"], 3)
+            self.assertEqual(request_ai["preflight_pending_wait_ms"], 0)
+            self.assertEqual(request_ai["message_id"], "msg:context-bundle")
+            self.assertEqual(trace["backend"], "hermes_z")
+            self.assertEqual(trace["provider"], DEFAULT_AI_PROVIDER)
+            self.assertEqual(trace["model"], DEFAULT_AI_MODEL)
+            self.assertEqual(trace["timeout"], 3)
+            self.assertEqual(trace["base_url"], "https://ai.example.test/v1")
+            self.assertEqual(trace["api_key_env"], "TEST_AI_KEY")
+            self.assertEqual(trace["fallback_backend"], "hermes_z")
+
     def test_external_intent_candidate_schema_error_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             runtime = GMRuntime.from_path(copy_minimal_campaign(tmp))
