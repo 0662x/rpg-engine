@@ -3,8 +3,8 @@
 文档状态：**CURRENT：BMAD canonical AI intent authority**
 
 本文件是 RPG Engine 当前 AI intent、internal review、advisory preflight、platform
-prewarm 和玩家自然语言入口的 canonical 文档。旧文档仍保留为迁移来源，但日常开发应先读
-本文件。
+prewarm 和玩家自然语言入口的 canonical 文档。旧路径已在 BMAD Round 4C 转为
+compatibility stubs；日常开发应先读本文件。
 
 ## 核心结论
 
@@ -420,5 +420,7 @@ python3 -m pytest -q tests/test_ai_intent.py tests/test_runtime.py tests/test_mc
 - [`specs/mcp-adapter.md`](specs/mcp-adapter.md)
 - [`specs/cli.md`](specs/cli.md)
 
-这些旧文档暂时仍保留作历史证据和更细的实施记录。若它们与本文件冲突，应先对照当前代码
-和测试，再更新本文件或归档旧段落。
+这些旧路径现在是 compatibility stubs，原文位于
+[`archive/pre-bmad-docs-2026-07-03/`](archive/pre-bmad-docs-2026-07-03/)。
+归档原文只作历史证据和更细的实施记录。若它们与本文件冲突，应先对照当前代码和测试，
+再更新本文件或归档材料说明。

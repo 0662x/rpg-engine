@@ -1,6 +1,6 @@
 # BMAD 文档体系迁移计划
 
-文档状态：**ACTIVE：Round 4B 摘取完成**
+文档状态：**ACTIVE：Round 4C 归档完成**
 
 日期：2026-07-04
 
@@ -16,11 +16,11 @@
   包边界内容；`docs/data-models.md` 已合并 SQLite / manifest / proposal / registry
   数据模型内容；`docs/cli-contracts.md` 已合并当前 CLI public / low-level / admin
   合同内容；`docs/mcp-contracts.md` 已合并 MCP profile / tool / adapter 合同内容。
-- Round 4：已开始。旧 `docs/architecture`、`docs/specs`、`docs/guides`、`docs/prompts`
-  的归档映射见 [`../round-4-archive-map.md`](../round-4-archive-map.md)。Round 4B 已处理
+- Round 4：已执行。旧 `docs/architecture`、`docs/specs`、`docs/guides` 原文已归档到
+  `docs/archive/pre-bmad-docs-2026-07-03/`，旧路径保留 compatibility stubs。Round 4B 已处理
   `extract-before-archive` 和 `decision-needed` 项：作者指南、prompt 长期位置、V1 产品边界
-  和残余风险已迁入 canonical docs / BMAD backlog。尚未移动或归档旧文件。
-- Round 5：待执行。归档和 stub 完成后做链接、入口和轻量回归门禁。
+  和残余风险已迁入 canonical docs / BMAD backlog。`docs/prompts/` 保持 active prompt artifact。
+- Round 5：待执行。归档和 stub 完成后做入口、链接和轻量回归门禁。
 
 ## 目标
 
@@ -70,6 +70,12 @@ docs/
   authoring-guide.md
   testing-and-quality-gates.md
   project-context.md
+  architecture/
+    *.md compatibility stubs
+  specs/
+    *.md compatibility stubs
+  guides/
+    *.md compatibility stubs
   prompts/
     ai-client-prompt.md
     author-ai-prompt.md
@@ -84,7 +90,8 @@ docs/
 
 - `docs/index.md` 成为唯一长期文档入口。
 - `docs/README.md` 可以保留为兼容入口，但只指向 `docs/index.md`，不再维护长索引。
-- 旧 `docs/architecture`、`docs/specs`、`docs/guides` 中仍有价值的内容迁入 canonical docs。
+- 旧 `docs/architecture`、`docs/specs`、`docs/guides` 中仍有价值的内容已迁入 canonical docs；
+  旧路径只保留 compatibility stubs。
 - `docs/prompts/` 保留为 active prompt artifact 目录，由 `docs/prompt-contracts.md` 治理。
 - 旧历史文件整体归档到 `docs/archive/pre-bmad-docs-2026-07-03/`，避免丢历史。
 - `docs/project-context.md` 和 `docs/governance/bmad-workflow.md` 继续保留为 BMAD
@@ -183,6 +190,8 @@ docs/
   的权限边界不混写。
 
 ### Round 4：归档旧分类
+
+状态：已完成。
 
 目标：
 

@@ -3,8 +3,9 @@
 文档状态：**CURRENT：BMAD canonical data model authority**
 
 本文件是 RPG Engine 当前数据模型的 canonical 文档。它描述持久事实、运行合同、投影、
-缓存和包 manifest 的边界。旧 `docs/specs/` 与 `docs/architecture/` 文件仍保留为迁移来源，
-但日常开发应先读本文件。
+缓存和包 manifest 的边界。旧 `docs/specs/` 与 `docs/architecture/` 路径现在是
+compatibility stubs，原文位于 [`archive/pre-bmad-docs-2026-07-03/`](archive/pre-bmad-docs-2026-07-03/)；
+日常开发应先读本文件。
 
 ## 核心结论
 

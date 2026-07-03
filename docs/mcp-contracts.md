@@ -4,8 +4,10 @@
 
 本文件是 RPG Engine / AIGM Kernel 当前 MCP adapter、MCP profile、工具暴露、AI helper
 边界和玩家安全入口的 canonical 文档。旧 [`specs/mcp-adapter.md`](specs/mcp-adapter.md)
-仍保留为迁移来源，但日常开发应先读本文件，并以当前 `rpg_engine/mcp_adapter.py`、
-`SaveManager`、`GMRuntime`、[`ai-intent-chain.md`](ai-intent-chain.md) 和
+现在是 compatibility stub，原文位于
+[`archive/pre-bmad-docs-2026-07-03/specs/mcp-adapter.md`](archive/pre-bmad-docs-2026-07-03/specs/mcp-adapter.md)；
+日常开发应先读本文件，并以当前 `rpg_engine/mcp_adapter.py`、`SaveManager`、`GMRuntime`、
+[`ai-intent-chain.md`](ai-intent-chain.md) 和
 [`cli-contracts.md`](cli-contracts.md) 为准。
 
 ## 核心结论

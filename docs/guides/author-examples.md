@@ -1,71 +1,12 @@
-# AIGM Author Examples
+# Author Examples
 
-## Investigation Campaign
+文档状态：**ARCHIVED STUB：BMAD Round 4C**
 
-Capabilities:
+原文已归档到 [archive](../archive/pre-bmad-docs-2026-07-03/guides/author-examples.md)。
+本旧路径仅用于兼容历史链接，不再作为当前规范入口。
 
-```text
-query, explore, clue, risk, social, travel, random_table, rest_time
-```
+当前权威入口：
 
-Content focus:
+- [作者指南](../authoring-guide.md)
 
-- 3-5 locations.
-- 2-4 NPCs.
-- 3-6 clue/reference entities.
-- 1-2 progress clocks.
-- Random tables for scene details and complications.
-
-Smoke tests:
-
-- Query scene.
-- Query a clue.
-- Preview explore.
-- Preview travel.
-- Rest preview.
-
-## Survival Campaign
-
-Capabilities:
-
-```text
-query, travel, gather_search, inventory_resource, project_task, risk, rest_time, clock
-```
-
-Content focus:
-
-- Resources and tools.
-- Weather or hunger clocks.
-- Projects such as shelter repair.
-- Routes with hazards.
-
-## Social Faction Campaign
-
-Capabilities:
-
-```text
-query, social, trade_exchange, clue, clock, random_table
-```
-
-Content focus:
-
-- NPCs and relationships.
-- Faction-state entities.
-- Clocks for suspicion, trust, or deadlines.
-
-## Combat Defense Campaign
-
-Capabilities:
-
-```text
-query, combat, risk, inventory_resource, project_task, rest_time
-```
-
-Content focus:
-
-- Threats.
-- Weapons and ammunition.
-- Defensive projects.
-- Clear rules for confirmation and consequences.
-
-Combat campaigns should always include a combat smoke test with target, weapon, distance, and ready state.
+历史材料仅作证据；若与当前代码或 canonical docs 冲突，以当前代码和 canonical docs 为准。

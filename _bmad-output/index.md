@@ -27,7 +27,9 @@
 
 ## 迁移边界
 
-- 旧文档仍保留在 [docs](../docs/)。
+- Round 4C 后，旧 `architecture/`、`specs/`、`guides/` 正文已归档到
+  [`docs/archive/pre-bmad-docs-2026-07-03/`](../docs/archive/pre-bmad-docs-2026-07-03/)，
+  旧路径保留 compatibility stubs。
 - 本轮不移动旧文档，不改代码行为，不替换正式 README。
 - 后续迁移以本目录为临时 BMAD 扫描输出，再整理为 `docs/` 下的 canonical 文档。
 - 已有迁移计划见 [BMAD 文档迁移计划](./planning-artifacts/bmad-documentation-migration-plan.md)。
@@ -37,4 +39,4 @@
 1. 先人工校准本扫描结果，再生成 `docs/index.md`、`docs/architecture.md`、`docs/development-guide.md` 等新主文档。
 2. 逐篇审查旧 `docs/`，只迁移仍符合当前代码事实的内容。
 3. 为 AI 意图链、平台预热链、写入提交链建立单独受控章节。
-4. 旧文档完成吸收后归档到 `docs/archive/pre-bmad-docs-2026-07-03/`。
+4. Round 4C 已把旧文档完成吸收后的原文归档到 `docs/archive/pre-bmad-docs-2026-07-03/`。

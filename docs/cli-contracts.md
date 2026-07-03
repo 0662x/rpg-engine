@@ -3,9 +3,10 @@
 文档状态：**CURRENT：BMAD canonical CLI contract authority**
 
 本文件是 RPG Engine / AIGM Kernel 当前命令行入口、玩家可见流程、低层运行时工具和维护命令的
-canonical 文档。旧 `docs/specs/cli.md` 仍保留为迁移来源，但日常开发应先读本文件，并以
-当前 `rpg_engine/cli_v1.py`、`rpg_engine/cli.py`、`SaveManager`、`GMRuntime` 和 MCP/profile
-代码事实为准。
+canonical 文档。旧 `docs/specs/cli.md` 现在是 compatibility stub，原文位于
+[`archive/pre-bmad-docs-2026-07-03/specs/cli.md`](archive/pre-bmad-docs-2026-07-03/specs/cli.md)；
+日常开发应先读本文件，并以当前 `rpg_engine/cli_v1.py`、`rpg_engine/cli.py`、`SaveManager`、
+`GMRuntime` 和 MCP/profile 代码事实为准。
 
 ## 核心结论
 

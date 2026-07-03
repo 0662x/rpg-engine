@@ -1,44 +1,12 @@
-# AIGM Author Maintenance
+# Author Maintenance
 
-Use this checklist when updating an existing Campaign Package.
+文档状态：**ARCHIVED STUB：BMAD Round 4C**
 
-## Safe Campaign Edits
+原文已归档到 [archive](../archive/pre-bmad-docs-2026-07-03/guides/author-maintenance.md)。
+本旧路径仅用于兼容历史链接，不再作为当前规范入口。
 
-- Fix typos in names and summaries.
-- Add aliases.
-- Add new locations, NPCs, items, rules, clocks, routes, random tables.
-- Add smoke tests for newly declared capabilities.
-- Improve prompts and response templates.
+当前权威入口：
 
-Run after edits:
+- [作者指南](../authoring-guide.md)
 
-```bash
-aigm campaign doctor ./campaigns/my-story
-aigm campaign test ./campaigns/my-story
-```
-
-## Be Careful With Existing Saves
-
-Changing campaign source files does not automatically update existing Save Packages.
-
-Be careful when changing:
-
-- Entity IDs.
-- Starting location.
-- Player entity ID.
-- Fields that may change during play, such as `location_id`, `owner_id`, inventory quantities, clock filled segments, or relationship trust.
-
-If a player save already exists, use a controlled package upgrade, save patch, or gameplay commit path rather than hand-editing save files.
-
-## Versioning
-
-When publishing a revised campaign:
-
-1. Update `package_version`.
-2. Run `campaign doctor --strict`.
-3. Run `campaign test`.
-4. Generate an outline for review:
-
-```bash
-aigm campaign outline ./campaigns/my-story > RELEASE_OUTLINE.md
-```
+历史材料仅作证据；若与当前代码或 canonical docs 冲突，以当前代码和 canonical docs 为准。

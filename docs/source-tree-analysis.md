@@ -75,15 +75,15 @@ rpg_engine/
 
 ## 文档结构
 
-当前长期入口是 [`index.md`](index.md)。旧目录仍保留作为迁移来源：
+当前长期入口是 [`index.md`](index.md)。旧目录在 BMAD Round 4C 后只保留 compatibility stubs：
 
 - [`architecture/`](architecture/)
 - [`specs/`](specs/)
 - [`guides/`](guides/)
-- [`prompts/`](prompts/)
 
-旧文档包含阶段性设计、审查记录、重构计划和实现日志。迁移时必须逐篇判断当前代码事实，
-不能批量搬运为 canonical 规范。
+归档原文位于 [`archive/pre-bmad-docs-2026-07-03/`](archive/pre-bmad-docs-2026-07-03/)。
+`prompts/` 是 active prompt artifact 目录，由 [Prompt 合同](prompt-contracts.md) 治理。
+归档原文包含阶段性设计、审查记录、重构计划和实现日志，只作历史证据。
 
 ## 运行数据风险
 

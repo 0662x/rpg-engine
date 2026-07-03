@@ -4,7 +4,8 @@
 
 本文件是 RPG Engine 当前 Campaign Package、Save Package、player workspace registry、
 存档归档和相关玩家入口的 canonical 文档。旧 `docs/specs/` 与 `docs/architecture/`
-文件仍保留为迁移来源，但日常开发应先读本文件。
+路径现在是 compatibility stubs，原文位于 [`archive/pre-bmad-docs-2026-07-03/`](archive/pre-bmad-docs-2026-07-03/)；
+日常开发应先读本文件。
 
 ## 核心结论
 

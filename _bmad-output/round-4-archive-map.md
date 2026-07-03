@@ -1,6 +1,6 @@
 # Round 4 旧文档归档映射表
 
-文档状态：ACTIVE / Round 4B Extraction Complete
+文档状态：ACTIVE / Round 4C Archive Complete
 语言：zh-CN
 日期：2026-07-04
 
@@ -8,13 +8,14 @@
 
 本文件是 BMAD Round 4 的归档映射表：扫描旧 `docs/architecture/`、`docs/specs/`、
 `docs/guides/`、`docs/prompts/`，判断每个旧文件在归档前应如何处理。Round 4B 已处理
-`extract-before-archive` 和 `decision-needed` 项；下一步可进入 Round 4C 归档/stub。
+`extract-before-archive` 和 `decision-needed` 项；Round 4C 已归档旧
+`architecture/specs/guides` 原文并在旧路径保留 short stubs。
 
-本步骤只做映射，不移动、不删除、不改 Python 行为。
+Round 4C 只移动 Markdown 原文和新增 stub，不改 Python 行为。
 
 ## 扫描范围
 
-旧目录当前共有 28 个 Markdown 文件：
+Round 4A 扫描时旧目录共有 28 个 Markdown 文件：
 
 | 目录 | 文件数 |
 | --- | ---: |
@@ -22,6 +23,12 @@
 | `docs/specs/` | 8 |
 | `docs/guides/` | 3 |
 | `docs/prompts/` | 2 |
+
+Round 4C 后：
+
+- `docs/architecture/`、`docs/specs/`、`docs/guides/` 只保留 compatibility stubs。
+- 原文位于 [`docs/archive/pre-bmad-docs-2026-07-03/`](../docs/archive/pre-bmad-docs-2026-07-03/)。
+- `docs/prompts/` 仍是 active prompt artifact 目录，没有归档。
 
 Round 3 已建立当前 canonical 领域文档：
 
@@ -49,7 +56,7 @@ Round 3 已建立当前 canonical 领域文档：
 
 ## 高层结论
 
-可以高置信进入下一步 `stub+archive` 的主线规范：
+已完成 `stub+archive` 的主线规范：
 
 - `docs/specs/standard-intent-chain.md`
 - `docs/specs/ai-intent-prewarm.md`
@@ -63,17 +70,22 @@ Round 3 已建立当前 canonical 领域文档：
 - `docs/architecture/review.md`
 - `docs/architecture/phase-0-surface-inventory.md`
 
-Round 4B 已处理的摘取/决策项：
+Round 4B/4C 已处理的摘取、决策和归档项：
 
 - `docs/specs/kernel-requirements.md`：V1 产品边界和非目标已补入
-  [`docs/project-overview.md`](../docs/project-overview.md)，后续可 `stub+archive`。
+  [`docs/project-overview.md`](../docs/project-overview.md)，Round 4C 已 `stub+archive`。
 - `docs/guides/author-guide.md`、`docs/guides/author-examples.md`、`docs/guides/author-maintenance.md`：
-  已合并为 [`docs/authoring-guide.md`](../docs/authoring-guide.md)，后续可 `stub+archive`。
+  已合并为 [`docs/authoring-guide.md`](../docs/authoring-guide.md)，Round 4C 已 `stub+archive`。
 - `docs/prompts/ai-client-prompt.md`、`docs/prompts/author-ai-prompt.md`：决策为 `active-artifact`，
   继续保留在 `docs/prompts/`，由 [`docs/prompt-contracts.md`](../docs/prompt-contracts.md) 治理。
 - `docs/architecture/current-code-multi-expert-review.md`：残余风险已摘到
   [`_bmad-output/planning-artifacts/bmad-residual-risk-backlog.md`](planning-artifacts/bmad-residual-risk-backlog.md)
-  并接入 [`docs/testing-and-quality-gates.md`](../docs/testing-and-quality-gates.md)，后续可作为历史评审证据归档。
+  并接入 [`docs/testing-and-quality-gates.md`](../docs/testing-and-quality-gates.md)，Round 4C 已作为历史评审证据归档。
+
+归档目标：
+
+- 原文 archive root：[`docs/archive/pre-bmad-docs-2026-07-03/`](../docs/archive/pre-bmad-docs-2026-07-03/)
+- 旧路径：保留短 stub，指向 archive 原文和当前 canonical 入口。
 
 ## 逐文件映射
 
@@ -132,6 +144,8 @@ Round 4B 已处理的摘取/决策项：
    摘取发布、可靠性、安全、评估、authoring 和 session/concurrency 残余风险。
 
 ### Round 4C：归档高置信已迁移旧文档
+
+状态：已完成。
 
 移动原文到：
 
