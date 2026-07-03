@@ -171,8 +171,10 @@ git diff --check
 
 - 长期项目知识放 `docs/`。
 - BMAD 临时规划产物默认放 `_bmad-output/`。
-- 需要长期保留的 BMAD 产物应整理进 `docs/specs`、`docs/architecture`、
-  `docs/governance` 或 `docs/guides`，并在 `docs/README.md` 登记。
+- 需要长期保留的 BMAD 产物应整理进 canonical docs、`docs/governance`
+  或 active artifact 目录，并在 `docs/README.md` / `docs/index.md` 登记。
+- 旧 `docs/specs`、`docs/architecture` 和 `docs/guides` 只保留 compatibility stubs；
+  不再新增当前规范正文。
 - `_bmad/config.user.toml` 是个人安装配置，不入库。
 - 不要手改 `_bmad/config.toml`；要改安装答案，重新运行 BMAD installer。
 

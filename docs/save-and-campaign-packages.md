@@ -513,7 +513,8 @@ Markdown 链接和 diff whitespace 门禁。
 | `docs/architecture/game-engine.md` | 本文的 package 分层、runtime 原则和当前实现边界。 |
 | `docs/architecture/turn-flow-architecture.md` | 本文的 player turn、confirm、projection 与 profile 边界。 |
 
-旧文档与本文冲突时，以本文和当前代码事实为准。Round 4 归档前，旧文件保留为历史证据和细节来源。
+旧文档与本文冲突时，以本文和当前代码事实为准。Round 4C 后，旧路径只保留 stub；
+原文位于 [pre-BMAD archive](archive/pre-bmad-docs-2026-07-03/) 并只作为历史证据。
 
 ## 开发检查清单
 

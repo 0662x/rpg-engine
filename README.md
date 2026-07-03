@@ -51,14 +51,14 @@ Phase 7.1 已硬化 projection 事务边界、targeted repair、commit/projectio
 
 - 文档索引：[`docs/README.md`](docs/README.md)
 - 开发入口：[`AGENTS.md`](AGENTS.md)、[`docs/project-context.md`](docs/project-context.md)、[`docs/development-workflow.md`](docs/development-workflow.md)
-- 产品边界：[`docs/specs/kernel-requirements.md`](docs/specs/kernel-requirements.md)
-- Campaign 规范：[`docs/specs/campaign-package.md`](docs/specs/campaign-package.md)
-- Save 规范：[`docs/specs/save-package.md`](docs/specs/save-package.md)
-- CLI 规范：[`docs/specs/cli.md`](docs/specs/cli.md)
-- MCP 规范：[`docs/specs/mcp-adapter.md`](docs/specs/mcp-adapter.md)
-- 作者指南：[`docs/guides/author-guide.md`](docs/guides/author-guide.md)
+- 产品边界：[`docs/project-overview.md`](docs/project-overview.md)
+- Campaign / Save 规范：[`docs/save-and-campaign-packages.md`](docs/save-and-campaign-packages.md)
+- CLI 规范：[`docs/cli-contracts.md`](docs/cli-contracts.md)
+- MCP 规范：[`docs/mcp-contracts.md`](docs/mcp-contracts.md)
+- 作者指南：[`docs/authoring-guide.md`](docs/authoring-guide.md)
 - AI 客户端 Prompt：[`docs/prompts/ai-client-prompt.md`](docs/prompts/ai-client-prompt.md)
-- 模块边界图：[`docs/architecture/module-map.md`](docs/architecture/module-map.md)
+- 模块边界：[`docs/component-inventory.md`](docs/component-inventory.md)、[`docs/source-tree-analysis.md`](docs/source-tree-analysis.md)
+- 旧文档归档：[`docs/archive/pre-bmad-docs-2026-07-03/`](docs/archive/pre-bmad-docs-2026-07-03/)
 
 ## Included Campaign Content
 

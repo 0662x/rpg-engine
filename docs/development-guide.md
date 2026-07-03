@@ -119,8 +119,9 @@ GitHub Actions 当前在 Python 3.11 和 3.12 上运行：
 
 - `docs/` 是 canonical 文档区。
 - `_bmad-output/` 是扫描、规划和实施产物区。
-- 旧 `docs/architecture`、`docs/specs`、`docs/guides`、`docs/prompts` 内容不能批量照搬。
-- 每篇旧文档迁移前必须判断：仍有效、部分有效、已过期、应归档。
+- 旧 `docs/architecture`、`docs/specs`、`docs/guides` 路径只保留 compatibility stubs；
+  归档原文只能作为历史证据，不能批量照搬。
+- `docs/prompts` 是 active prompt artifact 目录，变更时按 [Prompt 合同](prompt-contracts.md) 审核。
 - 长期入口更新 [`index.md`](index.md)。
 - 一次性报告和 probe 输出放入 `reports/YYYY-MM-DD/`。
 

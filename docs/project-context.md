@@ -93,17 +93,24 @@ BMAD 是本仓库的强流程层。后续开发不是“想改哪里就改哪里
 2. `AGENTS.md`
 3. `docs/governance/bmad-workflow.md`
 4. `docs/development-workflow.md`
-5. `docs/architecture/module-map.md`
-6. touched surface 对应的 spec / architecture 文档
-7. `TESTING.md`
+5. `docs/development-guide.md`
+6. `docs/architecture.md`
+7. `docs/component-inventory.md`
+8. touched surface 对应的 canonical 文档
+9. `docs/testing-and-quality-gates.md`
 
 AI intent 相关改动还必须读取：
 
-- `docs/specs/standard-intent-chain.md`
-- `docs/specs/ai-intent-prewarm.md`
-- `docs/architecture/intent-coordinator-refactor-plan.md`
-- `docs/architecture/intent-refactor-implementation-log.md`
-- `docs/architecture/future-turn-coordinator-design.md`
+- `docs/ai-intent-chain.md`
+- `docs/mcp-contracts.md`
+- `docs/cli-contracts.md`
+- `docs/prompt-contracts.md`
+
+Save/Campaign、CLI、MCP、数据模型或作者流程相关改动还应读取：
+
+- `docs/save-and-campaign-packages.md`
+- `docs/data-models.md`
+- `docs/authoring-guide.md`
 
 ## 测试期望
 

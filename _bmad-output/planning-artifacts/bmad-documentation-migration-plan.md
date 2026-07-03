@@ -1,6 +1,6 @@
 # BMAD 文档体系迁移计划
 
-文档状态：**ACTIVE：Round 4C 归档完成**
+文档状态：**COMPLETE：Round 5 收尾门禁完成**
 
 日期：2026-07-04
 
@@ -20,7 +20,8 @@
   `docs/archive/pre-bmad-docs-2026-07-03/`，旧路径保留 compatibility stubs。Round 4B 已处理
   `extract-before-archive` 和 `decision-needed` 项：作者指南、prompt 长期位置、V1 产品边界
   和残余风险已迁入 canonical docs / BMAD backlog。`docs/prompts/` 保持 active prompt artifact。
-- Round 5：待执行。归档和 stub 完成后做入口、链接和轻量回归门禁。
+- Round 5：已执行。入口、旧引用、Markdown 链接和轻量回归门禁已收尾，记录见
+  [`../round-5-docs-gate-report.md`](../round-5-docs-gate-report.md)。
 
 ## 目标
 
@@ -215,6 +216,8 @@ docs/
 
 ### Round 5：链接和回归门禁
 
+状态：已完成。
+
 目标：
 
 - 检查 Markdown 链接。
@@ -231,6 +234,16 @@ python3 -m pytest -q tests/test_ai_intent.py tests/test_save_manager.py
 ```
 
 如涉及 CLI/MCP 文档的命令示例，也应跑对应 focused tests。
+
+Round 5 实际执行：
+
+```bash
+git diff --check
+python3 scripts/check_markdown_links.py docs _bmad-output
+python3 -m pytest -q tests/test_ai_intent.py tests/test_save_manager.py
+```
+
+收尾报告见 [`../round-5-docs-gate-report.md`](../round-5-docs-gate-report.md)。
 
 ## Review Gate
 
@@ -253,7 +266,7 @@ python3 -m pytest -q tests/test_ai_intent.py tests/test_save_manager.py
 
 ## 建议结论
 
-采用“BMAD generated draft -> curated canonical docs -> old docs archive”的路线。
+已采用“BMAD generated draft -> curated canonical docs -> old docs archive”的路线。
 
-不要直接把旧 `docs/` 原地改成另一个复杂分类；应该用 BMAD 的少数核心文档作为
-长期入口，把旧文档变成归档证据。
+旧 `docs/architecture`、`docs/specs` 和 `docs/guides` 已变成 compatibility stubs，
+原文是归档证据。后续维护应更新少数 canonical docs，而不是恢复旧分类为当前规范入口。

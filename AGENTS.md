@@ -38,10 +38,9 @@ change first and follow the BMAD workflow:
   validation.
 - AI output is always untrusted until routed through preview, validation, and
   commit.
-- AI intent recognition authority is documented in
-  `docs/specs/ai-intent-prewarm.md`. External AI may propose candidates, but
-  final routing, binding, preview, validation, and commit authority stay inside
-  the engine.
+- AI intent recognition authority is documented in `docs/ai-intent-chain.md`.
+  External AI may propose candidates, but final routing, binding, preview,
+  validation, and commit authority stay inside the engine.
 - Hidden/GM-only content must not leak into player views, FTS, scene output, or
   normal query paths.
 - Ordinary play uses Campaign Package + Save Package + GMRuntime + CLI/MCP.
@@ -59,12 +58,17 @@ For broad changes, read these in order:
 1. `docs/README.md`
 2. `docs/project-context.md`
 3. `docs/governance/bmad-workflow.md`
-4. `docs/architecture/module-map.md`
-5. The specific spec or architecture doc for the touched surface.
-6. `TESTING.md`
+4. `docs/development-guide.md`
+5. `docs/architecture.md`
+6. `docs/component-inventory.md`
+7. The canonical doc for the touched surface, such as `docs/ai-intent-chain.md`,
+   `docs/save-and-campaign-packages.md`, `docs/cli-contracts.md`,
+   `docs/mcp-contracts.md`, `docs/data-models.md`, or `docs/authoring-guide.md`.
+8. `docs/testing-and-quality-gates.md`
 
 For narrow bug fixes, at minimum read the touched module, its closest tests, and
-the relevant section of `docs/architecture/module-map.md`.
+the relevant section of `docs/component-inventory.md` or
+`docs/source-tree-analysis.md`.
 
 ## Module Ownership Rules
 
@@ -119,8 +123,8 @@ python3 -m py_compile path/to/file.py
 
 ## Report and Scratch File Policy
 
-- Durable docs go under `docs/specs`, `docs/guides`, `docs/prompts`,
-  `docs/governance`, or `docs/architecture`.
+- Durable docs go under canonical docs in `docs/`, `docs/governance`, or active
+  artifact directories such as `docs/prompts`.
 - Time-boxed research and probe reports go under `reports/YYYY-MM-DD/` with an
   `INDEX.md`.
 - Historical or superseded design material goes under `docs/archive/YYYY-MM-DD/`.

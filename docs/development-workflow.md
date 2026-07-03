@@ -22,13 +22,13 @@ Use this map:
 
 | Change area | Read first | Test cluster |
 |---|---|---|
-| Turn flow | `docs/architecture/turn-flow-architecture.md` | `tests/test_current_native_player_turn.py`, `tests/test_cross_layer_regression.py` |
-| AI intent | `docs/specs/standard-intent-chain.md` | `tests/test_ai_intent.py`, `tests/test_platform_prewarm.py` |
-| Projection/write safety | `docs/architecture/game-engine.md` | `tests/test_projection_service.py`, `tests/test_current_native_write_safety.py` |
-| Campaign package | `docs/specs/campaign-package.md` | `tests/test_campaign_validation.py`, `tests/test_official_example.py` |
-| Save package | `docs/specs/save-package.md` | `tests/test_save_manager.py`, `tests/test_save_patch.py` |
-| MCP | `docs/specs/mcp-adapter.md` | `tests/test_mcp_adapter.py`, `tests/test_mcp_transcript.py` |
-| CLI | `docs/specs/cli.md` | `tests/test_v1_cli.py`, `tests/test_package_cli.py` |
+| Turn flow | `docs/ai-intent-chain.md`, `docs/save-and-campaign-packages.md` | `tests/test_current_native_player_turn.py`, `tests/test_cross_layer_regression.py` |
+| AI intent | `docs/ai-intent-chain.md`, `docs/prompt-contracts.md` | `tests/test_ai_intent.py`, `tests/test_platform_prewarm.py` |
+| Projection/write safety | `docs/architecture.md`, `docs/data-models.md` | `tests/test_projection_service.py`, `tests/test_current_native_write_safety.py` |
+| Campaign package | `docs/save-and-campaign-packages.md`, `docs/authoring-guide.md` | `tests/test_campaign_validation.py`, `tests/test_official_example.py` |
+| Save package | `docs/save-and-campaign-packages.md`, `docs/data-models.md` | `tests/test_save_manager.py`, `tests/test_save_patch.py` |
+| MCP | `docs/mcp-contracts.md`, `docs/prompt-contracts.md` | `tests/test_mcp_adapter.py`, `tests/test_mcp_transcript.py` |
+| CLI | `docs/cli-contracts.md` | `tests/test_v1_cli.py`, `tests/test_package_cli.py` |
 
 ## 3. Keep the Diff Shaped
 
@@ -76,4 +76,3 @@ Record:
 
 If the change affects player-visible output, include a short before/after or CLI
 example.
-
