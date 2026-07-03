@@ -863,3 +863,78 @@ Documentation sync:
   scope. Phase 4 platform verification remains separate and should not be
   combined into this round.
 - Final Round 8 expert review is complete with no blockers.
+
+## Round 9: Phase 4 Platform Verification
+
+Status: **COMPLETE**
+
+Goal:
+
+Verify the platform sidecar and prewarm paths after Phases 1-3, without
+changing platform behavior.
+
+Code scope:
+
+- `docs/architecture/intent-refactor-implementation-log.md`
+
+Runtime behavior impact:
+
+- No runtime, platform, MCP, CLI, SaveManager, preflight-cache, intent-router,
+  resolver, validation, or commit behavior changed.
+- Platform prewarm remains advisory and creates only message-only preflight
+  records.
+- Platform act remains a passive-identity forwarding path into
+  `SaveManager.player_turn()`.
+- Platform confirm remains a forwarding path into `SaveManager.player_confirm()`.
+
+Verification so far:
+
+```bash
+python3 -m pytest -q tests/test_platform_prewarm.py tests/test_platform_ai_simulation.py
+
+python3 -m pytest -q tests/test_platform_sidecar.py
+```
+
+Result:
+
+```text
+11 passed, 21 subtests passed
+5 passed
+```
+
+Expert code review:
+
+- Engine boundary: pass. Confirmed Round 9 is documentation-only and no
+  Runtime/MCP/CLI/SaveManager/platform behavior code changed.
+- AI intent safety: pass. Confirmed platform prewarm remains advisory
+  message-only preflight, platform act/confirm do not decide final intent, and
+  passive identity/external candidate boundaries are unchanged.
+- Gameplay turn flow: pass. Confirmed platform act still routes to
+  `SaveManager.player_turn()` and platform confirm still routes to
+  `SaveManager.player_confirm()`.
+- Platform/MCP integration: pass. Confirmed platform prewarm, AI simulation,
+  and sidecar coverage are aligned with the Phase 4 boundary and MCP/CLI/player
+  surfaces are unchanged.
+- QA/regression: pass. Confirmed Phase 4 minimum verification plus sidecar
+  tests are sufficient for this verification-only round.
+- Repo/docs: pass. Confirmed documentation scope and verification results match
+  the diff and git hygiene is clean.
+
+Residual risks:
+
+- Platform tests use fake AI, temporary workspaces, and in-process sidecar /
+  worker paths; real platform connector, real MCP client, and real model canary
+  coverage remain outside Round 9.
+- Platform act is "not committed" in the gameplay-fact sense: it may still write
+  pending action and last-played metadata, but it does not commit a turn or
+  gameplay facts until `player_confirm()`.
+- Pending action storage remains a workspace-level single slot; multi-platform
+  or multi-session scoped pending stores remain future hardening work.
+- Preflight cache privacy hardening for raw `session_key` / `user_text` remains
+  existing technical debt, not a Round 9 regression.
+
+Documentation sync:
+
+- This implementation log records the Phase 4 platform verification-only scope.
+  No behavior change was required.
+- Final Round 9 expert review is complete with no blockers.
