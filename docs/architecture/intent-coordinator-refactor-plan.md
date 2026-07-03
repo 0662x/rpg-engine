@@ -37,11 +37,14 @@ The goal of this refactor is therefore narrow:
 
 Standard player turn:
 
+`GMRuntime.preview_from_text()` is a facade for natural-language preview. It
+calls intent routing before any actual query/action preview is produced.
+
 ```text
 MCP / CLI / Platform
   -> SaveManager.player_turn()
   -> GMRuntime.act()
-  -> GMRuntime.preview_from_text()
+  -> GMRuntime.preview_from_text()  # facade
   -> route_intent()
   -> AIIntentRouter.route_candidates()
   -> arbiter / binder
@@ -68,7 +71,7 @@ Key source locations:
 | Area | Current owner |
 | --- | --- |
 | Player-safe entry | `rpg_engine/save_manager.py::SaveManager.player_turn` |
-| Natural-language preview | `rpg_engine/runtime.py::GMRuntime.preview_from_text` |
+| Natural-language preview facade; routes intent before previewing | `rpg_engine/runtime.py::GMRuntime.preview_from_text` |
 | Live intent routing | `rpg_engine/intent_router.py::route_intent` |
 | AI review, preflight consumption, arbitration | `rpg_engine/ai_intent/router.py::AIIntentRouter.route_candidates` |
 | Preflight production | `rpg_engine/runtime.py::GMRuntime.preflight_intent` |
