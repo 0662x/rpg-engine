@@ -1,0 +1,47 @@
+entities:
+- id: threat:c3-92847a
+  type: threat
+  name: 湖边聚落灰藓族
+  visibility: known
+  summary: 同An种族/3人/3棚屋/用竹棍操作工具/渔网捕鱼/石板符号同源
+  aliases:
+  - C3
+  - 湖边聚落灰藓族
+- id: threat:t1-night-hum
+  type: threat
+  name: 夜间大型动物
+  visibility: known
+  summary: 每夜远处持续低沉嗡鸣 + 偶尔枯枝断裂/落叶拖行
+  aliases:
+  - T1
+  - 夜间大型动物
+  - 大型不明动物
+- id: threat:t2-large-cat
+  type: threat
+  name: 大型猫科（推测）
+  visibility: known
+  summary: 大型猫科威胁/生态对象模板；是否遭遇、关押、受伤、带幼崽或转为观察对象都属于存档事实。
+- id: threat:t3-hatched-unknown
+  type: threat
+  name: 不明孵化物
+  visibility: known
+  summary: 荆棘圈中央白色孵化残壳（从内撑破）
+  aliases:
+  - T3
+  - 不明孵化物
+- id: threat:t4-reptile
+  type: threat
+  name: 不明爬行生物
+  visibility: known
+  summary: 水潭对岸树上，鳞片湿光/全长~2m/树栖/白天活动
+  aliases:
+  - T4
+  - 不明爬行生物
+- id: threat:t5-large-print
+  type: threat
+  name: 不明大型生物（足迹）
+  visibility: known
+  summary: L6瀑布崖顶发现T5瞭望位/石槽躺卧观察点/5对手掌印最深/可俯瞰领地
+  aliases:
+  - T5
+  - 不明大型生物（足迹）

@@ -1,0 +1,275 @@
+routes:
+- id: route:home--l01-creek
+  from_location_id: loc:home-clearing
+  to_location_id: loc:l01-creek
+  travel_minutes: 15
+  difficulty: normal
+  hazards:
+  - 东南下坡湿石
+  - 夜间水边视线差
+  requirements:
+  - 带竹水筒或容器时注意负重
+- id: route:home--l03-pinewood
+  from_location_id: loc:home-clearing
+  to_location_id: loc:l03-pinewood
+  travel_minutes: 10
+  difficulty: risky
+  hazards:
+  - 大型猫科母带崽风险
+  - 松针地面脚步声较轻但视线遮挡
+  requirements:
+  - 避免深入松林
+  - 保留退路
+- id: route:home--l04-bramble-ring
+  from_location_id: loc:home-clearing
+  to_location_id: loc:l04-bramble-ring
+  travel_minutes: 8
+  difficulty: unknown
+  hazards:
+  - 异常孵化痕迹
+  - 不明孵化物已离开
+  - 黑荆条划伤
+  requirements:
+  - 先远距离观察
+  - 避免直接踩入中央
+- id: route:home--l05-oldwood
+  from_location_id: loc:home-clearing
+  to_location_id: loc:l05-oldwood
+  travel_minutes: 15
+  difficulty: normal
+  hazards:
+  - 腐叶厚影响足迹判断
+  - 树冠遮光
+  requirements:
+  - 标记回家方向
+- id: route:home--l07-sulfur-spring
+  from_location_id: loc:home-clearing
+  to_location_id: loc:l07-sulfur-spring
+  travel_minutes: 20
+  difficulty: normal
+  hazards:
+  - 西北偏北路线较少走
+  - 泉眼湿滑
+  requirements:
+  - 容器
+  - 采硫磺时远离火源
+- id: route:home--l12-niter-crust
+  from_location_id: loc:home-clearing
+  to_location_id: loc:l12-niter-crust
+  travel_minutes: 25
+  difficulty: normal
+  hazards:
+  - 干燥粉尘
+  - 火药原料暴露痕迹
+  requirements:
+  - 干燥容器
+  - 不要靠近明火
+- id: route:home-mycelium-city--home-mycelium-h-room
+  from_location_id: loc:home-mycelium-city
+  to_location_id: loc:home-mycelium-h-room
+  travel_minutes: 1
+  difficulty: friendly
+  hazards:
+  - 进入 An 与小的生活侧室前应先示意
+  requirements:
+  - 沿 H 室侧廊进入
+- id: route:home-mycelium-city--l09-underground-home
+  from_location_id: loc:home-mycelium-city
+  to_location_id: loc:l09-underground-home
+  travel_minutes: 5
+  difficulty: friendly
+  hazards:
+  - 西隧仍需确认菌丝维护状态
+  - 大件物资通过时需放慢
+  requirements:
+  - 走菌丝城西隧
+- id: route:home-mycelium-house--home-clearing
+  from_location_id: loc:home-mycelium-house
+  to_location_id: loc:home-clearing
+  travel_minutes: 1
+  difficulty: easy
+  hazards:
+  - 夜间出门仍需确认照明、门口痕迹和存档登记的陷阱状态
+  requirements:
+  - 从新屋门口进入领地空地
+- id: route:home-mycelium-house--home-mycelium-city
+  from_location_id: loc:home-mycelium-house
+  to_location_id: loc:home-mycelium-city
+  travel_minutes: 1
+  difficulty: easy
+  hazards:
+  - 竖井上下需确认脚下菌丝阶梯是否张开
+  requirements:
+  - 通过新屋地板竖井
+- id: route:home-treehouse--home-clearing
+  from_location_id: loc:home-treehouse
+  to_location_id: loc:home-clearing
+  travel_minutes: 2
+  difficulty: easy
+  hazards:
+  - 绳梯底曾有M1旧布防记录，是否存在必须以存档裁决为准
+  - 夜间下树需确认照明和落脚点
+  requirements:
+  - 查询存档陷阱状态，不得默认M1仍可触发
+  - 大件物品需慢慢下放
+- id: route:l01-creek--l02-pool
+  from_location_id: loc:l01-creek
+  to_location_id: loc:l02-pool
+  travel_minutes: 10
+  difficulty: normal
+  hazards:
+  - 沿溪湿滑
+  - 动物饮水足迹可能带来遭遇
+  requirements:
+  - 沿溪下游行进
+- id: route:l02-pool--l06-waterfall
+  from_location_id: loc:l02-pool
+  to_location_id: loc:l06-waterfall
+  travel_minutes: 10
+  difficulty: risky
+  hazards:
+  - 瀑布深潭湿泥
+  - 大型手掌印历史记录
+  - 水声掩盖接近声
+  requirements:
+  - 保持警戒
+  - 夜间不建议靠近深潭边
+- id: route:l03-pinewood--l14-humus-wetland
+  from_location_id: loc:l03-pinewood
+  to_location_id: loc:l14-humus-wetland
+  travel_minutes: 10
+  difficulty: risky
+  hazards:
+  - 松林猫科母带崽风险
+  - 湿地软泥会留下明显足迹
+  requirements:
+  - 过松林与石灰岩带
+  - 主角亲探前保持谨慎
+- id: route:l05-oldwood--l07-sulfur-spring
+  from_location_id: loc:l05-oldwood
+  to_location_id: loc:l07-sulfur-spring
+  travel_minutes: 10
+  difficulty: normal
+  hazards:
+  - 泉眼湿滑
+  - 硫磺气味掩盖其他气味
+  requirements:
+  - 采硫磺需容器并远离火源
+- id: route:l05-oldwood--l08-stone-terrace
+  from_location_id: loc:l05-oldwood
+  to_location_id: loc:l08-stone-terrace
+  travel_minutes: 10
+  difficulty: normal
+  hazards:
+  - 上坡碎石
+  - 开阔处遮蔽少
+  requirements:
+  - 侦查时降低轮廓暴露
+- id: route:l05-oldwood--l12-niter-crust
+  from_location_id: loc:l05-oldwood
+  to_location_id: loc:l12-niter-crust
+  travel_minutes: 10
+  difficulty: normal
+  hazards:
+  - 红砂岩裂缝
+  - 硝石粉尘需防潮防火
+  requirements:
+  - 带刮取工具和干燥容器
+- id: route:l05-oldwood--l15-grassland-cliff
+  from_location_id: loc:l05-oldwood
+  to_location_id: loc:l15-grassland-cliff
+  travel_minutes: 20
+  difficulty: risky
+  hazards:
+  - 崖顶开阔遮蔽少
+  - 草原边缘可能有非森林势力痕迹
+  requirements:
+  - 过老树林北线
+  - 草原行动前确认水和远行装具
+- id: route:l06-waterfall--l06-t5-overlook-trough
+  from_location_id: loc:l06-waterfall
+  to_location_id: loc:l06-t5-overlook-trough
+  travel_minutes: 8
+  difficulty: dangerous
+  hazards:
+  - T5 观察位
+  - 五对手掌印最深
+  - 可俯瞰领地的高位暴露
+  requirements:
+  - 上崖前确认风向和撤退路线
+  - 不建议单独夜间接近
+- id: route:l06-waterfall--l09-underground-home
+  from_location_id: loc:l06-waterfall
+  to_location_id: loc:l09-underground-home
+  travel_minutes: 5
+  difficulty: friendly
+  hazards:
+  - 地下入口狭窄
+  - 未经招呼进入可能失礼
+  requirements:
+  - 通过 An/小的的居所边界
+  - 进入前表明非敌意
+- id: route:l06-waterfall--l10-river
+  from_location_id: loc:l06-waterfall
+  to_location_id: loc:l10-river
+  travel_minutes: 10
+  difficulty: normal
+  hazards:
+  - 河岸湿滑
+  - 水声掩盖动静
+  requirements:
+  - 沿水系下行
+- id: route:l07-sulfur-spring--l13-stone-trough
+  from_location_id: loc:l07-sulfur-spring
+  to_location_id: loc:l13-stone-trough
+  travel_minutes: 10
+  difficulty: normal
+  hazards:
+  - 石槽边缘湿滑
+  - 深蓝绿水体不可默认安全下水
+  requirements:
+  - 过 L7 泉眼后再行约300步
+- id: route:l10-river--l11-delta
+  from_location_id: loc:l10-river
+  to_location_id: loc:l11-delta
+  travel_minutes: 10
+  difficulty: risky
+  hazards:
+  - 芦苇遮挡视线
+  - 人工渔网可能暴露他者活动
+  requirements:
+  - 接近前先观察火烟和脚印
+- id: route:l11-delta--lake-ashmoss-settlement
+  from_location_id: loc:l11-delta
+  to_location_id: loc:lake-ashmoss-settlement
+  travel_minutes: 8
+  difficulty: wary
+  hazards:
+  - 聚落警惕
+  - 武装接近可能被误判
+  - 棚屋视线交叉
+  requirements:
+  - 交换物
+  - 非敌意姿态
+  - 优先通过 An 中介
+- id: route:l15-grassland-cliff--l15-east-ashmoss-hearth
+  from_location_id: loc:l15-grassland-cliff
+  to_location_id: loc:l15-east-ashmoss-hearth
+  travel_minutes: 5
+  difficulty: wary
+  hazards:
+  - 旧火塘可能暴露灰藓族迁徙线索
+  - 白矿刮痕需避免污染
+  requirements:
+  - 沿断崖东侧搜索
+- id: route:l15-grassland-cliff--l15-west-quartz-quarry
+  from_location_id: loc:l15-grassland-cliff
+  to_location_id: loc:l15-west-quartz-quarry
+  travel_minutes: 5
+  difficulty: wary
+  hazards:
+  - 非灰藓族工具痕迹
+  - 叠石计数柱可能指向外部势力
+  requirements:
+  - 沿断崖西侧搜索
+  - 记录叠石柱朝向

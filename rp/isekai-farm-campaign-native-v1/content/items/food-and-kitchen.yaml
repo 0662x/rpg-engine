@@ -1,0 +1,174 @@
+entities:
+- id: item:berry-vinegar-ferment
+  type: item
+  name: 浆果醋（发酵中）
+  visibility: known
+  summary: 调料/2周后成醋
+  aliases:
+  - 浆果醋（发酵中）
+  item:
+    category: food
+    unit: 竹杯
+    stackable: true
+- id: item:pine-nut-oil
+  type: item
+  name: 松子油
+  visibility: known
+  summary: 食用油
+  aliases:
+  - 松子油
+  item:
+    category: food
+    unit: 竹杯
+    stackable: true
+- id: item:salt
+  type: item
+  name: 盐
+  visibility: known
+  summary: 调料
+  aliases:
+  - 盐
+  item:
+    category: food
+    unit: 勺
+    stackable: true
+- id: item:v1-0629e81966
+  type: item
+  name: 野葱
+  visibility: known
+  summary: 调料
+  aliases:
+  - 野葱
+  item:
+    category: food
+    unit: 根
+    stackable: true
+- id: item:v1-3a6b64e5c1
+  type: item
+  name: 空心菜
+  visibility: known
+  summary: 蔬菜
+  aliases:
+  - 空心菜
+  item:
+    category: food
+    unit: 株
+    stackable: true
+- id: item:v1-7de3677e06
+  type: item
+  name: 浆果醋
+  visibility: known
+  summary: 调料/发酵14天
+  aliases:
+  - 浆果醋
+  item:
+    category: food
+    unit: 竹杯
+    stackable: true
+- id: item:v1-8182ae0835
+  type: item
+  name: 红浆果
+  visibility: known
+  summary: 野果/维生素
+  aliases:
+  - 红浆果
+  item:
+    category: food
+    unit: 竹杯
+    stackable: true
+- id: item:v1-88aed012b9
+  type: item
+  name: 新鲜辣椒
+  visibility: known
+  summary: 调料
+  aliases:
+  - 新鲜辣椒
+  item:
+    category: food
+    stackable: true
+- id: item:v1-8aa915dbc4
+  type: item
+  name: 蒜叶
+  visibility: known
+  summary: 调料
+  aliases:
+  - 蒜叶
+  item:
+    category: food
+    unit: 片
+    stackable: true
+- id: item:v1-a5ed98dd5e
+  type: item
+  name: 生姜
+  visibility: known
+  summary: 调料
+  aliases:
+  - 生姜
+  item:
+    category: food
+    stackable: true
+- id: item:v1-b4fc16271b
+  type: item
+  name: 松子仁
+  visibility: known
+  summary: 坚果/储粮
+  aliases:
+  - 松子仁
+  item:
+    category: food
+    stackable: true
+- id: item:v1-d409c6757a
+  type: item
+  name: 红辣椒
+  visibility: known
+  summary: 调料
+  aliases:
+  - 红辣椒
+  item:
+    category: food
+    unit: 颗
+    stackable: true
+- id: item:v1-da43d4526b
+  type: item
+  name: 紫苏
+  visibility: known
+  summary: 香料
+  aliases:
+  - 紫苏
+  item:
+    category: food
+    unit: 片
+    stackable: true
+- id: item:v1-e247bca14a
+  type: item
+  name: 生桐油
+  visibility: known
+  summary: 防水涂层
+  aliases:
+  - 生桐油
+  item:
+    category: material
+    unit: L
+    stackable: true
+- id: item:v1-e267e90894
+  type: item
+  name: 苋菜大叶
+  visibility: known
+  summary: 蔬菜
+  aliases:
+  - 苋菜大叶
+  item:
+    category: food
+    unit: 片
+    stackable: true
+- id: item:v1-f07d297448
+  type: item
+  name: 红叶生菜
+  visibility: known
+  summary: 蔬菜
+  aliases:
+  - 红叶生菜
+  item:
+    category: food
+    unit: 片
+    stackable: true

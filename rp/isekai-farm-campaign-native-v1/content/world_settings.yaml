@@ -1,0 +1,763 @@
+world_settings:
+- id: world:ancient-legacies
+  name: 古代文明与遗迹
+  category: truth
+  scope: world
+  visibility: hinted
+  priority: 72
+  summary: 世界存在古代文明遗迹；遗迹是高危险、失落知识、异常生态和物理/魔法混合技术的重要来源，但具体文明、年代与地点尚未确认。
+  content:
+    confirmed:
+    - 古代文明遗迹客观存在于世界各地。
+    - 遗迹可能保存物理、魔法或混合技术成果。
+    principles:
+    - 遗迹不是免费宝库，探索、识别、修复和带走成果都有风险与代价。
+    - 不预设所有遗迹来自同一个万能古代帝国。
+    - 家园附近是否存在具体遗迹必须通过线索和探索确认。
+    unresolved:
+    - 古代文明的数量、种族和年代
+    - 文明衰亡原因
+    - 遗迹与死亡森林异常的关系
+  linked_rules:
+  - rule:external-trace-classification
+  linked_clocks:
+  - clock:forest-attention
+  - clock:civilization-rumor
+  applies_when:
+    keywords:
+    - 古代文明
+    - 遗迹
+    - 废墟
+    - 失落技术
+    - 古代遗物
+    submodes:
+    - travel
+    - gather
+  source: user_confirmation_2026-06-29
+  aliases:
+  - 古代文明
+  - 古代遗迹
+  - 失落文明
+  - 遗迹
+- id: world:base-upkeep
+  name: 基地经营与维护
+  category: ecology
+  scope: base
+  visibility: known
+  priority: 86
+  summary: 基地经营围绕农田、水、土壤、菌丝城、仓储、厨房、危险品和防御维护展开；维护压力用进度钟而不是一次性灾难处理。
+  content:
+    maintenance_style:
+    - 先提示小问题，再推进压力钟。
+    - 玩家安排明确分工后可降低频率。
+    - 长期忽略才转化为污染、损耗、误触发或效率下降。
+    upkeep_domains:
+    - 农田浇水、堆肥、轮作和采收
+    - 菌丝城水分、养分、通道和单位分工
+    - 食物、发酵物、盐、调料和储粮
+    - 火药、毒剂、弹药和陷阱分区
+    - 围栏、门、绳梯、鱼笼和基地路径
+  linked_rules:
+  - rule:base-upkeep-loop
+  - rule:water-budget
+  - rule:mycelium-capacity
+  - rule:inventory-reliability
+  linked_clocks:
+  - clock:base-upkeep-pressure
+  - clock:drought-spring
+  - clock:soil-depletion
+  linked_entities:
+  - loc:home-clearing
+  - loc:home-mycelium-house
+  applies_when:
+    keywords:
+    - 基地
+    - 农田
+    - 仓储
+    - 厨房
+    - 发酵
+    - 陷阱
+    - 维护
+    submodes:
+    - query
+    - rest
+    - craft
+    - gather
+  source: gameplay_patch_2026-06-30
+  aliases:
+  - 农家经营
+  - 后勤设定
+  - 基地维护设定
+  - 家园
+- id: world:calendar
+  name: 时间与历法
+  category: calendar
+  scope: world
+  visibility: known
+  priority: 70
+  summary: 当前世界按天数和时段推进；完整年历、节日和外部文明历法尚未确认。
+  content:
+    known_season: 春末
+    play_rules:
+    - 入夜视野下降，远行、侦查和战斗风险上升。
+    - 未确认完整年历前，不硬编月份、节日和全年长度。
+    time_blocks:
+    - 清晨
+    - 上午
+    - 中午
+    - 下午
+    - 傍晚
+    - 入夜
+  linked_clocks:
+  - clock:drought-spring
+  applies_when:
+    keywords:
+    - 时间
+    - 历法
+    - 季节
+    - 入夜
+    submodes:
+    - travel
+    - rest
+  source: content/world_settings.yaml
+  aliases:
+  - 历法
+  - 季节
+  - 时段
+  - 时间
+- id: world:crafting-material-loop
+  name: 制作与材料循环
+  category: technology
+  scope: play
+  visibility: known
+  priority: 84
+  summary: 制作按材料来源、品质、工具、原型、测试和稳定配方推进；材料既可以精确计量，也可以按可信度模糊管理。
+  content:
+    craft_stages:
+    - 想法
+    - 材料确认
+    - 小样/原型
+    - 测试
+    - 稳定配方
+    - 批量生产
+    material_axes:
+    - 来源：采集、种植、交易、拆解、实验产物
+    - 品质：普通、可用、优质、异常、危险、不可靠
+    - 状态：新鲜、干燥、发酵中、失效风险、已加工
+    - 可信度：刚盘点、旧记录、估算、未知
+  linked_rules:
+  - rule:material-provenance-quality
+  - rule:gather-yield-pressure
+  - rule:craft-experiment-ladder
+  - rule:inventory-reliability
+  - rule:magic-plant-regrowth
+  linked_clocks:
+  - clock:crafting-breakthrough
+  - clock:base-upkeep-pressure
+  - clock:forest-attention
+  linked_entities:
+  - item:black-powder
+  - item:ultimate-compound-crossbow
+  applies_when:
+    keywords:
+    - 制作
+    - 材料
+    - 品质
+    - 原型
+    - 配方
+    - 工艺
+    - 采集
+    submodes:
+    - craft
+    - gather
+    - query
+  source: gameplay_patch_2026-06-30
+  aliases:
+  - 制作规则
+  - 工艺升级
+  - 材料系统
+  - 试验
+- id: world:divinity
+  name: 神祇与现实显现
+  category: power
+  scope: world
+  visibility: known
+  priority: 78
+  summary: 神祇客观存在，但直接降临现实、稳定化身或明确干预需要苛刻条件；日常信仰、神术与神祇亲自显现必须区分。
+  content:
+    confirmed:
+    - 神祇真实存在。
+    - 不同文化可以形成不同宗教、神学和解释传统。
+    manifestation:
+      baseline: 直接现实显现极少见且不能被日常稳定调用
+      interpretation: 神术、异象、预兆和巧合不能自动证明神祇亲自出现
+      possible_requirements:
+      - 与神职领域相符的地点或时机
+      - 长期信仰、契约或仪式锚点
+      - 稀有媒介、重大代价或不可逆后果
+    unresolved:
+    - 神系结构与神祇数量
+    - 神术的普及程度
+    - 各文化是否崇拜同一批神祇
+  linked_rules:
+  - rule:divine-manifestation-limits
+  applies_when:
+    keywords:
+    - 神祇
+    - 神明
+    - 宗教
+    - 神术
+    - 神迹
+    - 祈祷
+    submodes:
+    - social
+  source: user_confirmation_2026-06-29
+  aliases:
+  - 宗教与神祇
+  - 神明
+  - 神祇
+  - 神迹
+- id: world:ecology
+  name: 生态与资源循环
+  category: ecology
+  scope: world
+  visibility: known
+  priority: 85
+  summary: 水、土壤、采集、作物和魔力植物再生都按资源循环处理，不默认无限。
+  content:
+    forage:
+      principles:
+      - 常见资源可直接采集但会消耗时间。
+      - 高收益资源需要线索、确认和保存。
+    magic_plant_regrowth:
+      rule: rule:magic-plant-regrowth
+    soil:
+      clock: clock:soil-depletion
+      states:
+      - fertile
+      - stable
+      - tired
+      - depleted
+      - unknown
+    water:
+      clock: clock:drought-spring
+      rule: rule:water-budget
+      state_source: meta.water_pressure
+  linked_rules:
+  - rule:water-budget
+  - rule:magic-plant-regrowth
+  linked_clocks:
+  - clock:drought-spring
+  - clock:soil-depletion
+  - clock:forest-attention
+  linked_entities:
+  - loc:home-clearing
+  - loc:l07-sulfur-spring
+  applies_when:
+    keywords:
+    - 生态
+    - 水资源
+    - 土壤
+    - 肥力
+    - 再生
+    submodes:
+    - gather
+    - craft
+    - travel
+  source: content/world_settings.yaml
+  aliases:
+  - 再生
+  - 水土
+  - 生态
+  - 资源循环
+- id: world:economy-trade
+  name: 经济与贸易
+  category: economy
+  scope: world
+  visibility: known
+  priority: 60
+  summary: 当前以物易物为主；异常技术和高价值物资会带来文明外泄风险。
+  content:
+    exchange_modes:
+    - 以物易物
+    - 熟人交换
+    - 中介交换
+    high_risk_goods:
+    - 火药
+    - 高性能弩
+    - 魔力植物种子
+    - 大量盐和调料
+    - 菌丝造物
+    low_risk_goods:
+    - 普通食物
+    - 少量盐
+    - 普通纤维
+    - 普通木材
+    mitigation:
+    - 控制规模
+    - 使用灰藓族中介
+    - 避免展示制造工艺
+  linked_rules:
+  - rule:external-trace-classification
+  linked_clocks:
+  - clock:civilization-rumor
+  - clock:lake-settlement-suspicion
+  applies_when:
+    keywords:
+    - 贸易
+    - 交换
+    - 外泄
+    - 文明传闻
+    submodes:
+    - social
+    - craft
+  source: content/world_settings.yaml
+  aliases:
+  - 以物易物
+  - 技术外泄
+  - 经济
+  - 贸易
+- id: world:exploration-procedure
+  name: 探索与线索程序
+  category: truth
+  scope: play
+  visibility: known
+  priority: 88
+  summary: 探索以地点节点、路线成本、压力结果和多线索确认驱动；未知事实必须通过可行动线索逐步确认。
+  content:
+    clue_policy:
+    - 单线索形成假说。
+    - 双线索指向调查方向。
+    - 三个互相支持的线索才适合确认重大事实。
+    exploration_outputs:
+    - 到达或未到达
+    - 新线索
+    - 地点状态变化
+    - 时间和疲劳成本
+    - 遭遇距离或风险提示
+    - 可保存的新实体或路线
+    pressure_sources:
+    - 地形
+    - 天气
+    - 入夜
+    - 气味/声音/足迹
+    - 森林注意
+    - 文明传闻
+  linked_rules:
+  - rule:exploration-pressure-roll
+  - rule:route-and-time-cost
+  - rule:clue-triangulation
+  - rule:external-trace-classification
+  linked_clocks:
+  - clock:forest-attention
+  - clock:civilization-rumor
+  - clock:fatigue-strain
+  - clock:ruin-disturbance
+  linked_entities:
+  - loc:home-clearing
+  - loc:l11-delta
+  - loc:l15-grassland-cliff
+  applies_when:
+    keywords:
+    - 探索
+    - 搜索
+    - 线索
+    - 痕迹
+    - 遗迹
+    - 外部文明
+    submodes:
+    - explore
+    - travel
+    - gather
+  source: gameplay_patch_2026-06-30
+  aliases:
+  - 探索规则
+  - 线索链设定
+  - 节点探索
+  - 调查
+- id: world:faction-contact-play
+  name: 势力接触与贸易玩法
+  category: faction
+  scope: play
+  visibility: known
+  priority: 82
+  summary: 势力玩法以姿态、信任、警惕、承诺、礼物、交易规模和技术外泄为核心；个体友好不等于整个族群或外部文明友好。
+  content:
+    contact_checks:
+    - 对方是谁：个体、家庭、聚落、族群或外部势力
+    - 玩家姿态：低压、礼物、中介、武装、威胁、潜入
+    - 携带物：食物、盐、工具、火药、武器、异常材料
+    - 历史：承诺是否履行、是否取走资源、是否制造噪音
+    - 当前钟：灰藓族互信、湖边警惕、文明传闻
+    trade_policy:
+    - 低风险礼物用于建立关系。
+    - 高价值物资会要求解释来源或推进外泄风险。
+    - 工艺细节比单件成品更敏感。
+  linked_rules:
+  - rule:faction-contact-stance
+  - rule:trade-leakage-control
+  - rule:external-trace-classification
+  - rule:consequence-ladder
+  linked_clocks:
+  - clock:ashmoss-trust
+  - clock:lake-settlement-suspicion
+  - clock:civilization-rumor
+  linked_entities:
+  - char:an
+  - species:ashmoss-folk
+  - loc:lake-ashmoss-settlement
+  applies_when:
+    keywords:
+    - 势力
+    - 社交
+    - 交易
+    - 灰藓族
+    - 聚落
+    - 外部人类
+    submodes:
+    - social
+    - trade
+    - travel
+  source: gameplay_patch_2026-06-30
+  aliases:
+  - 势力玩法
+  - 接触协议
+  - 社交规则
+  - 贸易外泄
+- id: world:factions
+  name: 势力结构
+  category: faction
+  scope: world
+  visibility: known
+  priority: 70
+  summary: 势力表示组织目标、资源、态度和行动边界；不能把种族整体态度等同于某个势力态度。
+  content:
+    principles:
+    - An一家、湖边聚落和外部人类文明应分别处理。
+    - 正式接触、敌意、贸易和警惕必须通过事件或进度钟推进。
+    - 外部文明登场需遵守痕迹分级和文明传闻钟。
+  linked_rules:
+  - rule:external-trace-classification
+  linked_clocks:
+  - clock:ashmoss-trust
+  - clock:lake-settlement-suspicion
+  - clock:civilization-rumor
+  linked_entities:
+  - char:an
+  - loc:lake-ashmoss-settlement
+  applies_when:
+    keywords:
+    - 势力
+    - 聚落
+    - 外部文明
+    - 灰藓族
+    submodes:
+    - social
+    - travel
+  source: content/world_settings.yaml
+  aliases:
+  - 势力
+  - 势力结构
+  - 外部文明
+- id: world:play-loop
+  name: 游玩闭环
+  category: truth
+  scope: play
+  visibility: known
+  priority: 92
+  summary: 本剧情包按“查询事实、预览行动、校验 delta、保存结果、再次进入上下文”的闭环游玩；未保存叙事不能变成权威事实。
+  content:
+    player_experience:
+    - 玩家应感觉每次行动都有选择、代价和可追踪后果。
+    - 系统不追求重数值模拟，而追求结构化、可验证、可继续的叙事。
+    principles:
+    - 查询只召回信息和可选行动，不推进时间。
+    - 预览行动必须说明事实依据、风险、时间成本、可能 delta 和不确定点。
+    - 保存后的 delta 才会改变存档事实、进度钟、实体和事件日志。
+    - AI 可以辅助判断，但不能跳过校验和存档边界。
+  linked_rules:
+  - rule:ai-gm-turn-loop
+  - rule:progress-clock-use
+  - rule:consequence-ladder
+  linked_clocks:
+  - clock:fatigue-strain
+  - clock:base-upkeep-pressure
+  applies_when:
+    keywords:
+    - 怎么玩
+    - 回合
+    - 预览
+    - 保存
+    - delta
+    submodes:
+    - query
+    - explore
+    - social
+    - craft
+  source: gameplay_patch_2026-06-30
+  aliases:
+  - AI GM流程
+  - 回合流程
+  - 游戏闭环
+- id: world:power-systems
+  name: 力量体系
+  category: power
+  scope: world
+  visibility: known
+  priority: 90
+  summary: 已知力量包括金光与万能农具、魔力植物、神祇影响和魔物分级；菌丝是由金光种出的智慧生命，其网络能力来自自身生长与组织，而非独立能量体系。
+  content:
+    systems:
+      artifact:
+        rules:
+        - rule:artifact-grow-only
+        - rule:artifact-plant-knowledge
+      divinity:
+        rules:
+        - rule:divine-manifestation-limits
+      golden_light:
+        clocks:
+        - clock:forest-attention
+        - clock:soil-depletion
+        grown_life:
+        - 普通植物
+        - 魔力植物
+        - 智慧菌丝生命
+        rules:
+        - rule:golden-light-daily
+        - rule:golden-light-accounting
+      intelligent_mycelium:
+        distinction: 具有智慧、自我意识、网络感知和分工组织能力
+        origin: 由万能农具与金光种植、生长；与其他植物共享金光来源
+        rules:
+        - rule:mycelium-capacity
+      magic_plants:
+        rules:
+        - rule:magic-plant-regrowth
+      monster_tiers:
+        rules:
+        - rule:monster-tier
+  linked_rules:
+  - rule:golden-light-daily
+  - rule:golden-light-accounting
+  - rule:artifact-grow-only
+  - rule:artifact-plant-knowledge
+  - rule:mycelium-capacity
+  - rule:magic-plant-regrowth
+  - rule:monster-tier
+  - rule:divine-manifestation-limits
+  linked_clocks:
+  - clock:forest-attention
+  - clock:soil-depletion
+  applies_when:
+    keywords:
+    - 力量体系
+    - 金光
+    - 万能农具
+    - 菌丝
+    - 魔力植物
+    - 神祇
+    - 神迹
+  source: content/world_settings.yaml
+  aliases:
+  - 力量体系
+  - 菌丝网络
+  - 金光体系
+  - 魔力体系
+- id: world:risk-and-rest-play
+  name: 风险、疲劳与休息
+  category: ecology
+  scope: play
+  visibility: known
+  priority: 78
+  summary: 风险通过后果阶梯处理，疲劳通过压力钟追踪，休息既恢复金光也恢复行动质量；悠闲节奏和危险边界并存。
+  content:
+    rest_outputs:
+    - 金光恢复
+    - 疲劳降低
+    - 基地例行维护机会
+    - 天气和时段推进
+    - 夜间风险结束或转移
+    risk_ladder:
+    - 提示
+    - 轻微代价
+    - 资源损耗
+    - 进度钟推进
+    - 局部伤害
+    - 长期问题
+    - 危机爆发
+  linked_rules:
+  - rule:fatigue-rest-loop
+  - rule:consequence-ladder
+  - rule:golden-light-daily
+  - rule:golden-light-accounting
+  linked_clocks:
+  - clock:fatigue-strain
+  - clock:base-upkeep-pressure
+  - clock:drought-spring
+  linked_entities:
+  - pc:shenyan
+  applies_when:
+    keywords:
+    - 休息
+    - 睡觉
+    - 疲劳
+    - 风险
+    - 受伤
+    - 入夜
+    submodes:
+    - rest
+    - risk
+    - travel
+  source: gameplay_patch_2026-06-30
+  aliases:
+  - 休息规则
+  - 疲劳规则
+  - 风险阶梯
+- id: world:species-cultures
+  name: 种族与文化
+  category: species_culture
+  scope: world
+  visibility: known
+  priority: 65
+  summary: 种族设定用于区分生理、文化、沟通、禁忌和社交边界；具体个体仍以角色卡为准。
+  content:
+    principles:
+    - 智慧种族不默认按魔物分级。
+    - 同一种族的不同聚落可以有不同态度和利益。
+    - 未确认种族先作为线索或素材库候选，不直接成为事实。
+    - 幽壤菌裔是由金光种出的智慧菌丝生命；其具体个体意识边界仍需观察。
+  linked_rules:
+  - rule:monster-tier
+  linked_clocks:
+  - clock:ashmoss-trust
+  - clock:lake-settlement-suspicion
+  linked_entities:
+  - species:ashmoss-folk
+  - species:human
+  applies_when:
+    keywords:
+    - 种族
+    - 文化
+    - 灰藓族
+    - 人类
+    - 幽壤菌裔
+    - 菌丝文明
+    submodes:
+    - social
+  source: content/world_settings.yaml
+  aliases:
+  - 文化
+  - 种族
+  - 种族文化
+- id: world:technology
+  name: 科技与制作层级
+  category: technology
+  scope: world
+  visibility: known
+  priority: 75
+  summary: 外部文明总体处于早期近代，物理、魔法和混合技术并行且地区发展不均；制作仍按材料、工具、场地、时间和风险结算。
+  content:
+    external_civilization_baseline:
+      common_directions:
+      - 成熟冶金与机械工艺
+      - 火器与火药技术的早期发展
+      - 印刷、测绘、远距离贸易与较成熟行政组织
+      - 魔法设施、专业施法与物理/魔法混合技术并行
+      era: 早期近代
+      uneven_development: 不同地区和势力会因资源、制度与魔法传统形成明显技术差距
+    safety:
+    - 火药遇明火、潮湿、密闭空间和误触发必须保守结算。
+    - 爆炸声、烟、碎片和异常残留可能推进森林注意或文明传闻。
+    tiers:
+      bio_magical:
+      - 菌丝建筑
+      - 魔力植物材料
+      - 幽壤菌裔
+      black_powder:
+      - 造粒黑火药
+      - 火药箭
+      - 地雷
+      primitive_mechanical:
+      - 弓
+      - 弩
+      - 藤盾
+      - 甲片
+      stone_wood:
+      - 石斧
+      - 骨刀
+      - 木矛
+      - 竹器
+  linked_rules:
+  - rule:inventory-reliability
+  - rule:external-trace-classification
+  linked_clocks:
+  - clock:forest-attention
+  - clock:civilization-rumor
+  applies_when:
+    keywords:
+    - 科技
+    - 制作
+    - 火药
+    - 弩
+    - 工艺
+    submodes:
+    - craft
+    - combat
+  source: content/world_settings.yaml
+  aliases:
+  - 制作层级
+  - 火药科技
+  - 科技
+  - 装备工艺
+- id: world:weather
+  name: 天气与气候
+  category: weather
+  scope: world
+  visibility: known
+  priority: 80
+  summary: 天气影响出行、灌溉、痕迹、火药安全、视野和动物活动；干旱压力由进度钟追踪。
+  content:
+    patterns:
+      clear:
+        effects:
+        - 适合出行
+        - 作物需要浇水
+        - 连续晴天可能推进干旱
+      fog:
+        effects:
+        - 视野下降
+        - 追踪困难
+        - 遭遇距离缩短
+      rain:
+        effects:
+        - 免除普通浇水
+        - 冲淡气味和足迹
+        - 泥地行动变慢
+      storm:
+        effects:
+        - 远行危险
+        - 火药操作高风险
+        - 水源恢复较快
+  linked_rules:
+  - rule:water-budget
+  linked_clocks:
+  - clock:drought-spring
+  - clock:forest-attention
+  applies_when:
+    keywords:
+    - 天气
+    - 下雨
+    - 干旱
+    - 火药
+    - 雾
+    submodes:
+    - travel
+    - gather
+    - craft
+  source: content/world_settings.yaml
+  aliases:
+  - 下雨
+  - 天气
+  - 干旱天气
+  - 气候

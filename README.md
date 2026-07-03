@@ -60,6 +60,11 @@ Phase 7.1 已硬化 projection 事务边界、targeted repair、commit/projectio
 - AI 客户端 Prompt：[`docs/prompts/ai-client-prompt.md`](docs/prompts/ai-client-prompt.md)
 - 模块边界图：[`docs/architecture/module-map.md`](docs/architecture/module-map.md)
 
+## Included Campaign Content
+
+- 当前公开剧情包：[`rp/isekai-farm-campaign-native-v1`](rp/isekai-farm-campaign-native-v1)
+- 存档包不进入公开仓库；本地继续游玩存档应保留在私有目录中。
+
 2026-06-30 的设计报告、测试报告和 UX 模拟报告已归档到 [`docs/archive/2026-06-30/`](docs/archive/2026-06-30/)。它们用于追溯决策，不再作为当前实现的权威入口。
 
 ## Test

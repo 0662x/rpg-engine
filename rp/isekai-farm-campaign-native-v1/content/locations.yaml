@@ -1,0 +1,583 @@
+entities:
+- id: loc:home-clearing
+  type: location
+  name: 空地/家
+  visibility: known
+  summary: 死亡森林中的天然林间空地，约十步见方，黑色腐殖土，边缘有大倒木，是当前基地核心。
+  aliases:
+  - 基地
+  - 家
+  - 空地
+  location:
+    coord_x: 0.0
+    coord_y: 0.0
+    coord_z: 0.0
+    biome: forest_clearing
+    safety_level: guarded
+    travel_minutes_from_home: 0
+    description_short: 死亡森林中的天然林间空地，树屋、十六畦、旧小屋、火坑、围栏和陷阱都围绕这里展开。
+    exits:
+    - 上树屋
+    - L1 小溪
+    - L3 松林
+    - L4 荆棘圈
+    - L5 老树林
+    - L7 溪源泉眼
+    - L12 硝石岩壳
+    resources:
+    - 农田
+    - 树屋
+    - 旧小屋
+    - 药圃
+    - 火坑
+    - 围栏
+    - 旧布防记录与可重建陷阱位
+- id: loc:home-mycelium-city
+  type: location
+  name: 地下菌丝城
+  visibility: known
+  summary: 母孢子树/夏娃扩展出的地下菌丝城，有12臂穹顶、13侧室、4条隧道和菌群分工体系。
+  aliases:
+  - 地下城
+  - 夏娃地下城
+  - 菌丝城
+  location:
+    biome: mycelium_underground
+    safety_level: defended
+    travel_minutes_from_home: 1
+    description_short: 领地下方的菌丝城市和生产中枢。
+    exits:
+    - 六边形菌丝复合屋竖井
+    - 西隧至L9
+    - 各功能侧室
+    resources:
+    - 腐工蕈
+    - 锐孢蕈
+    - 思菌蕈
+    - 地下仓库
+    - 菌丝厨房
+- id: loc:home-mycelium-h-room
+  type: location
+  name: 菌丝城H室
+  visibility: known
+  summary: An 和小的搬入后的独立生活侧室；有火塘、草席、骨刀石斧和三块石板。
+  aliases:
+  - An生活室
+  - An的新家
+  - H室
+  location:
+    biome: mycelium_underground_room
+    safety_level: friendly
+    travel_minutes_from_home: 1
+    description_short: 菌丝城内给 An 与小的居住的侧室。
+    exits:
+    - 地下菌丝城主腔
+    - 西隧至L9
+    resources:
+    - 火塘
+    - 草席
+    - 石板
+    - 灰藓族生活物资
+- id: loc:home-mycelium-house
+  type: location
+  name: 六边形菌丝复合屋
+  visibility: known
+  summary: 菌丝复合屋地点模板；是否已建成、内部配置和当前用途属于存档事实。
+  aliases:
+  - 主居所
+  - 六边形屋
+  - 新屋
+  - 菌丝屋
+  location:
+    biome: mycelium_house
+    safety_level: defended
+    travel_minutes_from_home: 0
+    description_short: 领地中央的六边形菌丝复合屋，可作为主居所或基地节点。
+    exits:
+    - 空地/家
+    - 地下菌丝城竖井
+    resources:
+    - 菌丝床
+    - 厨房角
+    - 储物墙
+    - 竖井入口
+- id: loc:home-mycelium-i-room
+  type: location
+  name: 菌丝城I室
+  visibility: known
+  summary: 地下菌丝城侧室模板，可作为隔离、观察或临时安置空间；具体用途和对象属于存档事实。
+  aliases:
+  - I室
+  - 隔离室
+  - 隔离观察室
+- id: loc:home-treehouse
+  type: location
+  name: 树屋松针床
+  visibility: known
+  summary: 树屋休息点模板；是否仍在使用、存放物和安全状态属于存档事实。
+  aliases:
+  - 当前地点
+  - 松针床
+  - 树屋
+  location:
+    coord_x: 0.0
+    coord_y: 0.0
+    coord_z: 4.0
+    biome: treehouse
+    safety_level: defended
+    travel_minutes_from_home: 0
+    description_short: 离地树屋内的松针床，适合作为早期休息和观察点。
+    exits:
+    - 下树屋回到空地
+    - 绳梯旧布防位需按存档确认
+    resources:
+    - 松针床
+    - 储物角
+    - 竹水筒
+    - 近身库存
+- id: loc:l01-creek
+  type: location
+  name: 小溪
+  visibility: known
+  summary: 东南下坡约300米的浅溪，宽约1米，深约20厘米，卵石底，可饮水；设有拦溪竹栅和竹编鱼笼相关设施。
+  aliases:
+  - L1
+  - 小溪
+  - 浅溪
+  - 溪边
+  location:
+    coord_x: 210.0
+    coord_y: -210.0
+    coord_z: -20.0
+    biome: creek
+    safety_level: moderate
+    travel_minutes_from_home: 15
+    description_short: 浅溪水源点，设有拦溪竹栅和鱼笼相关设施。
+    exits:
+    - 回家
+    - 下游到 L2 水潭
+    - 沿溪上游到 L7 溪源泉眼
+    resources:
+    - 水
+    - 卵石
+    - 鱼笼
+    - 拦溪竹栅
+    - 湖边细纤维线索
+- id: loc:l02-pool
+  type: location
+  name: 水潭
+  visibility: known
+  summary: 小溪下游约500米处的水潭，曾是偶蹄类饮水点；近期有干裂迹象。
+  aliases:
+  - L2
+  - 水潭
+  location:
+    coord_x: 500.0
+    coord_y: 0.0
+    coord_z: -30.0
+    biome: pool
+    safety_level: moderate
+    travel_minutes_from_home: 20
+    description_short: 直径约3米的水潭，水量受春末干旱影响，是水系与狩猎线索节点。
+    exits:
+    - 上游到 L1 小溪
+    - 下游到 L6 瀑布深潭
+    resources:
+    - 水
+    - 动物足迹
+    - 鱼笼
+    - 水潭泥痕
+- id: loc:l03-pinewood
+  type: location
+  name: 松林
+  visibility: known
+  summary: 南侧针叶林过渡带，有松子、松针和干苔藓，但大型猫科母带崽风险上升。
+  aliases:
+  - L3
+  - 松林
+  location:
+    coord_x: 0.0
+    coord_y: -300.0
+    coord_z: 5.0
+    biome: pine_forest
+    safety_level: risky
+    travel_minutes_from_home: 10
+    description_short: 松脂味浓，资源好拿，但近期猫科母带崽风险高。
+    exits:
+    - 回家
+    - 松林北缘
+    resources:
+    - 松子
+    - 松针
+    - 干苔藓
+    - 大型猫科活动迹象
+- id: loc:l04-bramble-ring
+  type: location
+  name: 荆棘圈
+  visibility: known
+  summary: 西侧黑荆条围成的异常圆形区域，内部有孵化残壳，孵化物已离开；这里是T3线索地点而不是普通采集点。
+  aliases:
+  - L4
+  - 孵化残壳地点
+  - 荆棘圈
+  - 黑荆条圈
+  location:
+    coord_x: -200.0
+    coord_y: 0.0
+    coord_z: -3.0
+    biome: anomaly
+    safety_level: unknown
+    travel_minutes_from_home: 8
+    description_short: 异常孵化痕迹地点，仍需长期关注。
+    exits:
+    - 回家
+    resources:
+    - 黑荆条
+    - 孵化残壳线索
+    - 不明孵化物离开痕迹
+- id: loc:l05-oldwood
+  type: location
+  name: 老树林
+  visibility: known
+  summary: 北侧巨树老林，树冠浓密，腐叶极厚，曾发现优质燧石。
+  aliases:
+  - L5
+  - 老树林
+  location:
+    coord_x: 0.0
+    coord_y: 500.0
+    coord_z: 0.0
+    biome: old_forest
+    safety_level: moderate
+    travel_minutes_from_home: 15
+    description_short: 腐叶厚、树龄大，可能通往硝石岩壳方向。
+    exits:
+    - 回家
+    - 北缘红砂岩带
+    - L8 碎石台地
+    - L12 硝石岩壳
+    resources:
+    - 燧石
+    - 腐叶
+    - 老木
+    - 遮蔽路线
+- id: loc:l06-t5-overlook-trough
+  type: location
+  name: T5瞭望石槽
+  visibility: known
+  summary: L6瀑布崖顶，~850m，步行25min；类型：T5躺卧观察位/5对手掌印最深/可俯瞰领地
+  aliases:
+  - L6+
+  - T5瞭望石槽
+  location:
+    travel_minutes_from_home: 25
+    description_short: T5瞭望石槽：T5躺卧观察位/5对手掌印最深/可俯瞰领地；L6瀑布崖顶；~850m
+    resources:
+    - T5躺卧观察位/5对手掌印最深/可俯瞰领地
+- id: loc:l06-waterfall
+  type: location
+  name: 瀑布深潭
+  visibility: known
+  summary: 水潭下游瀑布与深潭，发现过大型手掌印，也是首次目击 An 的附近区域。
+  aliases:
+  - L6
+  - 瀑布
+  - 瀑布深潭
+  location:
+    coord_x: 850.0
+    coord_y: 0.0
+    coord_z: -45.0
+    biome: waterfall
+    safety_level: risky
+    travel_minutes_from_home: 25
+    description_short: 瀑布水量近期下降，深潭边有未知大型足迹历史记录。
+    exits:
+    - 上游到 L2 水潭
+    - 下游到 L10 森林小河
+    - 西行到 L9 巨树地下居所
+    resources:
+    - 石英
+    - 蛇纹石
+    - 水属性史莱姆线索
+    - 大型手掌印历史记录
+- id: loc:l07-sulfur-spring
+  type: location
+  name: 溪源泉眼
+  visibility: known
+  summary: 西北偏北水源源头，有可再生硫磺结晶。
+  aliases:
+  - L7
+  - 泉眼
+  - 溪源
+  - 溪源泉眼
+  - 硫磺泉眼
+  location:
+    coord_x: -250.0
+    coord_y: 430.0
+    coord_z: 10.0
+    biome: spring
+    safety_level: moderate
+    travel_minutes_from_home: 20
+    description_short: 活泉持续带出硫，在岩壁形成淡鹅黄硫磺薄壳。
+    exits:
+    - 回家
+    - 沿溪下游到 L1 小溪
+    - 老树林北缘
+    resources:
+    - 水
+    - 硫磺
+    - 泉眼薄壳
+- id: loc:l08-stone-terrace
+  type: location
+  name: 碎石台地
+  visibility: known
+  summary: 北偏东高处视野点，可观察部分森林结构。
+  aliases:
+  - L8
+  - 碎石台地
+  location:
+    coord_x: 420.0
+    coord_y: 420.0
+    coord_z: 40.0
+    biome: rocky_terrace
+    safety_level: moderate
+    travel_minutes_from_home: 25
+    description_short: 开阔视野点，适合侦查路线但遮蔽较少。
+    exits:
+    - 回家
+    - 老树林
+    - 高处观察线
+    resources:
+    - 碎石
+    - 视野
+    - 侦查位置
+- id: loc:l09-underground-home
+  type: location
+  name: 巨树地下居所
+  visibility: known
+  summary: An 和小的的地下居所，有树根穹顶、发光苔藓、火塘、重力风箱和石板符号系统。
+  aliases:
+  - An家
+  - L9
+  - 巨树地下居所
+  location:
+    coord_x: 650.0
+    coord_y: -150.0
+    coord_z: -45.0
+    biome: underground_dwelling
+    safety_level: friendly
+    travel_minutes_from_home: 30
+    description_short: 灰藓族居住点，已建立互信和分工贸易。
+    exits:
+    - 回家
+    - L6 瀑布深潭
+    resources:
+    - 发光苔藓
+    - 石板
+    - 火塘
+    - 灰藓族情报
+    - 重力风箱
+- id: loc:l10-river
+  type: location
+  name: 森林小河
+  visibility: known
+  summary: L6 下游森林小河，河宽六步，蓝绿深水，基岩河岸。
+  aliases:
+  - L10
+  - 森林小河
+  location:
+    coord_x: 1200.0
+    coord_y: -100.0
+    coord_z: -50.0
+    biome: river
+    safety_level: moderate
+    travel_minutes_from_home: 30
+    description_short: 通往大湖入口的重要水系路线。
+    exits:
+    - 上游到 L6 瀑布深潭
+    - 下游到 L11 河口三角洲
+    resources:
+    - 河水
+    - 基岩河岸
+    - 水系路线
+- id: loc:l11-delta
+  type: location
+  name: 河口三角洲
+  visibility: known
+  summary: 大湖入口沙洲芦苇区，有人工渔网和湖边灰藓族聚落线索。
+  aliases:
+  - L11
+  - 河口三角洲
+  - 湖边
+  location:
+    coord_x: 1600.0
+    coord_y: -350.0
+    coord_z: -55.0
+    biome: delta
+    safety_level: risky
+    travel_minutes_from_home: 35
+    description_short: 湖风、芦苇、沙洲和人工渔网并存，适合侦查但容易被聚落察觉。
+    exits:
+    - 上游到 L10 森林小河
+    - 西北到湖边聚落
+    resources:
+    - 芦苇
+    - 湖边细纤维
+    - 鱼
+    - 人工渔网线索
+- id: loc:l12-niter-crust
+  type: location
+  name: 硝石岩壳
+  visibility: known
+  summary: 老树林北缘红砂岩天然岩壳，背阴干燥通风裂缝中有硝石针晶，是火药路线关键资源点。
+  aliases:
+  - L12
+  - 硝石岩壳
+  - 硝石点
+  - 硝石矿点
+  - 红砂岩岩壳
+  location:
+    coord_x: -260.0
+    coord_y: 650.0
+    coord_z: 30.0
+    biome: dry_rock
+    safety_level: moderate
+    travel_minutes_from_home: 25
+    description_short: 火药路线关键资源点，硝石可反复刮取但需注意安全携带。
+    exits:
+    - 回家
+    - L5 老树林
+    resources:
+    - 硝石
+    - 红砂岩
+    - 硝土
+    - 干燥裂缝
+- id: loc:l13-stone-trough
+  type: location
+  name: 石槽深潭
+  visibility: known
+  summary: 西北偏北-过L7泉眼~300步，~800m，步行30min；类型：天然石槽/地下裂隙补给/深蓝绿不干水体/鱼笼已设
+  aliases:
+  - L13
+  - 石槽深潭
+  location:
+    travel_minutes_from_home: 30
+    description_short: 石槽深潭：天然石槽/地下裂隙补给/深蓝绿不干水体/鱼笼已设；西北偏北-过L7泉眼~300步；~800m
+    resources:
+    - 天然石槽/地下裂隙补给/深蓝绿不干水体/鱼笼已设
+- id: loc:l14-humus-wetland
+  type: location
+  name: 腐殖湿地
+  visibility: known
+  summary: 南-过松林-石灰岩后，~600m，步行20min；类型：湿土区/锐孢蕈已测绘/主角未亲探
+  aliases:
+  - L14
+  - 腐殖湿地
+  location:
+    travel_minutes_from_home: 20
+    description_short: 腐殖湿地：湿土区/锐孢蕈已测绘/主角未亲探；南-过松林-石灰岩后；~600m
+    resources:
+    - 湿土区/锐孢蕈已测绘/主角未亲探
+- id: loc:l15-east-ashmoss-hearth
+  type: location
+  name: 废弃灰藓族火塘
+  visibility: known
+  summary: L15崖东的旧火塘，地面明火痕迹和白矿刮痕显示约20天前有灰藓族相关活动。
+  aliases:
+  - L15-E
+  - 废弃灰藓族火塘
+  - 旧火塘
+  - 灰藓族旧火塘
+  location:
+    coord_x: 80.0
+    coord_y: 900.0
+    coord_z: 50.0
+    biome: abandoned_hearth
+    safety_level: wary
+    travel_minutes_from_home: 35
+    description_short: L15崖东旧火塘，有地面明火痕迹、白矿刮痕和约20天前活动线索。
+    exits:
+    - 返回 L15 森林断崖/草原
+    resources:
+    - 旧火塘
+    - 白矿刮痕
+    - 灰藓族旧活动线索
+- id: loc:l15-grassland-cliff
+  type: location
+  name: 森林断崖/草原
+  visibility: known
+  summary: 北线过老树林约900米到达的森林尽头，出现草原边缘和东西走向断崖；这里是世界观外扩的关键边界。
+  aliases:
+  - L15
+  - 断崖草原
+  - 森林断崖/草原
+  - 草原边缘
+  location:
+    coord_x: 0.0
+    coord_y: 900.0
+    coord_z: 50.0
+    biome: cliff_grassland_edge
+    safety_level: risky
+    travel_minutes_from_home: 35
+    description_short: 森林尽头与草原边缘交界的东西走向断崖，是北线世界外扩的关键边界。
+    exits:
+    - 回老树林
+    - 沿断崖东侧到 L15-E 废弃灰藓族火塘
+    - 沿断崖西侧到 L15-W 石英采掘场
+    - 草原深处未深入
+    resources:
+    - 开阔视野
+    - 草原边缘线索
+    - 断崖地形
+    - 风向观察
+- id: loc:l15-west-quartz-quarry
+  type: location
+  name: 石英采掘场
+  visibility: known
+  summary: L15崖西的石英采掘痕迹点，有非灰藓族工具凿痕和指向NW的叠石计数柱。
+  aliases:
+  - L15-W
+  - 叠石计数柱
+  - 石英矿点
+  - 石英采掘场
+  location:
+    coord_x: -80.0
+    coord_y: 900.0
+    coord_z: 50.0
+    biome: quartz_outcrop
+    safety_level: wary
+    travel_minutes_from_home: 35
+    description_short: L15崖西石英采掘痕迹点，有非灰藓族凿痕和指向NW的叠石计数柱。
+    exits:
+    - 返回 L15 森林断崖/草原
+    - NW方向未追踪
+    resources:
+    - 石英
+    - 非灰藓族凿痕
+    - 叠石计数柱
+- id: loc:lake-ashmoss-settlement
+  type: location
+  name: 灰藓族湖边聚落
+  visibility: known
+  summary: L11 西北约300步的灰藓族小聚落，有3棚屋、3人、火坑和渔网捕鱼痕迹；尚未正式接触，必须按低压接触流程推进。
+  aliases:
+  - 三棚屋聚落
+  - 湖边三人聚落
+  - 湖边聚落
+  - 灰藓族湖边聚落
+  location:
+    coord_x: 1450.0
+    coord_y: -250.0
+    coord_z: 0.0
+    biome: lakeside_settlement
+    safety_level: wary
+    travel_minutes_from_home: 30
+    description_short: 同 An 种族的分家聚落，警惕性高，适合用交换仪式接触。
+    exits:
+    - L11 河口三角洲
+    - 湖边棚屋区
+    resources:
+    - 人工渔网
+    - 火坑
+    - 棚屋
+    - 灰藓族接触机会

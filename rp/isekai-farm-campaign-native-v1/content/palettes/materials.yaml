@@ -1,0 +1,205 @@
+materials:
+- id: pal:mat:dry-fiber
+  name: 干燥纤维
+  summary: 死亡森林中可采集的低风险纤维候选，可用于绳索、过滤和小型捆扎。
+  rarity: common
+  locations:
+  - loc:home-clearing
+  intents:
+  - gather
+  - craft
+  discovery:
+    mode: confirm_required
+    clue_text: 草茎和藤皮之间有一批干燥纤维，适合少量采样。
+    confirm_methods:
+    - 观察纤维韧性
+    - 少量拉伸测试
+  risks:
+  - 过度采集会留下明显痕迹，且潮湿后强度下降。
+  save_as:
+    type: material
+    entity_id: mat:native-dry-fiber
+- id: pal:mat:pine-resin-lump
+  name: 松脂块
+  summary: 松林中可少量刮取的树脂候选，可用于防水、引火、粘合和气味遮蔽实验。
+  rarity: common
+  locations:
+  - loc:l03-pinewood
+  intents:
+  - gather
+  - craft
+  discovery:
+    mode: confirm_required
+    clue_text: 松树伤口附近有半透明树脂凝结，带明显松脂气味。
+    confirm_methods:
+    - 少量刮取
+    - 观察粘性和燃烧气味
+    - 与食物和火药分开存放
+  risks:
+  - 气味明显，可能暴露采集路线。
+  - 靠近明火会迅速燃烧。
+  uses:
+  - 防水涂层
+  - 引火物
+  - 粘合试样
+  save_as:
+    type: material
+    entity_id: mat:native-pine-resin-lump
+- id: pal:mat:silt-clay
+  name: 溪边细泥
+  summary: 小溪缓流处可能沉积的细泥候选，可用于临时封缝、陶坯小样和足迹记录。
+  rarity: common
+  locations:
+  - loc:l01-creek
+  intents:
+  - gather
+  - craft
+  discovery:
+    mode: confirm_required
+    clue_text: 溪弯内侧有更细的灰黑泥层，手感比腐殖土更黏。
+    confirm_methods:
+    - 捏团测试
+    - 晾干开裂观察
+    - 小样烧灼或封缝测试
+  risks:
+  - 直接当陶土使用可能开裂。
+  - 湿泥会留下明显足迹。
+  uses:
+  - 临时封缝
+  - 陶坯试样
+  - 足迹拓印
+  save_as:
+    type: material
+    entity_id: mat:native-silt-clay
+- id: pal:mat:low-smoke-charcoal-wood
+  name: 低烟木炭料
+  summary: 可从干燥枯枝和硬木边料中筛选的木炭候选，用于火药配比、过滤和稳定火源实验。
+  rarity: common
+  locations:
+  - loc:home-clearing
+  - loc:l05-oldwood
+  intents:
+  - gather
+  - craft
+  discovery:
+    mode: confirm_required
+    clue_text: 部分干枝质地均匀、裂纹细，适合烧制更稳定的木炭。
+    confirm_methods:
+    - 分拣干湿
+    - 小批烧炭
+    - 记录烟量和脆度
+  risks:
+  - 烧炭烟味会暴露基地。
+  - 与硫磺、硝石和火药混放危险。
+  uses:
+  - 黑火药配方
+  - 过滤层
+  - 稳定火种
+  save_as:
+    type: material
+    entity_id: mat:native-low-smoke-charcoal-wood
+- id: pal:mat:wetland-humus-fiber
+  name: 湿地腐殖纤维
+  summary: 腐殖湿地可能出现的长纤维腐殖层候选，可作为堆肥、保水覆盖物或菌丝基质试样。
+  rarity: uncommon
+  locations:
+  - loc:l14-humus-wetland
+  intents:
+  - gather
+  - craft
+  discovery:
+    mode: confirm_required
+    clue_text: 湿地表层下有成片深色纤维层，拉起时像潮湿毡片。
+    confirm_methods:
+    - 少量取样
+    - 闻味辨腐败程度
+    - 晾干和菌丝反应小试
+  risks:
+  - 主角未亲探区域，软泥和通风风险需先确认。
+  - 潮湿样本易霉变或污染仓储。
+  uses:
+  - 堆肥
+  - 覆盖保水
+  - 菌丝基质试样
+  save_as:
+    type: material
+    entity_id: mat:native-wetland-humus-fiber
+- id: pal:mat:stone-trough-mineral-film
+  name: 石槽矿膜
+  summary: L13深水体边缘可能形成的薄矿物膜候选，可用于水质、地下裂隙和磨料来源线索。
+  rarity: rare
+  locations:
+  - loc:l13-stone-trough
+  intents:
+  - gather
+  - explore
+  discovery:
+    mode: clue_only
+    clue_text: 深蓝绿水体边缘有不均匀的微亮薄膜，但无法直接判断成分。
+    confirm_methods:
+    - 远距观察水位
+    - 取极少量边缘样本
+    - 与石英、蛇纹石和硫磺样本对比
+  risks:
+  - 深水体不可默认安全下水。
+  - 未确认成分前不能加入食物、药剂或火药。
+  uses:
+  - 水质线索
+  - 地下裂隙线索
+  - 精磨材料候选
+  save_as:
+    type: material
+    entity_id: mat:native-stone-trough-mineral-film
+- id: pal:mat:grassland-flint-chips
+  name: 草原燧石片
+  summary: L15草原断崖附近可能散落的燧石片候选，可作为外部工具痕迹和打火材料双重线索。
+  rarity: uncommon
+  locations:
+  - loc:l15-grassland-cliff
+  intents:
+  - gather
+  - explore
+  discovery:
+    mode: confirm_required
+    clue_text: 草根间有锐边碎片，可能是自然崩落，也可能与旧工具活动有关。
+    confirm_methods:
+    - 观察断口
+    - 记录相对位置
+    - 与已知优质燧石对比
+  risks:
+  - 过早判定制造者会违反外部文明痕迹分级。
+  - 开阔草原边缘暴露度高。
+  uses:
+  - 打火
+  - 外部文明线索
+  - 石器切削试样
+  save_as:
+    type: material
+    entity_id: mat:native-grassland-flint-chips
+- id: pal:mat:bramble-wax
+  name: 黑荆蜡质层
+  summary: 荆棘圈黑荆条表面可能刮取的蜡质层候选，可用于防水、封口和异常植物研究。
+  rarity: rare
+  locations:
+  - loc:l04-bramble-ring
+  intents:
+  - gather
+  - craft
+  - explore
+  discovery:
+    mode: confirm_required
+    clue_text: 黑荆条外皮带微弱蜡光，刮下后会形成薄片。
+    confirm_methods:
+    - 只取边缘死枝
+    - 观察遇水和遇热反应
+    - 记录是否刺激异常痕迹
+  risks:
+  - 荆棘圈是T3异常线索地，不是普通采集点。
+  - 大量破坏可能推进森林注意或异常扰动。
+  uses:
+  - 防水封口
+  - 异常植物研究
+  - 薄膜试样
+  save_as:
+    type: material
+    entity_id: mat:native-bramble-wax

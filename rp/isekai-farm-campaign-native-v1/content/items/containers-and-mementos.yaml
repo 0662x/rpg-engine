@@ -1,0 +1,68 @@
+entities:
+- id: item:v1-0b81d0d73c
+  type: item
+  name: 竹水筒
+  visibility: known
+  summary: ✅
+  aliases:
+  - 竹水筒
+  item:
+    category: tool
+    quantity: 4.0
+    unit: L
+    stackable: true
+- id: item:v1-5a357b56c5
+  type: item
+  name: An的凿刻石板
+  visibility: known
+  summary: 符号/关系凭证
+  aliases:
+  - An的凿刻石板
+  item:
+    category: food
+    stackable: true
+- id: item:v1-638acf1712
+  type: item
+  name: 竹杯
+  visibility: known
+  summary: ✅
+  aliases:
+  - 竹杯
+  item:
+    category: tool
+    quantity: 300.0
+    unit: m
+    stackable: true
+- id: item:v1-bfe6f6e71d
+  type: item
+  name: 松塔（An赠）
+  visibility: known
+  summary: 引火物
+  aliases:
+  - 松塔（An赠）
+  item:
+    category: food
+    unit: 颗
+    stackable: true
+- id: item:v1-d9e3f1ce7b
+  type: item
+  name: 母孢子树（夏娃菌核）
+  visibility: known
+  summary: 夏娃的实体菌核/母孢子树；累计金光、成长阶段和菌丝城规模属于存档事实。
+  aliases:
+  - 主母菌核实体
+  - 夏娃菌核
+  - 母孢子树
+  - 母孢子树（夏娃菌核）
+  - 母孢子树（幽壤菌裔）
+  - 菌核
+  item:
+    category: living_civilization_core
+    unit: 株
+    quality: unique
+    stackable: false
+    properties:
+      character_entity_id: char:eve-mycelium-core
+      controls_location_id: loc:home-mycelium-city
+      living: true
+      unique: true

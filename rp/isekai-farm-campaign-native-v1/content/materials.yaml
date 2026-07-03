@@ -1,0 +1,90 @@
+entities:
+- id: mat:resource-113eb5f1ca
+  type: material
+  name: 石英
+  visibility: known
+  summary: ★；东向瀑布；用途：细磨石
+  aliases:
+  - 石英
+- id: mat:resource-2d948407e1
+  type: material
+  name: 蕨芽
+  visibility: known
+  summary: ★★★★；东向溪边；用途：偶蹄类食物
+  aliases:
+  - 蕨芽
+- id: mat:resource-6342f3895d
+  type: material
+  name: 藤条资源
+  visibility: known
+  summary: ★★★★；东/西向；用途：捆扎、编织。
+  aliases:
+  - 可采藤条
+  - 藤条资源
+- id: mat:resource-69a07dd2ca
+  type: material
+  name: 苔藓
+  visibility: known
+  summary: ★★★★；南向松林；用途：铺床
+  aliases:
+  - 苔藓
+- id: mat:resource-69cad66f35
+  type: material
+  name: 大叶片
+  visibility: known
+  summary: ★★★★；东向；用途：屋顶、遮蔽
+  aliases:
+  - 大叶片
+- id: mat:resource-752cd765e3
+  type: material
+  name: 松子
+  visibility: known
+  summary: ★★★；南向松林；用途：食物/储粮
+  aliases:
+  - 松子
+- id: mat:resource-7ee277da67
+  type: material
+  name: 硫磺
+  visibility: known
+  summary: ★；西北泉眼；用途：引火/药剂
+  aliases:
+  - 硫磺资源
+  - 硫磺资源点
+  - 西北泉眼硫磺
+  - 野外硫磺
+- id: mat:resource-9d6ba9f1cb
+  type: material
+  name: 燧石
+  visibility: known
+  summary: ★★；北向；用途：打火（最佳）
+  aliases:
+  - 燧石
+- id: mat:resource-a348ba0d02
+  type: material
+  name: 腐叶
+  visibility: known
+  summary: ★★★★★；全域；用途：堆肥
+  aliases:
+  - 腐叶
+- id: mat:resource-c1469749db
+  type: material
+  name: 硬石
+  visibility: known
+  summary: ★★★；北向；用途：打火、磨刀
+  aliases:
+  - 硬石
+- id: mat:resource-d2bf652c0f
+  type: material
+  name: 枯枝
+  visibility: known
+  summary: ★★★★★；全域；用途：燃料
+  aliases:
+  - 枯枝
+- id: mat:resource-e516591fef
+  type: material
+  name: 蛇纹石资源
+  visibility: known
+  summary: ★；东向瀑布；用途：精磨石。
+  aliases:
+  - 瀑布蛇纹石
+  - 蛇纹石资源

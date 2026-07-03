@@ -1,0 +1,209 @@
+random_tables:
+- id: table:forest-risk
+  name: 死亡森林低强度风险提示
+  visibility: known
+  description: 用于预览探索、旅行或采集时的低强度不确定因素；真实后果仍必须通过 delta 保存。
+  entries:
+  - weight: 3
+    result: river wind shifts scent trails and makes old tracks unreliable.
+  - weight: 2
+    result: dry leaf noise increases forest attention risk if the party rushes.
+  - weight: 1
+    result: a distant animal call hints at movement without confirming a new entity.
+- id: table:base-routine
+  name: 基地例行状态提示
+  visibility: known
+  entries:
+  - weight: 2
+    result: 夏娃的菌丝网络报告基地内部通道稳定。
+  - weight: 2
+    result: 厨房与危险材料需要继续分区，避免气味和火源混放。
+  - weight: 1
+    result: 干旱压力仍在，灌溉和储水需要纳入下一次行动。
+- id: table:exploration-pressure
+  name: 探索压力结果
+  visibility: known
+  description: 用于旅行、搜索、侦查和未知地点探索；结果应结合地点、时段、天气和当前进度钟解释。
+  entries:
+  - weight: 2
+    result: 发现旧痕迹或气味变化，只能形成假说，需要进一步确认。
+  - weight: 2
+    result: 路线可通行，但耗时比预计更长，疲劳或入夜压力需要检查。
+  - weight: 2
+    result: 地点本身有小变化，例如水位、泥痕、枝叶折断或动物回避。
+  - weight: 1
+    result: 远处有可感知活动，但距离、来源和敌意都未确认。
+  - weight: 1
+    result: 玩家行动留下明显痕迹，可能推进森林注意或聚落警惕。
+  - weight: 1
+    result: 找到一个可行动线索，指向新节点、旧地点复查或 NPC 询问。
+- id: table:gather-yield-pressure
+  name: 采集收益与压力
+  visibility: known
+  description: 用于普通采集、材料筛选、鱼笼收获、魔力植物采收和矿物刮取。
+  entries:
+  - weight: 3
+    result: 获得少量可靠材料；若要批量使用，需要继续采集或盘点。
+  - weight: 2
+    result: 材料品质参差不齐；可用部分需要筛选、干燥、清洗或试验。
+  - weight: 2
+    result: 采集点可持续，但重复采集会降低收益或留下明显痕迹。
+  - weight: 1
+    result: 发现更高品质样本，但位置、再生周期或采集风险需要确认。
+  - weight: 1
+    result: 材料带有污染、毒性、潮湿或误认风险，使用前必须处理。
+  - weight: 1
+    result: 采集过程惊动附近生物或势力，只出现提示，不直接确认敌人。
+- id: table:craft-experiment
+  name: 制作实验结果
+  visibility: known
+  description: 用于原型、小样测试、配方固化和高风险工艺试验。
+  entries:
+  - weight: 2
+    result: 原型成立，但可靠性不足，只能保存为试样而非稳定配方。
+  - weight: 2
+    result: 关键材料表现良好，可以推进工艺突破钟。
+  - weight: 2
+    result: 发现一个明确缺陷，例如防潮、强度、引信、握持或维护问题。
+  - weight: 1
+    result: 失败没有造成严重损失，但消耗部分材料并留下改良方向。
+  - weight: 1
+    result: 高风险部分必须降级为小样测试，否则应触发后果阶梯。
+  - weight: 1
+    result: 产生意外优点，但需要第二次测试才能保存为可靠事实。
+- id: table:faction-contact-reaction
+  name: 势力接触反应
+  visibility: known
+  description: 用于灰藓族、湖边聚落、外部文明线索和未知观察者的低压接触。
+  entries:
+  - weight: 2
+    result: 对方保持距离观察，允许继续用礼物、手势或中介降低压力。
+  - weight: 2
+    result: 对方接受低价值交换，但不开放敏感地点或族群情报。
+  - weight: 2
+    result: 对方注意到玩家携带物，需要解释用途或收起高风险物品。
+  - weight: 1
+    result: 旧承诺、礼物或共同项目让对方愿意给出一个小线索。
+  - weight: 1
+    result: 武装、噪音或突然接近造成误会，推进警惕但不直接开战。
+  - weight: 1
+    result: 对方提出反向需求，例如盐、食物、安全路线、医疗草药或工具知识。
+- id: table:base-upkeep
+  name: 基地维护压力
+  visibility: known
+  description: 用于休息、盘点、基地查询、扩建和长时间离家后的维护检查。
+  entries:
+  - weight: 2
+    result: 仓储分区需要整理，尤其是食物、火药、毒剂、发酵物和弹药。
+  - weight: 2
+    result: 灌溉、覆盖物或储水状态需要检查，否则干旱压力会继续累积。
+  - weight: 2
+    result: 菌丝通道和侧室稳定，但新增分工会消耗养分与维护时间。
+  - weight: 1
+    result: 陷阱、绊线或门口痕迹需要复核，避免误伤友方或暴露基地。
+  - weight: 1
+    result: 厨房、火塘或发酵角带来气味和火源管理问题。
+  - weight: 1
+    result: 基地有一项小维护可以顺手完成，降低维护压力或疲劳压力。
+- id: table:mystery-clue-vector
+  name: 谜团线索方向
+  visibility: gm
+  description: 用于外部文明、古代遗迹、神祇、森林异常和未知生物；只给方向，不直接揭示最终真相。
+  entries:
+  - weight: 2
+    result: 线索指向地点复查：旧火塘、叠石、异常植物、深潭、断崖或地下居所。
+  - weight: 2
+    result: 线索指向人物询问：An、夏娃、湖边聚落、未来外部接触者或俘虏。
+  - weight: 2
+    result: 线索指向材料实验：矿物、植物、菌丝、毒剂、火药或异常纤维。
+  - weight: 1
+    result: 线索指向时间变化：入夜、雨后、干旱、满钟后或多日观察。
+  - weight: 1
+    result: 线索指向矛盾证据，需要玩家选择相信、复查或暂存假说。
+  - weight: 1
+    result: 线索指向代价：继续调查会推进森林注意、遗迹扰动或文明传闻。
+- id: table:threat-consequence
+  name: 风险后果阶梯
+  visibility: known
+  description: 用于失败、局部成功、高风险选择和满钟前的软后果。
+  entries:
+  - weight: 2
+    result: 只出现预警：声音、气味、裂痕、湿痕、迟疑、远距观察或不稳定反应。
+  - weight: 2
+    result: 消耗时间或材料，但保留主要目标。
+  - weight: 2
+    result: 推进一个相关进度钟，而不是立即制造不可逆灾难。
+  - weight: 1
+    result: 造成轻微损伤、疲劳或装备可靠性下降，需要休息或维修。
+  - weight: 1
+    result: 迫使玩家选择撤退、降级目标、支付额外资源或承担更高风险。
+  - weight: 1
+    result: 若玩家无视明确预警，下一步可以升级为严重后果。
+- id: table:relationship-scene-hook
+  name: 关系场景钩子
+  visibility: known
+  description: 用于南瓜、夏娃、An、小的、T2和灰藓族聚落的日常互动开场；结果只提供场景入口，真实关系变化必须保存delta。
+  entries:
+  - weight: 2
+    result: 对方先提出一个低风险需求，例如食物、安静空间、工具说明、路线信息或状态汇报。
+  - weight: 2
+    result: 互动适合从共同劳动开始，例如处理鱼虾、整理仓储、检查水路、刻石板或隔栏喂食。
+  - weight: 2
+    result: 对方愿意交流，但需要玩家先降低压力：收起武器、放慢动作、示意来意或让夏娃/An中介。
+  - weight: 1
+    result: 出现一个文化或行为误解，只能形成待确认问题，不直接造成关系崩坏。
+  - weight: 1
+    result: 旧承诺被自然提起，玩家可以选择履行、解释延后或重新协商。
+  - weight: 1
+    result: 关系推进需要付出具体时间或资源，不能只靠一句话完成。
+- id: table:node-clue-routing
+  name: 节点线索路由
+  visibility: gm
+  description: 用于把探索发现导向可行动节点；按三线索原则给多个入口，不直接规定玩家必须去哪。
+  entries:
+  - weight: 2
+    result: 线索可以通向一个地点复查节点，并给出至少一个可观察痕迹。
+  - weight: 2
+    result: 线索可以通向一个人物询问节点，并说明对方为什么可能知道部分信息。
+  - weight: 2
+    result: 线索可以通向一个材料或制作实验节点，并要求样本、容器或安全测试。
+  - weight: 1
+    result: 线索可以通向一个时间条件节点，例如雨后、入夜、干旱加深或满钟后才更清楚。
+  - weight: 1
+    result: 线索互相矛盾，玩家需要选择复查、暂存假说或找第三证据。
+  - weight: 1
+    result: 线索会带来代价：继续查可能推进森林注意、聚落警惕、疲劳或遗迹扰动。
+- id: table:home-life-complication
+  name: 家园生活小波动
+  visibility: known
+  description: 用于悠闲农家节奏里的低烈度变化；优先生成整理、照料、修补和交流机会。
+  entries:
+  - weight: 2
+    result: 厨房、储物墙或发酵角需要一次短时整理，可顺带确认库存可信度。
+  - weight: 2
+    result: 农田或水路出现一个小瓶颈，适合用夏娃调度或简单劳动处理。
+  - weight: 2
+    result: 某个核心角色正好在可互动位置，适合开启低压对话或共同劳动。
+  - weight: 1
+    result: 旧布防位、门口痕迹或围墙角需要复核，但不自动触发危机。
+  - weight: 1
+    result: T2隔离室、H室或D仓库传来可解释的小动静，需要先问夏娃或近距观察。
+  - weight: 1
+    result: 休整能降低疲劳或维护压力，但会消耗一个明确时段。
+- id: table:palette-deployment-check
+  name: 素材池投放检查
+  visibility: gm
+  description: 用于把palette候选投入正式存档前的确认；结果要求线索、风险和保存边界齐全。
+  entries:
+  - weight: 2
+    result: 候选只作为线索出现，先给气味、声音、足迹、残片或远距观察，不保存新实体。
+  - weight: 2
+    result: 候选可保存为hinted实体，但必须写明确认方法和不确定点。
+  - weight: 2
+    result: 候选需要一个已有地点或进度钟支撑，否则应延后或换成更贴合地区的结果。
+  - weight: 1
+    result: 候选与当前角色关系有关，必须先走社交姿态或中介，不能突然变成友方。
+  - weight: 1
+    result: 候选与高价值资源有关，必须附带采集风险、再生边界和污染/暴露代价。
+  - weight: 1
+    result: 候选可直接转为行动菜单项，但不能在同一查询中自动完成发现和收益。

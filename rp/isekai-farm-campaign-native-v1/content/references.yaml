@@ -1,0 +1,109 @@
+entities:
+- id: ref:trap-and-powder-safety
+  type: reference
+  name: 陷阱与火药安全结算参考
+  visibility: known
+  summary: 火药、地雷、爆炸箭和基地被动防御的结算边界：必须提示风险、记录消耗、处理声响/痕迹，不能替玩家踩雷或自动拆雷。
+  aliases:
+  - 地雷结算
+  - 火药安全
+  - 爆炸物结算
+  - 陷阱安全
+- id: ref:turn-assistant-operating-rules
+  type: reference
+  name: 回合编排与回复验收规则
+  visibility: known
+  summary: v2 回合运行的工程规则：上下文、预演、回复验收、delta 校验、保存和检查必须形成闭环。
+  aliases:
+  - turn assistant 规则
+  - 回合编排规则
+  - 回合自动化规则
+- id: ref:v1-3ac9e73b42
+  type: reference
+  name: 战斗参考·武器威力对比（估算）
+  visibility: known
+  summary: '| 武器 | 有效距离 | 威力 | 射速 | 上手难度 | |------|----------|------|------|----------| | 铁木弩（普通箭） | ~30m | ⭐⭐⭐ | ⭐⭐ | ⭐（极易）
+    | | 铁木弩（毒箭） | ~30m | ⭐⭐⭐⭐⭐ | ⭐⭐ | ⭐ | | 竹弓 | ~20m | ⭐⭐ | ⭐⭐⭐ | ⭐⭐⭐ | | 铁木长矛 | ~2m | ⭐⭐⭐⭐ | ⭐⭐⭐ | ⭐⭐ | | 铁木短刀 | ~0.5m |
+    ⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐ |'
+  aliases:
+  - 战斗参考·武器威力对比（估算）
+- id: ref:v1-6b9e0a537e
+  type: reference
+  name: 死亡森林·地形剖面（东西向）
+  visibility: known
+  summary: 西 空地 东 荆棘圈 ← 200m → [0,0]家 → 300m → 小溪 → 500m → 水潭 (-3m) (±0m) (-20m) (-30m)
+  aliases:
+  - 死亡森林·地形剖面（东西向）
+- id: ref:v1-7199ba25ca
+  type: reference
+  name: 死亡森林·地理位置
+  visibility: known
+  summary: 已知范围：以空地为圆心，半径约 500m 边界：未探明 地形：丘陵/缓坡，整体向南偏东倾斜（小溪流向） 气候带：温带（推测），晚春温暖潮湿
+  aliases:
+  - 死亡森林·地理位置
+- id: ref:v1-74142750b3
+  type: reference
+  name: 死亡森林·资源分布
+  visibility: known
+  summary: '| 资源 | 丰度 | 主要分布 | 用途 | |------|------|----------|------| | 枯枝 | ★★★★★ | 全域 | 燃料 | | 腐叶 | ★★★★★ | 全域 | 堆肥 | |
+    藤条 | ★★★★ | 东/西向 | 捆扎、编织 | | 大叶片 | ★★★★ | 东向 | 屋顶、遮蔽 | | 硬石 | ★★★ | 北向 | 打火、磨刀 | | 燧石 | ★★ | 北向 | 打火（最佳） | | 石英 | ★ |
+    东向瀑布 | 细磨石 | | 蛇纹石 | ★ | 东向瀑布 | 精磨石 | | 硫磺 | ★ | 西北泉眼 | 引火/药剂 | | 松子 | ★★★ | 南向松林 | 食物/储粮 | | 苔藓 | ★★★★ | 南向松林 | 铺床 |
+    | 蕨芽 | ★★★★ | 东向溪边 | 偶蹄类食物 |'
+  aliases:
+  - 死亡森林·资源分布
+- id: ref:v1-9d3e541d09
+  type: reference
+  name: 死亡森林·气候特征（第1-3天观察）
+  visibility: known
+  summary: '- 晚春，温暖（体感 ~22°C 昼 / ~15°C 夜） - 多云转晴趋势 - 无降水（但空气湿度中高） - 昼夜温差约 7°C'
+  aliases:
+  - 死亡森林·气候特征（第1-3天观察）
+- id: ref:v1-a94116e788
+  type: reference
+  name: 死亡森林·生态观察
+  visibility: known
+  summary: '- 鸟鸣：白天活跃，种类多样 - 昆虫：存在（蚯蚓、蚁类），未发现蚊虫滋扰 - 大型动物：天黑后有声，白天偶有足迹'
+  aliases:
+  - 死亡森林·生态观察
+- id: ref:v1-b929be7b4e
+  type: reference
+  name: 死亡森林·土壤
+  visibility: known
+  summary: '- 类型：黑色腐殖土（表层 20-30cm） - 排水：良好（斜坡地形） - 肥力：高（腐叶堆积，蚯蚓丰富） - 适耕性：优秀（松软，易翻）'
+  aliases:
+  - 死亡森林·土壤
+- id: ref:v1-d8e86538af
+  type: reference
+  name: 战斗参考·毒箭杀伤链
+  visibility: known
+  summary: 命中（任何部位） → 乳汁入血 → 数十秒至数分钟 → 心律紊乱 → 心脏骤停 → 猎物倒地 注：打中心脏/大血管更快；四肢命中稍慢但依然致命 ---
+  aliases:
+  - 战斗参考·毒箭杀伤链
+- id: ref:campaign-authoring-patterns
+  type: reference
+  name: 作者版沙盒内容组织参考
+  visibility: known
+  summary: 本剧情包采用“准备情境、不预设剧情；三线索确认；进度钟；关系结算边界；地区化随机表”的组织原则，并限制在当前引擎支持的实体、规则、时钟、随机表和palette内表达。
+  aliases:
+  - 作者版内容组织
+  - 沙盒剧情组织
+  - 剧情包精修参考
+  details:
+    borrowed_patterns:
+    - pattern: prep_situations_not_plots
+      use_in_campaign: 只准备地点、压力、目标、线索和可行动钩子，不预写玩家必须经历的事件顺序。
+    - pattern: three_clue_redundancy
+      use_in_campaign: 重大真相用地点复查、人物询问、材料实验等多入口线索确认。
+    - pattern: progress_and_faction_clocks
+      use_in_campaign: 势力态度、森林注意、遗迹扰动、基地维护和制作突破都用clock推进。
+    - pattern: relationship_status_axes
+      use_in_campaign: 剧情包只写关系结算边界和保存触发；具体关系对象、姿态、信任和承诺属于存档。
+    - pattern: regional_random_tables
+      use_in_campaign: 随机结果必须贴合地区、时段、风险和当前进度钟，优先生成可行动线索或小代价。
+    source_urls:
+    - https://thealexandrian.net/wordpress/53341/roleplaying-games/is-node-based-design-prepping-a-plot
+    - https://thealexandrian.net/wordpress/7985/roleplaying-games/node-based-scenario-design-part-3-inverting-the-three-clue-rule
+    - https://bladesinthedark.com/progress-clocks
+    - https://bladesinthedark.com/faction-game
+    - https://www.dungeonworldsrd.com/gamemastering/fronts/
+    - https://www.roleplayingtips.com/rptn/random-encounter-tables/

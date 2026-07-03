@@ -1,0 +1,196 @@
+clocks:
+- id: clock:ashmoss-trust
+  name: 灰藓族互信
+  summary: 主角已与 An 和小的建立交换、命名、石板沟通和分工贸易。
+  clock_type: relationship
+  segments_total: 6
+  segments_filled: 0
+  visibility: visible
+  trigger_when_full: 灰藓族开放更深层路线、族群知识和稳定协作。
+  tick_rules:
+    reduce_when:
+    - 违背承诺
+    - 带来高风险敌对者
+    tick_when:
+    - 履行食物/盐/调料承诺
+    - 尊重对方行为边界
+    - 成功完成共同项目
+  aliases:
+  - An信任
+  - 灰藓族信任
+- id: clock:base-upkeep-pressure
+  name: 基地维护压力
+  summary: 农田、储水、仓储、厨房、发酵、危险品、陷阱和菌丝通道需要周期性维护。
+  clock_type: base
+  segments_total: 6
+  segments_filled: 0
+  visibility: visible
+  trigger_when_full: 基地出现明确维护问题，例如仓储污染、危险品混放、灌溉瓶颈、菌丝通道效率下降或陷阱误判风险。
+  tick_rules:
+    reduce_when:
+    - 集中盘点和整理仓储
+    - 分区存放火药、毒剂、食物和发酵物
+    - 检查灌溉、堆肥、陷阱和菌丝通道
+    tick_when:
+    - 连续扩田、制作或孵化单位而不维护
+    - 潮湿、入夜、干旱或厨房高负荷
+    - 危险材料与食物/火源/通道混放
+  aliases:
+  - 仓储压力钟
+  - 后勤压力钟
+  - 基地维护钟
+- id: clock:civilization-rumor
+  name: 文明传闻
+  summary: 外部文明尚未接触，但异常物产、火药和贸易最终可能外溢成传闻。
+  clock_type: faction
+  segments_total: 8
+  segments_filled: 0
+  visibility: hidden
+  trigger_when_full: 外部人类势力派侦查者进入森林边缘。
+  tick_rules:
+    reduce_when:
+    - 控制贸易规模
+    - 使用灰藓族中介
+    tick_when:
+    - 大量物资进入贸易网络
+    - 明显人工制品被外人发现
+  aliases:
+  - 人类文明注意
+- id: clock:crafting-breakthrough
+  name: 工艺突破
+  summary: 用于追踪当前高阶制作路线从想法、原型、测试到稳定配方的推进。
+  clock_type: project
+  segments_total: 8
+  segments_filled: 0
+  visibility: visible
+  trigger_when_full: 一个当前重点工艺可以保存为稳定 recipe，后续重复制作可大幅简化。
+  tick_rules:
+    reduce_when:
+    - 发现关键材料不可靠
+    - 测试失败并推翻原方案
+    tick_when:
+    - 完成材料确认
+    - 做出安全原型
+    - 完成小样测试或实战回收
+    - 把失败原因转化为可复用配方约束
+  aliases:
+  - 制作突破
+  - 原型进度钟
+  - 工艺进度
+- id: clock:drought-spring
+  name: 春末干旱
+  summary: 水潭和瀑布水量已下降，十六畦需要持续浇水。
+  clock_type: season
+  segments_total: 6
+  segments_filled: 0
+  visibility: visible
+  trigger_when_full: 水源压力明显上升，作物浇水频率增加，水边生物活动改变。
+  tick_rules:
+    reduce_when:
+    - 下雨
+    - 建立稳定引水/储水系统
+    tick_when:
+    - 连续晴天
+    - 玩家多日不处理灌溉
+  aliases:
+  - 天气进度
+  - 干旱
+- id: clock:fatigue-strain
+  name: 疲劳压力
+  summary: 连续制作、远行、入夜行动、负重和情绪压力会累积疲劳；当前作为轻度压力追踪，不打断悠闲节奏。
+  clock_type: condition
+  segments_total: 6
+  segments_filled: 0
+  visibility: visible
+  trigger_when_full: 必须安排高质量休息，且精细制作、追踪、战斗反应和社交耐心在恢复前下降。
+  tick_rules:
+    reduce_when:
+    - 充足睡眠
+    - 有热食和饮水的安全休息
+    - 减少入夜远行和高危制作
+    tick_when:
+    - 连续高强度制作或远行
+    - 入夜后继续探索、战斗或处理危险品
+    - 负重、受伤、惊吓或长期警戒
+  aliases:
+  - 休息压力
+  - 体力压力
+  - 疲劳压力钟
+- id: clock:forest-attention
+  name: 森林注意
+  summary: 农田、火药、魔力植物和夜间嗡鸣共同构成未知关注源。
+  clock_type: mystery
+  segments_total: 8
+  segments_filled: 0
+  visibility: hinted
+  trigger_when_full: 未知大型存在或森林机制主动接近空地。
+  tick_rules:
+    reduce_when:
+    - 降低活动痕迹
+    - 建立遮蔽/防御/生态隔离
+    tick_when:
+    - 大规模使用金光
+    - 爆炸声或火药测试
+    - 新魔力植物大量出现
+  aliases:
+  - 夜间嗡鸣
+  - 森林注意力
+- id: clock:lake-settlement-suspicion
+  name: 湖边聚落警惕
+  summary: 湖边三人聚落发现过活动痕迹，尚未正式接触。
+  clock_type: faction
+  segments_total: 4
+  segments_filled: 0
+  visibility: hinted
+  trigger_when_full: 聚落迁移、设防、误判主角威胁，或主动派人观察。
+  tick_rules:
+    reduce_when:
+    - 留下交换物
+    - 远距离展示非敌意
+    tick_when:
+    - 未隐藏地侦查棚屋
+    - 取走资源不留交换物
+    - 武装接近
+  aliases:
+  - 湖边聚落警惕
+  - 湖边警惕
+  - 聚落警惕钟
+- id: clock:ruin-disturbance
+  name: 遗迹扰动
+  summary: 古代遗迹和异常地点尚未成为当前主线；只有探索、挖掘、带走构件或激活异常时才推进。
+  clock_type: mystery
+  segments_total: 6
+  segments_filled: 0
+  visibility: hinted
+  trigger_when_full: 遗迹或异常地点产生主动反馈，例如环境变化、守护机制、势力注意或新的高风险调查节点。
+  tick_rules:
+    reduce_when:
+    - 只做远距观察和记录
+    - 不移动核心构件
+    - 通过多线索确认安全边界
+    tick_when:
+    - 挖掘、破坏、带走未知构件
+    - 使用金光、火药或魔力植物刺激异常地点
+    - 在遗迹附近长期驻扎或暴露基地痕迹
+  aliases:
+  - 异常扰动钟
+  - 遗迹压力钟
+  - 遗迹扰动
+- id: clock:soil-depletion
+  name: 土壤肥力消耗
+  summary: 金光催熟和十六畦密集耕作开始消耗空地肥力。
+  clock_type: ecology
+  segments_total: 6
+  segments_filled: 0
+  visibility: visible
+  trigger_when_full: 作物生长效率下降，必须堆肥、轮作或扩地。
+  tick_rules:
+    reduce_when:
+    - 堆肥
+    - 豆科轮作
+    - 休耕
+    tick_when:
+    - 大规模催熟
+    - 连续多日不补肥
+  aliases:
+  - 肥力

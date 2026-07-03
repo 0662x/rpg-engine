@@ -1,0 +1,142 @@
+smoke_tests:
+- id: query-scene
+  type: query
+  capabilities:
+  - query
+  kind: scene
+  contains: 空地/家
+- id: query-clue
+  type: query
+  capabilities:
+  - clue
+  kind: entity
+  query_text: 荆棘圈
+  contains: 荆棘
+- id: query-resource
+  type: query
+  capabilities:
+  - inventory_resource
+  kind: entity
+  query_text: 终极复合弩
+  contains: 终极复合弩
+- id: query-project
+  type: query
+  capabilities:
+  - project_task
+  kind: entity
+  query_text: 灰藓族分工贸易
+  contains: 灰藓族
+- id: query-author-patterns
+  type: query
+  capabilities:
+  - clue
+  kind: entity
+  query_text: 作者版沙盒内容组织参考
+  contains: 三线索
+- id: preview-explore-risk
+  type: preview
+  capabilities:
+  - explore
+  - risk
+  action: explore
+  user_text: 谨慎查看空地边缘的旧痕迹
+  options:
+    target: 空地/家
+    approach: 谨慎巡查
+  contains: Delta 草案
+- id: preview-travel
+  type: preview
+  capabilities:
+  - travel
+  action: travel
+  user_text: 去六边形菌丝复合屋
+  options:
+    destination: 六边形菌丝复合屋
+    pace: careful
+  contains: Delta 草案
+- id: preview-social-trade
+  type: preview
+  capabilities:
+  - social
+  - trade_exchange
+  action: social
+  user_text: 询问夏娃基地状态和物资交换安排
+  options:
+    npc: 夏娃
+    topic: 基地状态和交易安排
+    approach: 低压询问
+  contains: 夏娃
+- id: preview-gather
+  type: preview
+  capabilities:
+  - gather_search
+  action: gather
+  user_text: 盘点盐和调料库存
+  options:
+    target: 盐
+    location: 六边形菌丝复合屋
+  expect_status: needs_confirmation
+  contains: 必须确认
+- id: preview-combat-with-ammo
+  type: preview
+  capabilities:
+  - combat
+  action: combat
+  user_text: 用终极复合弩保持距离压制大型猫科威胁
+  options:
+    target: threat:t2-large-cat
+    weapon: item:ultimate-compound-crossbow
+    ammo: item:stun-thorn-bolts
+    distance: 中距
+    ready_state: 已上弦并确认射界
+  contains: Delta 草案
+- id: preview-rest
+  type: preview
+  capabilities:
+  - rest_time
+  action: rest
+  user_text: 在空地休息到清晨
+  options:
+    until: morning
+  contains: Delta 草案
+- id: validate-clock-delta
+  type: validate_delta
+  capabilities:
+  - clock
+  delta:
+    expected_turn_id: turn:seed
+    command_id: smoke:validate-clock-delta
+    user_text: 记录春末干旱压力。
+    intent: clock
+    changed: true
+    summary: 春末干旱压力被记录一次。
+    events:
+    - type: clock_tick
+      title: 春末干旱压力记录
+      summary: 记录一次干旱与灌溉压力。
+      source: smoke
+      payload:
+        clock_id: clock:drought-spring
+        delta: 1
+    tick_clocks:
+    - id: clock:drought-spring
+      delta: 1
+      reason: smoke
+- id: random-forest-risk
+  type: random_table
+  capabilities:
+  - random_table
+  table: table:forest-risk
+  contains: river wind
+- id: random-relationship-scene-hook
+  type: random_table
+  capabilities:
+  - random_table
+  table: table:relationship-scene-hook
+  contains: 低风险需求
+- id: random-node-clue-routing
+  type: random_table
+  capabilities:
+  - random_table
+  table: table:node-clue-routing
+  contains: 地点复查节点

@@ -1,0 +1,196 @@
+entities:
+- id: item:burst-thorn-bolts
+  type: item
+  name: 赤红炸箭
+  visibility: known
+  summary: 撞击爆裂箭；拳大空腔爆裂，适合冲击、破甲和驱散。
+  aliases:
+  - 炸箭
+  - 爆裂箭
+  - 赤红炸箭
+  item:
+    category: ammunition
+    quantity: 20.0
+    unit: 支
+    stackable: true
+    properties:
+      ammo_profile:
+        adjudication_rules:
+        - 每次击发消耗1支赤红炸箭。
+        - 命中硬目标时优先结算破甲/震退。
+        - 若用于狩猎，战利品完整度应下降。
+        best_use: 硬壳、甲壳、群体驱散、打断冲锋
+        compatible_weapon_id: item:ultimate-compound-crossbow
+        effect_type: impact_burst
+        limitations:
+        - 不是火药爆炸，范围小于火药箭。
+        - 可能破坏皮毛、甲壳和可采集材料。
+        primary_effect: 撞击爆裂、冲击、破甲或撕裂表层组织
+        range_notes: 中距和远距都可用；需命中实体表面触发
+        reliability: 撞击触发稳定；软泥/水面/厚毛皮会削弱爆裂形态
+        risks:
+        - 近距可能有碎片和冲击波风险。
+        - 对隐蔽行动不友好，声音和痕迹明显。
+- id: item:frost-thorn-bolts
+  type: item
+  name: 霜白冻箭
+  visibility: known
+  summary: 霜寒控场箭；拳大范围冻伤，适合减速、冻结湿表面和压制冷血目标。
+  aliases:
+  - 冰箭
+  - 冻箭
+  - 霜白冻箭
+  item:
+    category: ammunition
+    quantity: 20.0
+    unit: 支
+    stackable: true
+    properties:
+      ammo_profile:
+        adjudication_rules:
+        - 每次击发消耗1支霜白冻箭。
+        - 命中后记录目标减速、冻结或地形变化。
+        - 水/胶质/潮湿环境可给控场效果加成。
+        best_use: 冷血目标、胶质目标、水边战斗、控场撤退
+        compatible_weapon_id: item:ultimate-compound-crossbow
+        effect_type: frost_control
+        limitations:
+        - 不是大范围冰墙。
+        - 对厚甲或高热目标更偏减速而非冻结。
+        primary_effect: 局部冻结、冻伤、减速或制造湿滑/脆化表面
+        range_notes: 命中点附近生效；远距命中仍可控场但范围不扩大
+        reliability: 潮湿、水面、胶质目标上效果更明显；高热目标会削弱
+        risks:
+        - 可能冻裂可采集材料。
+        - 水边使用会改变地面风险，友方也可能滑倒。
+- id: item:plain-bolts
+  type: item
+  name: 旧普通箭
+  visibility: known
+  summary: 无
+  aliases:
+  - 旧普通箭
+  item:
+    category: ammunition
+    quantity: 3.0
+    unit: 支
+    stackable: true
+- id: item:poison-bolts
+  type: item
+  name: 旧毒弩箭
+  visibility: known
+  summary: 旧毒弩箭，结构化库存记录为9支；毒剂来源已确认为见血封喉树，有效期不明确，当前可用性需使用前复核。
+  aliases:
+  - 旧毒弩箭
+  item:
+    category: ammunition
+    quantity: 9.0
+    unit: 支
+    stackable: true
+- id: item:powder-arrows
+  type: item
+  name: 火药箭
+  visibility: known
+  summary: 火药爆破箭；引信需按终极复合弩的新箭速重校准。
+  aliases:
+  - 火药箭
+  - 爆破箭
+  item:
+    category: ammunition
+    quantity: 5.0
+    unit: 支
+    stackable: true
+    properties:
+      ammo_profile:
+        adjudication_rules:
+        - 每次击发消耗1支火药箭。
+        - 若未事先校准引信，命中后按不稳定爆破处理。
+        - 爆炸或巨大声响应考虑推动森林注意。
+        best_use: 破坏巢穴/遮蔽、制造响动、对付聚集或怕火怕响的目标
+        compatible_weapon_id: item:ultimate-compound-crossbow
+        effect_type: explosive
+        limitations:
+        - 不能默认精准空爆；必须有引信校准或接触爆破说明。
+        - 近距使用可能波及主角、南瓜、树屋或战利品。
+        primary_effect: 小范围爆破、惊吓、破坏遮蔽或逼退目标
+        range_notes: 中近距离更可靠；远距需重校准引信延迟
+        reliability: 未重校准前不稳定；潮湿会明显降低可靠性
+        risks:
+        - 噪音大，容易暴露位置。
+        - 火药受潮可能哑火、迟爆或威力不足。
+        - 森林中使用可能引发火星、烟味和追踪痕迹。
+- id: item:stun-thorn-bolts
+  type: item
+  name: 琥珀麻箭
+  visibility: known
+  summary: 控制型麻痹箭；命中活体后约3息倒地，适合活捉和打断。
+  aliases:
+  - 控制箭
+  - 琥珀麻箭
+  - 麻箭
+  item:
+    category: ammunition
+    quantity: 20.0
+    unit: 支
+    stackable: true
+    properties:
+      ammo_profile:
+        adjudication_rules:
+        - 每次击发消耗1支琥珀麻箭。
+        - 结算时区分目标体型、体质和是否有神经结构。
+        - 活捉成功后必须记录目标状态和约束方式。
+        best_use: 活捉、打断冲锋、控制中小型活体目标
+        compatible_weapon_id: item:ultimate-compound-crossbow
+        effect_type: stun
+        limitations:
+        - 不是立即停止一切动作，通常需要数息生效。
+        - 大型或高抗性目标可能只减速不倒地。
+        primary_effect: 命中后麻痹、倒地或动作迟滞
+        range_notes: 标准射程内最稳定；远距命中非要害也可产生迟滞
+        reliability: 对有神经/肌肉反应的目标可靠；对史莱姆、植物、无机物不确定
+        risks:
+        - 活捉目标仍需后续束缚或隔离。
+        - 若命中非关键部位，目标可能在倒地前继续移动。
+- id: item:toxic-thorn-bolts
+  type: item
+  name: 紫黑毒箭
+  visibility: known
+  summary: 神经+血液双毒箭；强于见血封喉，适合快速削弱或击杀活体。
+  aliases:
+  - 毒箭
+  - 紫黑毒箭
+  item:
+    category: ammunition
+    quantity: 20.0
+    unit: 支
+    stackable: true
+    properties:
+      ammo_profile:
+        adjudication_rules:
+        - 每次击发消耗1支紫黑毒箭。
+        - 命中后记录中毒状态、发作节奏和战利品污染。
+        - 无血液/无神经目标不能默认吃满效果。
+        best_use: 对付有血液/神经系统的危险活体
+        compatible_weapon_id: item:ultimate-compound-crossbow
+        effect_type: toxin
+        limitations:
+        - 不保证瞬杀。
+        - 可能污染肉、皮、血液等战利品。
+        primary_effect: 中毒、虚弱、神经失调或持续伤害
+        range_notes: 只要破皮入体即可发挥；远距命中浅伤时效果降低
+        reliability: 对普通动物和类人生物高；对胶质、植物、无血目标需保守
+        risks:
+        - 误伤友方或猎物污染不可逆。
+        - 处理尸体时需要避免接触箭头和毒液。
+- id: item:v1-9a74235657
+  type: item
+  name: 竹箭（弓用）
+  visibility: known
+  summary: 退役
+  aliases:
+  - 竹箭（弓用）
+  item:
+    category: ammunition
+    quantity: 15.0
+    unit: 支
+    stackable: true

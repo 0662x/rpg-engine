@@ -1,0 +1,91 @@
+entities:
+- id: project:arrow-upgrade
+  type: project
+  name: 愈疮木重箭杆与渊刺藤箭头
+  visibility: known
+  summary: 箭杆制作和渊刺藤四种刺效果验证已确认完成；后续重点是库存数量复核、弹药分装标记和火药箭引信校准。
+  aliases:
+  - 四种刺箭头
+  - 渊刺藤箭头
+  - 箭杆升级
+  - 终极弩箭升级
+- id: project:ashmoss-trade
+  type: project
+  name: 灰藓族分工贸易
+  visibility: known
+  summary: An 和小的承诺采硫磺、硝石、鱼、核心、柴火和情报，主角供应菜、盐、油和调料。
+  aliases:
+  - An贸易
+  - 分工贸易
+  - 灰藓族贸易
+- id: project:v1-1d1f3d242a
+  type: project
+  name: 竹箭杆→愈疮木杆全面升级
+  visibility: known
+  summary: 已确认完成：旧竹箭杆全面升级为愈疮木杆，目标数量80支已完成；不再作为待办项目推进。
+  aliases:
+  - 全面箭杆升级
+  - 愈疮木杆替换计划
+  - 竹箭杆→愈疮木杆全面升级
+  - 竹箭杆升级
+- id: project:v1-3ebed921cd
+  type: project
+  name: 愈疮木重箭杆
+  visibility: known
+  summary: 已确认完成：80支愈疮木重箭杆已制作完成；没有“已削好但未装箭头”的独立中间库存。
+  aliases:
+  - 愈疮木箭杆批次
+  - 愈疮木重箭杆
+  - 重箭杆项目
+- id: project:v1-4150f6481e
+  type: project
+  name: 渊刺藤毒刺替代
+  visibility: known
+  summary: 已确认完成关键验证：渊刺藤四种刺的效果均已实测；当前只剩具体剩余数量未登记。
+  aliases:
+  - 四种刺替代计划
+  - 渊刺藤毒刺替代
+  - 渊刺藤箭头替代
+- id: project:v1-4c859eaa91
+  type: project
+  name: 毒箭效力
+  visibility: known
+  summary: 毒箭效力项目更新：毒剂来源已确认为见血封喉树；有效期仍不明确，旧9支涂毒箭库存记录仍需复核当前可用性。
+  aliases:
+  - 毒箭效力
+  - 毒箭测试
+  - 涂毒箭验证
+- id: project:v1-569a730495
+  type: project
+  name: 见血封喉树恢复
+  visibility: known
+  summary: 见血封喉树恢复/采样的旧迁移项目条目；具体位置、恢复状态和采样结果属于存档事实，剧情包不预设。
+  aliases:
+  - 毒树恢复项目
+  - 见血封喉恢复
+  - 见血封喉树恢复
+  details:
+    campaign_boundary:
+      save_owned_fields:
+      - current_reliable_location
+      - recovery_status
+      - sample_quantity
+      - poison_inventory
+      - current_access_route
+      authoring_note: 通用剧情包只能记录处理边界；具体裁决保存在存档包中。
+- id: project:v1-a793ab2ec9
+  type: project
+  name: 农作物生长
+  visibility: known
+  summary: 🌱 等待自然生长
+  aliases:
+  - 农作物生长
+- id: project:water-crops
+  type: project
+  name: 十六畦浇水维护
+  visibility: known
+  summary: 十六畦已有两天未浇水，春末干旱正在推进，需尽快补水或建立引水方案。
+  aliases:
+  - 浇地
+  - 浇水
+  - 灌溉

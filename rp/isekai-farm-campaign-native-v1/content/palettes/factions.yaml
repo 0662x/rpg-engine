@@ -1,0 +1,138 @@
+factions:
+- id: pal:faction:forest-watchers
+  name: 未知森林观察者
+  summary: 可能注意到基地活动的低信息候选势力，只能先作为线索处理。
+  rarity: hidden
+  biomes:
+  - death forest
+  intents:
+  - explore
+  - social
+  discovery:
+    mode: clue_only
+    clue_text: 远处有被整理过的枝条或观察痕迹，但不能确认身份。
+    confirm_methods:
+    - 复查痕迹
+    - 询问已知友方
+    - 降低暴露后等待反应
+  risks:
+  - 过早接触会误判对方敌意，也可能推进森林注意。
+  save_as:
+    type: faction
+    entity_id: faction:native-forest-watchers
+- id: pal:faction:lake-ashmoss-fishers
+  name: 湖边灰藓族渔作小组
+  summary: 湖边聚落中可能负责渔网、棚屋和浅水观察的灰藓族分工候选，适合通过An或交换物低压接触。
+  rarity: known
+  locations:
+  - loc:lake-ashmoss-settlement
+  - loc:l11-delta
+  intents:
+  - social
+  - routine
+  discovery:
+    mode: confirm_required
+    clue_text: 湖边棚屋和渔网显示出稳定分工，但具体成员和态度还需接触确认。
+    confirm_methods:
+    - 通过An询问礼仪
+    - 远距观察渔网操作
+    - 留下低风险交换物
+  risks:
+  - An家庭信任不能自动转化为聚落信任。
+  - 武装或突然接近会推进聚落警惕。
+  save_as:
+    type: faction
+    entity_id: faction:lake-ashmoss-fishers
+- id: pal:faction:grassland-trace-makers
+  name: 草原痕迹制造者
+  summary: L15附近非灰藓族工具痕、叠石或旧营火可能指向的未确认外部活动者，只能按痕迹分级处理。
+  rarity: hidden
+  locations:
+  - loc:l15-grassland-cliff
+  intents:
+  - explore
+  - social
+  discovery:
+    mode: clue_only
+    clue_text: 开阔草原边界出现不完全符合灰藓族习惯的旧痕迹。
+    confirm_methods:
+    - 记录工具痕和方向
+    - 寻找第二、第三独立线索
+    - 避免把旧痕迹直接判定为近期人类侦查
+  risks:
+  - 过早确认会破坏外部文明痕迹分级。
+  - 追踪可能暴露在开阔草原。
+  save_as:
+    type: faction
+    entity_id: faction:grassland-trace-makers
+- id: pal:faction:river-net-traders
+  name: 河口网具交易线
+  summary: 河口、渔网和外来材料可能暗示的松散交易线候选，可作为灰藓族聚落与外界交换的远期线索。
+  rarity: hidden
+  locations:
+  - loc:l11-delta
+  intents:
+  - social
+  - explore
+  discovery:
+    mode: clue_only
+    clue_text: 网具结法或材料来源可能并非湖边聚落完全自给。
+    confirm_methods:
+    - 比较纤维和结法
+    - 询问An或湖边聚落
+    - 等文明传闻钟或聚落接触推进后再确认
+  risks:
+  - 不能凭一张渔网直接确认外部贸易。
+  - 追问敏感来源可能提高聚落警惕。
+  save_as:
+    type: faction
+    entity_id: faction:river-net-traders
+- id: pal:faction:ruin-salvage-rumor
+  name: 遗迹拾荒传闻
+  summary: 古代遗迹存在背景下的远期传闻候选，可解释少量异常材料流动，但不能在无遗迹线索时直接登场。
+  rarity: hidden
+  biomes:
+  - old_forest
+  - anomaly
+  intents:
+  - explore
+  - social
+  discovery:
+    mode: clue_only
+    clue_text: 某些异常材料或旧故事可能指向专门寻找遗迹残物的人。
+    confirm_methods:
+    - 需要遗迹扰动或文明传闻支撑
+    - 至少三条独立线索后再保存
+    - 先作为故事传闻，不给具体基地位置
+  risks:
+  - 过早投放会抢走悠闲农家节奏。
+  - 遗迹相关接触应伴随风险和代价。
+  unlock:
+    required_clocks:
+      clock:ruin-disturbance: 2
+  save_as:
+    type: faction
+    entity_id: faction:ruin-salvage-rumor
+- id: pal:faction:hearth-symbol-keepers
+  name: 火塘符号守望者
+  summary: 灰藓族石板和火塘符号传统中的潜在知识保管者候选，可由An家庭关系慢慢引出。
+  rarity: rare
+  locations:
+  - loc:l09-underground-home
+  - loc:home-mycelium-h-room
+  intents:
+  - social
+  - explore
+  discovery:
+    mode: confirm_required
+    clue_text: 石板符号中反复出现火塘、路线和禁忌的组合，可能代表更正式的记忆传统。
+    confirm_methods:
+    - 与An进行石板沟通
+    - 比较L9旧居和H室石板
+    - 等灰藓族互信推进后询问禁忌含义
+  risks:
+  - 不能把符号传统直接等同于宗教或政治组织。
+  - 追问禁忌可能需要先提高互信。
+  save_as:
+    type: faction
+    entity_id: faction:hearth-symbol-keepers

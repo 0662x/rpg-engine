@@ -1,0 +1,37 @@
+entities:
+- id: recipe:curewood-heavy-shafts
+  type: recipe
+  name: 愈疮木重箭杆制作
+  visibility: known
+  summary: 第13天箭杆升级配方：用金光获得愈疮木箭杆材料，削制重箭杆并等待装配渊刺藤箭头。
+  aliases:
+  - 制作愈疮木重箭杆
+  - 愈疮木重箭杆配方
+  - 箭杆升级配方
+- id: recipe:fish-trap-check
+  type: recipe
+  name: 鱼笼收取与复位
+  visibility: known
+  summary: 按存档记录逐个检查鱼笼的位置、编号、收获、诱饵、损坏和复位状态；剧情包不预设当前鱼笼布设点。
+  aliases:
+  - 收鱼笼
+  - 检查鱼笼
+  - 鱼笼复位
+- id: recipe:powder-arrow-fuse-calibration
+  type: recipe
+  name: 火药箭引信重校准
+  visibility: known
+  summary: 按终极复合弩新箭速重新校准火药箭引信，降低迟爆、哑火和过早爆的风险。
+  aliases:
+  - 引信重校准
+  - 校准火药箭
+  - 火药箭校准
+- id: recipe:thorn-bolt-assembly
+  type: recipe
+  name: 渊刺藤四系箭装配
+  visibility: known
+  summary: 将愈疮木重箭杆、直脊杉杆或现有箭束与渊刺藤四类刺装配成麻、毒、炸、冻四系箭。
+  aliases:
+  - 四系箭装配
+  - 渊刺藤箭头装配
+  - 魔力刺箭装配

@@ -1,0 +1,80 @@
+entities:
+- id: char:an
+  type: character
+  name: An
+  visibility: known
+  summary: 全家团聚/火塘暖橙/骨刀石斧已挂/石板三块并排神龛/西隧可直通旧巨树居所
+  aliases:
+  - An
+  - C1
+  character:
+    species_id: species:ashmoss-folk
+    role: ally
+    attitude: friendly
+    trust: 0
+    health_state: 未知
+- id: char:ashmoss-young
+  type: character
+  name: 小的
+  visibility: known
+  summary: 灰藓族成熟个体（An的无性繁殖后代/已完全发育）
+  aliases:
+  - C2
+  - 小的
+  character:
+    species_id: species:ashmoss-folk
+    role: ally
+    attitude: friendly
+    trust: 0
+    health_state: 未知
+- id: char:eve-mycelium-core
+  type: character
+  name: 夏娃
+  visibility: known
+  summary: 母孢子树/菌丝中枢角色模板；具体金光累计、沟回层数、律动和位置属于存档事实。
+  aliases:
+  - 夏娃
+  - 菌丝中枢
+  - 母孢子树
+  character:
+    species_id: species:youhrang-mycelium
+    role: 基地调度中枢/共生伙伴/菌丝文明种子
+    attitude: bonded
+    trust: 0
+    health_state: 以存档记录为准
+    goals:
+    - 维护基地安全
+    - 优化农耕和后勤
+    - 扩大菌丝网络
+    - 孵化并管理幽壤菌裔单位
+    knowledge:
+      base: 菌丝城、农田、仓储、厨房、隧道和单位状态
+      limits: 远离菌丝网络或中继范围的区域信息不完整
+- id: char:pumpkin-s2
+  type: character
+  name: 南瓜
+  visibility: known
+  summary: S2，拟人形 C 级双核活体伴侣；具体位置、状态和能力进展属于存档事实。
+  aliases:
+  - S2
+  - 南瓜
+  character:
+    role: companion
+    attitude: bonded
+    trust: 0
+    health_state: 活体稳定
+- id: pc:shenyan
+  type: character
+  name: 亚
+  visibility: known
+  summary: 玩家角色模板；具体日期、疲劳、金光余量和位置属于存档事实。
+  aliases:
+  - 沈砚
+  - 亚
+  - 主角
+  character:
+    species_id: species:human
+    role: player_character
+    attitude: self
+    trust: 100
+    health_state: ██████████  极佳

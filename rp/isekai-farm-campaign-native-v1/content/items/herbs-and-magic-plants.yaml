@@ -1,0 +1,155 @@
+entities:
+- id: item:v1-147943e323
+  type: item
+  name: 🌲 直脊杉
+  visibility: known
+  summary: 箭杆专用魔力材料
+  aliases:
+  - 🌲 直脊杉
+  item:
+    category: ammunition
+    quantity: 1.0
+    stackable: true
+- id: item:v1-2f16f97815
+  type: item
+  name: 驱虫草
+  visibility: known
+  summary: 驱虫驱低级魔物
+  aliases:
+  - 驱虫草
+  item:
+    category: food
+    unit: 丛
+    stackable: true
+- id: item:v1-33e843dea4
+  type: item
+  name: 蜂巢菇
+  visibility: known
+  summary: 甜液/代谢稳定
+  aliases:
+  - 蜂巢菇
+  item:
+    category: food
+    unit: 丛
+    stackable: true
+- id: item:v1-3ff3e8ec4d
+  type: item
+  name: 回声花
+  visibility: known
+  summary: 声波敏感
+  aliases:
+  - 回声花
+  item:
+    category: food
+    unit: 株
+    stackable: true
+- id: item:v1-51622cf688
+  type: item
+  name: 星辰草
+  visibility: known
+  summary: 星光魔力/光吸收
+  aliases:
+  - 星辰草
+  item:
+    category: food
+    unit: 丛
+    stackable: true
+- id: item:v1-5224f28cd2
+  type: item
+  name: 晶化菇
+  visibility: known
+  summary: 菌盖产魔力结晶粉
+  aliases:
+  - 晶化菇
+  item:
+    category: food
+    unit: 丛
+    stackable: true
+- id: item:v1-810cb2033c
+  type: item
+  name: 霜叶
+  visibility: known
+  summary: 霜寒/冰属性魔材
+  aliases:
+  - 霜叶
+  item:
+    category: food
+    unit: 丛
+    stackable: true
+- id: item:v1-ad42a74d20
+  type: item
+  name: 止血草
+  visibility: known
+  summary: 药用/外用
+  aliases:
+  - 止血草
+  item:
+    category: food
+    unit: 株
+    stackable: true
+- id: item:v1-cba23af8e3
+  type: item
+  name: 退热根
+  visibility: known
+  summary: 药用/煎服
+  aliases:
+  - 退热根
+  item:
+    category: food
+    unit: 株
+    stackable: true
+- id: item:v1-d7379c8908
+  type: item
+  name: 纯化花
+  visibility: known
+  summary: 过滤魔力/排杂
+  aliases:
+  - 纯化花
+  item:
+    category: food
+    unit: 株
+    stackable: true
+- id: item:v1-e0ad1e8f81
+  type: item
+  name: 消炎草
+  visibility: known
+  summary: 药用/外用
+  aliases:
+  - 消炎草
+  item:
+    category: food
+    unit: 株
+    stackable: true
+- id: item:v1-e154966caa
+  type: item
+  name: 月露草
+  visibility: known
+  summary: 产月露（魔力凝露）
+  aliases:
+  - 月露草
+  item:
+    category: food
+    unit: 片
+    stackable: true
+- id: item:v1-e494d4c06f
+  type: item
+  name: 雷苔
+  visibility: known
+  summary: 静电/雷属性魔材
+  aliases:
+  - 雷苔
+  item:
+    category: food
+    unit: 片
+    stackable: true
+- id: item:v1-e7996a2e98
+  type: item
+  name: 月光苔
+  visibility: known
+  summary: 自发光苔藓/光属性魔材
+  aliases:
+  - 月光苔
+  item:
+    category: food
+    unit: 片
+    stackable: true

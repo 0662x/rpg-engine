@@ -14,3 +14,10 @@ dist/
 venv/
 *.aigmsave
 /run1/
+/rp/.aigm/
+/rp/archive/
+/rp/logs/
+/rp/*save*/
+/rp/**/*.sqlite
+/rp/**/*.db
+/rp/**/*.jsonl

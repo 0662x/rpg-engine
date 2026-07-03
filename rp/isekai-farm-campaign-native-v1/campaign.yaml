@@ -1,0 +1,77 @@
+id: isekai-farm
+name: 万能农具 · 异世界悠闲农家
+engine_version: '0.2'
+package_version: 0.2.1
+content_schema_version: '1'
+capabilities:
+- query
+- explore
+- social
+- travel
+- clock
+- random_table
+- clue
+- risk
+- inventory_resource
+- project_task
+- rest_time
+- trade_exchange
+- gather_search
+- combat
+initial_game_day: 1
+initial_time_block: 清晨
+initial_game_time: 第1天 · 清晨
+initial_location_id: loc:home-clearing
+defaults:
+  player_entity_id: pc:shenyan
+  context_budget: 3000
+  primary_energy_label: 金光
+  primary_energy_detail_key: golden_light
+  primary_energy_full_value: ██████████  100%
+  home_location_ids:
+  - loc:home-clearing
+  - loc:home-mycelium-house
+  base_location_ids:
+  - loc:home-clearing
+  - loc:home-mycelium-house
+  - loc:home-mycelium-city
+  default_weapon_id: item:ultimate-compound-crossbow
+  sample_texts:
+  - 查看当前场景
+  - 检查可用资源
+  - 去空地/家检查农田
+content:
+  entities:
+  - content/species.yaml
+  - content/locations.yaml
+  - content/characters.yaml
+  - content/materials.yaml
+  - content/plants.yaml
+  - content/equipment.yaml
+  - content/items/ammunition.yaml
+  - content/items/dangerous-tools.yaml
+  - content/items/food-and-kitchen.yaml
+  - content/items/craft-materials.yaml
+  - content/items/herbs-and-magic-plants.yaml
+  - content/items/containers-and-mementos.yaml
+  - content/projects.yaml
+  - content/recipes.yaml
+  - content/references.yaml
+  - content/threats.yaml
+  relationships:
+  - content/relationships.yaml
+  rules:
+  - content/rules.yaml
+  clocks:
+  - content/clocks.yaml
+  routes:
+  - content/routes.yaml
+  world_settings:
+  - content/world_settings.yaml
+  random_tables:
+  - content/random_tables.yaml
+  palettes:
+  - content/palettes/materials.yaml
+  - content/palettes/species.yaml
+  - content/palettes/factions.yaml
+  - content/palettes/encounters.yaml

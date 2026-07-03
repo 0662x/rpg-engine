@@ -1,0 +1,208 @@
+encounters:
+- id: pal:encounter:dry-branch-noise
+  name: 枯枝声
+  summary: 干旱天气下的低强度遭遇提示，可用于探索或旅行压力。
+  rarity: common
+  locations:
+  - loc:home-clearing
+  intents:
+  - explore
+  - travel
+  discovery:
+    mode: confirm_required
+    clue_text: 附近枯枝突然断裂，但来源尚不明确。
+    confirm_methods:
+    - 停步观察
+    - 检查风向
+    - 查看地面痕迹
+  risks:
+  - 贸然追查会消耗时间并可能留下路线痕迹。
+  save_as:
+    type: reference
+    entity_id: ref:native-dry-branch-noise
+- id: pal:encounter:home-door-trace
+  name: 门口痕迹复核
+  summary: 家园出入口附近出现需要复核的小痕迹，适合基地维护、陷阱状态确认和低烈度警戒。
+  rarity: common
+  locations:
+  - loc:home-clearing
+  - loc:home-mycelium-house
+  intents:
+  - routine
+  - explore
+  discovery:
+    mode: confirm_required
+    clue_text: 门口或围墙角有轻微踩踏、拖拽或落叶扰动。
+    confirm_methods:
+    - 查看是否为自家活动
+    - 询问夏娃
+    - 对照当前陷阱和门禁记录
+  risks:
+  - 不得自动触发M1旧地雷。
+  - 若忽略多日，可能推进基地维护压力。
+  save_as:
+    type: reference
+    entity_id: ref:native-home-door-trace
+- id: pal:encounter:water-level-change
+  name: 水位细变
+  summary: 小溪、L13或湿地水位出现可观察的小变化，用于触发水资源、鱼笼或干旱检查。
+  rarity: common
+  locations:
+  - loc:l01-creek
+  - loc:l13-stone-trough
+  - loc:l14-humus-wetland
+  intents:
+  - gather
+  - explore
+  - routine
+  discovery:
+    mode: confirm_required
+    clue_text: 水线、湿痕或泥边高度与上次记录略有不同。
+    confirm_methods:
+    - 标记水位
+    - 检查鱼笼和诱饵
+    - 对照干旱钟
+  risks:
+  - 不能只凭一次水位变化确认长期趋势。
+  - 靠近深水和湿地需检查落脚。
+  save_as:
+    type: reference
+    entity_id: ref:native-water-level-change
+- id: pal:encounter:i-room-rustle
+  name: I室轻响
+  summary: T2隔离室传来低强度动静，适合以夏娃报告、隔栏观察和喂养前置项目处理。
+  rarity: common
+  locations:
+  - loc:home-mycelium-i-room
+  intents:
+  - routine
+  - social
+  discovery:
+    mode: confirm_required
+    clue_text: I室方向传来短促摩擦声或幼崽细响，但没有立即危险迹象。
+    confirm_methods:
+    - 先问夏娃
+    - 隔栏观察
+    - 检查食物和隔离结构
+  risks:
+  - 不能直接开门近身。
+  - 不能把安静误写为已驯服。
+  save_as:
+    type: reference
+    entity_id: ref:native-i-room-rustle
+- id: pal:encounter:ashmoss-token-left
+  name: 灰藓族小交换物
+  summary: 灰藓族或湖边聚落相关的低价值交换物候选，可用于低压社交和关系承诺回顾。
+  rarity: uncommon
+  locations:
+  - loc:home-mycelium-h-room
+  - loc:l11-delta
+  - loc:lake-ashmoss-settlement
+  intents:
+  - social
+  - routine
+  discovery:
+    mode: confirm_required
+    clue_text: 有一件小物被放在显眼但不侵入的位置，像是礼物、标记或回应。
+    confirm_methods:
+    - 询问An
+    - 观察摆放方向
+    - 回忆最近承诺和交换
+  risks:
+  - 不要自动判定对方完整意图。
+  - 错误回礼可能造成轻微误解。
+  save_as:
+    type: reference
+    entity_id: ref:native-ashmoss-token-left
+- id: pal:encounter:distant-smoke-thread
+  name: 远烟细线
+  summary: 草原或河口方向可能出现的远距烟迹候选，只能作为外部活动或天气现象的线索。
+  rarity: rare
+  locations:
+  - loc:l15-grassland-cliff
+  - loc:l11-delta
+  intents:
+  - explore
+  - travel
+  discovery:
+    mode: clue_only
+    clue_text: 远处天际有极淡烟线，方向和来源尚不明确。
+    confirm_methods:
+    - 记录方位和风向
+    - 等第二次观察
+    - 对照文明传闻钟
+  risks:
+  - 不能直接确认外部人类已接近。
+  - 追踪远烟会消耗远行时间和水。
+  unlock:
+    required_clocks:
+      clock:civilization-rumor: 1
+  save_as:
+    type: reference
+    entity_id: ref:native-distant-smoke-thread
+- id: pal:encounter:overlook-shadow
+  name: 瞭望位阴影
+  summary: T5瞭望位附近出现疑似观察压力的低信息线索，可用于提示高位风险而不直接制造遭遇。
+  rarity: rare
+  locations:
+  - loc:l06-t5-overlook-trough
+  intents:
+  - explore
+  - travel
+  discovery:
+    mode: clue_only
+    clue_text: 崖顶或石槽附近的阴影和草痕让人感觉这里近期可能被复查过。
+    confirm_methods:
+    - 远距观察
+    - 检查风向和撤退路线
+    - 比对足迹深浅和新旧
+  risks:
+  - 高位暴露，不能夜间单独贸然接近。
+  - 不能只凭阴影确认T5本体出现。
+  save_as:
+    type: reference
+    entity_id: ref:native-overlook-shadow
+- id: pal:encounter:sulfur-scent-shift
+  name: 硫味变化
+  summary: L7泉眼附近硫磺气味变化，可作为水源、采集和火药材料风险提示。
+  rarity: uncommon
+  locations:
+  - loc:l07-sulfur-spring
+  intents:
+  - gather
+  - explore
+  discovery:
+    mode: confirm_required
+    clue_text: 泉眼附近硫味比上次更浓或更淡，伴随湿石颜色变化。
+    confirm_methods:
+    - 小量采样
+    - 记录气味和颜色
+    - 与火药材料分开保存
+  risks:
+  - 气味可能掩盖其他生物接近。
+  - 不能直接当作稳定产量变化。
+  save_as:
+    type: reference
+    entity_id: ref:native-sulfur-scent-shift
+- id: pal:encounter:wetland-bubble-line
+  name: 湿地气泡线
+  summary: 腐殖湿地表面出现连续气泡线，可能是腐败气体、小动物或水文变化线索。
+  rarity: uncommon
+  locations:
+  - loc:l14-humus-wetland
+  intents:
+  - explore
+  - gather
+  discovery:
+    mode: clue_only
+    clue_text: 湿泥表面缓慢冒出一串气泡，方向像沿着地下水路移动。
+    confirm_methods:
+    - 远距标记
+    - 检查通风
+    - 避免踩入气泡集中处
+  risks:
+  - 软泥和未知气体风险优先。
+  - 不能直接确认有大型生物。
+  save_as:
+    type: reference
+    entity_id: ref:native-wetland-bubble-line

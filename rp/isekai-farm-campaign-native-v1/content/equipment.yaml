@@ -1,0 +1,464 @@
+entities:
+- id: item:bamboo-bow
+  type: equipment
+  name: 竹弓
+  visibility: known
+  summary: 类型： 原始层压弓 材料： 竹片 ×2 + 硬木隔层 + 韧皮纤维弦 拉力： ~20kg 状态： 弓弦已松（退役），放树屋横梁
+  aliases:
+  - 竹弓
+  - 竹弓（退役备用）
+  item:
+    category: weapon
+    quantity: 1.0
+    unit: 个
+    stackable: false
+- id: item:bamboo-vine-backpack
+  type: equipment
+  name: 竹藤背包
+  visibility: known
+  summary: 外架式竹藤背包；双侧可插长物，当前作为随身携行系统。
+  aliases:
+  - 竹藤背包
+  - 背包
+  item:
+    category: container
+    unit: 个
+    stackable: false
+    properties:
+      carry_profile:
+        access: 腰侧/外侧长物较快；包内小物需要停顿翻找
+        adjudication_rules:
+        - 判断行动难度时考虑背包是否在身上和负重状态。
+        - 危险中取包内物品需要消耗动作或暴露机会。
+        - 若背包离身，后续场景必须记住它的位置和内容。
+        capacity: 轻装适合日常巡逻；满载会明显影响奔跑、攀爬和翻滚
+        carried_state: 默认背在身上，除非明确放下
+        load_rules:
+        - 行动前若涉及攀爬、潜行、冲刺、游水或贴身战斗，必须考虑是否卸包。
+        - 易碎、火药、毒物、食物和样本不应无说明混放。
+        - 长物固定在侧边时，穿过密林和洞口要考虑刮碰。
+        long_item_slots: 双侧可插水筒、箭束、矛或类似长物；长物过多会卡树枝
+        mobility: 中等负重下可行走和慢跑；战斗翻滚、攀树、钻洞会受限
+        quick_access:
+        - 箭束、水筒、长矛等外侧物品可较快取用。
+        - 包内小物需要一小段时间翻找，危险中不能默认瞬间拿到。
+        - 若背包放在树屋或地面，必须记录位置。
+        risks:
+        - 满载会降低躲闪和撤退速度。
+        - 火药箭、毒箭和食物混放会带来污染/潮湿风险。
+        - 被大型目标抓住背包可能牵制身体。
+        role: 随身携行、固定长物、分隔箭束和水筒
+- id: item:bamboo-vine-breastplate
+  type: equipment
+  name: 竹藤胸甲
+  visibility: known
+  summary: 心脏位双层；竹片+愈疮木加强，穿着状态。
+  aliases:
+  - 护甲
+  - 竹藤胸甲
+  - 胸甲
+  item:
+    category: armor
+    quantity: 1.0
+    unit: 件
+    quality: normal
+    stackable: false
+    properties:
+      defense_profile:
+        adjudication_rules:
+        - 胸腹正面受击时优先降低致命伤，可能转为轻伤/淤伤/护甲损耗。
+        - 命中弱点时不应套用完整护甲效果。
+        - 连续受击需要记录护甲状态。
+        best_against:
+        - 突发小型爪击/咬击
+        - 荆棘和碎木刺
+        - 低强度投射或飞溅碎片
+        coverage: 胸腹正面为主，心脏位双层；侧肋、下腹、背部覆盖有限
+        maintenance:
+        - 战斗后检查心脏位双层、绑带和愈疮木加强片。
+        - 潮湿后晾干，裂片需更换或重新捆扎。
+        mobility: 轻甲；对跑跳影响小，但会增加闷热和疲劳积累
+        poor_against:
+        - 大型兽类重击
+        - 长时间撕咬拖拽
+        - 酸液、火焰、强力穿甲
+        protection: 防小型刺咬、抓挠、木刺和低强度穿刺
+        risks:
+        - 挡下攻击后仍可能留下钝伤、裂纹或绑带松动。
+        - 湿透后可能增重并摩擦皮肤。
+        role: 被动保护胸腹要害，降低突发刺咬造成的致命性
+        use_rules:
+        - 被动生效，不需要占用动作。
+        - 不能替代主动躲避、盾牌和保持距离。
+        weak_points: 颈部、腋下、侧肋、下腹、背后、重击钝伤
+- id: item:curewood-knife
+  type: equipment
+  name: 愈疮木短刀
+  visibility: known
+  summary: 刃长18cm/曲线刃；腰间近身工具兼最后防线。
+  aliases:
+  - 刀
+  - 愈疮木短刀
+  - 短刀
+  item:
+    category: weapon
+    quantity: 1.0
+    unit: 把
+    quality: normal
+    stackable: false
+    properties:
+      melee_profile:
+        adjudication_rules:
+        - 短刀用于贴身或工具动作，不应在开阔距离优先于长矛/弩。
+        - 若用于解剖或采集，必须记录样本污染风险。
+        - 对大型威胁只能造成局部伤害或创造挣脱机会。
+        best_use: 被扑近、缠住、需要割断材料或处理战利品
+        constraints:
+        - 不能代替长矛控距。
+        - 对厚皮、甲壳和大型目标效果有限。
+        - 贴身使用会提高受伤风险。
+        damage_mode: 切割、刺入、割断软组织或藤蔓
+        grip: 单手；可反手割、正手刺
+        maintenance:
+        - 使用后擦干，检查刃口和握柄。
+        - 处理毒物或魔物后单独清洁。
+        poor_use: 正面对抗大型兽类、硬壳目标或保持距离
+        reach: 贴身到一臂内
+        risks:
+        - 近身搏斗可能伤到自己或友方。
+        - 沾毒/酸/胶质后若不清理会污染食物或样本。
+        role: 贴身自卫、割绳、剥皮、解剖和精细处理工具
+        techniques:
+        - 割缠绕物：优先切藤蔓、绳索、胶质薄膜。
+        - 贴身刺击：只在无法用矛和弩时作为最后手段。
+        - 解剖处理：战后处理猎物或样本。
+- id: item:curewood-spear
+  type: equipment
+  name: 愈疮木长矛
+  visibility: known
+  summary: 全长1.5m/四棱锥尖；副武器，适合控距、拦截和刺击。
+  aliases:
+  - 愈疮木长矛
+  - 矛
+  - 长矛
+  item:
+    category: weapon
+    quantity: 1.0
+    unit: 支
+    quality: legendary
+    stackable: false
+    properties:
+      melee_profile:
+        adjudication_rules:
+        - 目标尚未贴身时，长矛优先提供控距和拦截机会。
+        - 对硬壳目标以找缝刺击为主，不能默认破甲。
+        - 若目标成功贴身，下一步应切换短刀/盾/挣脱动作。
+        best_use: 5步内但尚未贴身的目标；兽类扑击前拦截；保护南瓜或背包
+        constraints:
+        - 在树屋、洞穴窄口等狭窄空间不能默认大幅挥舞。
+        - 若一手持盾或抱物，长矛稳定性下降。
+        - 被贴身抱住或扑倒后应换短刀。
+        damage_mode: 穿刺为主，可顶、拨、架开小型冲撞
+        grip: 双手最稳；单手可短暂抵住或拨开但力量下降
+        maintenance:
+        - 战斗后检查矛尖裂纹、杆身弯曲和握持处磨损。
+        - 沾毒、酸液或胶质后需擦拭。
+        poor_use: 极近贴身缠斗、狭窄树屋内部大幅转身
+        reach: 约1.5m；优于短刀和徒手，弱于远程武器
+        risks:
+        - 刺入过深可能短暂卡住。
+        - 高力量目标可能沿矛杆冲近。
+        - 夜间或疲劳时连续刺击会消耗体力。
+        role: 中近距离控距武器；阻止接近、刺击弱点、掩护撤退
+        techniques:
+        - 架矛控距：牺牲进攻速度换取不让目标贴身。
+        - 低刺腿/腹：用于阻止冲锋或迫使目标改变方向。
+        - 矛尾拨开：用于小型目标和藤蔓类纠缠。
+- id: item:ironwood-crossbow
+  type: equipment
+  name: 铁木弩
+  visibility: known
+  summary: 类型： 原始杠杆弩 材料： 铁木弩身 + 铁木弩臂 + 韧皮纤维弩弦 + 竹蹬环 规格： 弩身：50cm，刻箭槽+肩托 弩臂：70cm 横装 拉力：40-45kg 有效射程：30步（~30m） 扳机： 铁木杠杆（支点居中，前端卡弦凹槽）
+    上弦方式： 脚蹬蹬环 → 双手拉弦 → 挂入扳机凹槽 弹药： 弩箭（35cm，铁木尖+竹杆） 特殊弹药： 毒弩箭（见血封喉乳汁涂层） 可靠性： ⭐⭐⭐⭐（机械结构简单，不易卡弹） 精确度： ⭐⭐⭐⭐（机械瞄准，无需长期训练） 制作记录：
+    第3天上午完成
+  aliases:
+  - 铁木弩
+  item:
+    category: weapon
+    quantity: 1.0
+    unit: 把
+    stackable: false
+- id: item:ironwood-knife
+  type: equipment
+  name: 铁木短刀
+  visibility: known
+  summary: 刃长： 18cm 刃型： 曲线刃 + 单面斜切尖 握把： 藤条缠绕 鞘： 竹片夹制 + 藤条绑边 重量： ~0.3kg 功能： 切割、削木、近身防身
+  aliases:
+  - 铁木短刀
+  item:
+    category: weapon
+    quantity: 1.0
+    unit: 把
+    stackable: false
+- id: item:ironwood-spear
+  type: equipment
+  name: 铁木长矛
+  visibility: known
+  summary: 全长： 1.5m 矛尖： 四棱锥形，铁木材质 握把： 藤条缠绕（防滑） 功能： 刺击（主）+ 投掷（辅） 重量： ~2.5kg
+  aliases:
+  - 铁木长矛
+  item:
+    category: weapon
+    quantity: 1.0
+    unit: 支
+    stackable: false
+- id: item:ultimate-compound-crossbow
+  type: equipment
+  name: 终极复合弩
+  visibility: known
+  summary: 反向弩臂/复合凸轮/推箭行程~48cm/拉力峰值~140kg(泄力后~15kg)/曲柄7圈上弦/退弦释放钮
+  aliases:
+  - 主武器
+  - 复合弩
+  - 我的弩
+  - 我的最强弩
+  - 新弩
+  - 最强弩
+  - 毕业弩
+  - 终极复合弩
+  - 终极弩
+  item:
+    category: weapon
+    quantity: 1.0
+    unit: 把
+    quality: legendary
+    stackable: false
+    properties:
+      combat_profile:
+        adjudication_rules:
+        - 射击前必须明确弹药类型；未明确时默认询问或使用最低风险弹药。
+        - 射击后必须记录弹药消耗和目标状态变化。
+        - 爆炸、火药或明显噪音事件应考虑推动森林注意或相关威胁。
+        - 命中结算优先考虑距离、遮蔽、目标速度、主角疲劳和是否已上弦。
+        compatible_ammo:
+        - id: item:powder-arrows
+          name: 火药箭
+          notes: 仅5支；引信需按新弩箭速重校准
+          role: 爆破/恐吓/破坏遮蔽
+        - id: item:stun-thorn-bolts
+          name: 琥珀麻箭
+          notes: 对有神经或肌肉反应的活体最有效
+          role: 控制/活捉
+        - id: item:toxic-thorn-bolts
+          name: 紫黑毒箭
+          notes: 对胶质、无血液或无神经目标效果需保守
+          role: 高致死/削弱
+        - id: item:burst-thorn-bolts
+          name: 赤红炸箭
+          notes: 噪音大，可能损坏战利品
+          role: 冲击/破甲/驱散群体
+        - id: item:frost-thorn-bolts
+          name: 霜白冻箭
+          notes: 对水、胶质、湿表面可能产生额外控场
+          role: 减速/冻结/控制冷血或胶质目标
+        constraints:
+        - 不能凭空连射；每次射击后必须处理重装或换武器。
+        - 不能忽略弹药数量；每次击发后库存要减少。
+        - 不适合在狭窄贴身搏斗中当主动作使用。
+        - 大型爆炸或异常魔力效果应推动相应风险或进度钟。
+        loading:
+          fast_use: 若已上弦且箭在手，可作为当前回合主要动作射击
+          method: 曲柄7圈上弦，单发装填
+          normal_cycle: 取箭→入槽→检查箭羽/箭头→上弦或确认锁扣→瞄准→击发
+          reload_limit: 疲劳或被近身时不允许连续稳定快射
+          safe_release: 不用时应退弦或确认安全锁，避免误击发
+        maintenance:
+        - 战斗后检查弩弦、凸轮、箭轨和锁扣。
+        - 火药箭单独防潮，魔力刺箭避免混放磨损箭头。
+        - 长时间不用时退弦，避免弩臂和锁扣长期受力。
+        noise: 普通弩箭弦响较低；火药箭和赤红炸箭会明显暴露位置并可能推动森林注意
+        operation_steps:
+        - 行动前确认距离、遮蔽、退路、目标体型和当前弹药。
+        - 射击必须消耗1支对应弹药，除非明确叙述为未击发/取消。
+        - 火药箭、赤红炸箭和霜白冻箭需要先确认波及范围。
+        - 若目标进入5步内，优先处理近身威胁，再考虑弩。
+        range_bands:
+        - band: 贴身
+          distance: 0-5步
+          risk: 装填和瞄准容易被打断
+          use: 不推荐；优先退开、换盾/短刀/长矛
+        - band: 近距
+          distance: 5-15步
+          risk: 过穿/爆炸波及/无时间重装
+          use: 可急射大型目标或已控目标
+        - band: 标准
+          distance: 15-70步
+          risk: 目标高速横移或遮蔽会降低命中
+          use: 最稳定射击区间；适合瞄准弱点
+        - band: 远距
+          distance: 70-110步
+          risk: 风、下坠和目标移动影响明显
+          use: 需要稳定姿势、清晰目标和足够瞄准时间
+        - band: 极限
+          distance: 110步以上
+          risk: 命中和具体伤害必须保守结算
+          use: 只建议压制、大型目标或剧情性远射
+        ready_state: 默认未声明已上弦；战斗前必须确认是否已上弦/已装箭
+        risks:
+        - 火药/爆炸弹药会暴露基地附近活动痕迹。
+        - 疲劳状态下长时间瞄准和重装会放大失误风险。
+        - 雨水、雾气和潮湿环境会影响火药箭可靠性。
+        - 过度依赖远程击杀可能损毁可采集材料或惊动其他威胁。
+        role: 远程高威力精确武器；适合先手、伏击、控场和单发高价值目标
+        wet_weather: 弩本体可用；火药箭潮湿时可靠性下降，需防水封存或重新检查引信
+- id: item:v1-00892107da
+  type: equipment
+  name: 愈疮木旧弩
+  visibility: known
+  summary: 65-70kg/3秒上弦
+  aliases:
+  - 愈疮木旧弩
+  item:
+    category: weapon
+    quantity: 1.0
+    unit: 把
+    quality: normal
+    stackable: false
+- id: item:v1-278674ee6e
+  type: equipment
+  name: 愈疮木护臂×2
+  visibility: known
+  summary: 覆盖手背至肘尖；愈疮木薄条+藤编。
+  aliases:
+  - 愈疮木护臂
+  - 愈疮木护臂×2
+  - 护臂
+  item:
+    category: armor
+    quantity: 1.0
+    unit: 对
+    quality: normal
+    stackable: false
+    properties:
+      defense_profile:
+        adjudication_rules:
+        - 手臂受小型攻击时可降低伤害或改为护具损耗。
+        - 手指/掌心受击不享受完整护臂防护。
+        - 护臂被牵制时应影响下一动作。
+        best_against:
+        - 用前臂挡开小型扑咬
+        - 穿过荆棘或搬运粗糙材料
+        - 被动减少手臂擦伤
+        coverage: 双手背、腕部、前臂到肘尖
+        maintenance:
+        - 检查藤编绑带、愈疮木薄条裂纹和边缘毛刺。
+        mobility: 轻微影响手腕灵活；对弩上弦和精细操作有轻微阻碍
+        poor_against:
+        - 大型咬合
+        - 重击和扭折
+        - 针对手指的伤害
+        protection: 防擦伤、咬抓、荆棘、轻度切割
+        risks:
+        - 被咬住护臂可能牵制手臂。
+        - 绑带松动会影响弩和刀的操作。
+        role: 保护手背至肘尖，允许用前臂偏转小型攻击
+        use_rules:
+        - 可辅助盾牌或短刀格挡，但不能当完整盾牌。
+        - 精细制作前若碍手，需要先调整或取下。
+        weak_points: 手指、掌心、上臂、腋下
+- id: item:v1-2e5154fd4c
+  type: equipment
+  name: 铁木弩+矛+刀+甲片
+  visibility: known
+  summary: 全套
+  aliases:
+  - 铁木弩+矛+刀+甲片
+  item:
+    category: weapon
+    quantity: 1.0
+    unit: 把
+    quality: normal
+    stackable: false
+- id: item:v1-bb5662dae8
+  type: equipment
+  name: 愈疮木护颈
+  visibility: known
+  summary: 覆盖下颌至锁骨；愈疮木条+苔藓缓冲。
+  aliases:
+  - 愈疮木护颈
+  - 护颈
+  item:
+    category: armor
+    quantity: 1.0
+    unit: 个
+    quality: normal
+    stackable: false
+    properties:
+      defense_profile:
+        adjudication_rules:
+        - 正面喉颈小型攻击可降级伤害。
+        - 侧后方颈部攻击不能默认被完全挡住。
+        - 护颈过紧或移位时应影响行动描述。
+        best_against:
+        - 小型兽类扑向喉咙
+        - 荆棘/碎片擦过颈前
+        - 倒地时颈部轻度碰撞
+        coverage: 下颌至锁骨前侧；侧颈和后颈覆盖有限
+        maintenance:
+        - 检查颈部贴合、苔藓缓冲和绑带松紧。
+        mobility: 轻微限制低头和快速转头
+        poor_against:
+        - 大型咬合拖拽
+        - 从背后勒颈
+        - 强酸/火焰
+        protection: 防小型咬击、抓挠、碎片和擦伤
+        risks:
+        - 过紧会影响呼吸和吞咽。
+        - 潮湿苔藓缓冲层可能发凉或积水。
+        role: 保护喉咙、下颌和锁骨上缘，降低突袭咬喉风险
+        use_rules:
+        - 被动保护，不占用动作。
+        - 观察侧后方时应考虑转头受限。
+        weak_points: 侧颈、后颈、面部、锁骨以下
+- id: item:vine-shield
+  type: equipment
+  name: 藤盾
+  visibility: known
+  summary: 椭圆40×30cm；铁木边角料木环骨架+藤条三层编织+韧皮纤维加固。
+  aliases:
+  - 盾
+  - 藤盾
+  item:
+    category: armor
+    quantity: 1.0
+    unit: 件
+    quality: normal
+    stackable: false
+    properties:
+      defense_profile:
+        adjudication_rules:
+        - 面对小型攻击可降低伤害或换成装备损耗。
+        - 面对重击只允许减轻或改变受击部位，不能完全抵消。
+        - 使用盾后若再用弩，需要额外处理换手/收盾。
+        best_against:
+        - 小型兽类扑咬
+        - 荆棘、碎片、低威力投射物
+        - 争取一拍时间换武器或后退
+        coverage: 前臂到胸腹局部；不能覆盖全身
+        maintenance:
+        - 战斗后检查藤条断裂、木环松动和握把磨损。
+        - 潮湿后晾干，避免藤条霉软。
+        mobility: 左臂占用；会影响双手上弦、攀爬和搬运
+        poor_against:
+        - 大型目标全力冲撞
+        - 从侧后方来的攻击
+        - 持续酸液、火焰或缠绕
+        protection: 防爪、咬、小型刺击、飞溅碎片；不防重击和大型冲撞
+        risks:
+        - 承受重击会让手臂麻木或盾面变形。
+        - 被咬住盾缘时可能被拖拽。
+        role: 主动格挡和偏转小型攻击；给弩/长矛换手争取时间
+        use_rules:
+        - 格挡会占用一只手，不能同时稳定使用长矛双手刺击或曲柄上弦。
+        - 盾可作为撤退和保护友方的辅助，不是无敌护罩。
+        weak_points: 侧后方、腿部、头颈、强酸/火焰/重锤类冲击

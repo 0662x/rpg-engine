@@ -1,0 +1,158 @@
+species:
+- id: pal:species:small-forest-bird
+  name: 小型林鸟
+  summary: 林冠附近可能出现的小型鸟类候选，适合作为环境线索而非直接资源。
+  rarity: common
+  locations:
+  - loc:home-clearing
+  intents:
+  - explore
+  - gather
+  discovery:
+    mode: confirm_required
+    clue_text: 枝叶上方传来短促对鸣，无法仅凭声音确认种类。
+    confirm_methods:
+    - 观察羽色
+    - 寻找羽毛
+    - 避免惊扰后复查
+  risks:
+  - 误判活动范围会暴露玩家痕迹或惊动其他生物。
+  save_as:
+    type: species
+    entity_id: species:native-small-forest-bird
+- id: pal:species:creek-shrimp
+  name: 溪虾
+  summary: 小溪浅水和鱼笼中可能出现的小型甲壳类候选，可作为食物、饵料和水质线索。
+  rarity: common
+  locations:
+  - loc:l01-creek
+  intents:
+  - gather
+  - routine
+  discovery:
+    mode: confirm_required
+    clue_text: 石缝和浅水边有半透明小影快速弹开。
+    confirm_methods:
+    - 用小网或鱼笼确认
+    - 观察数量和大小
+    - 记录水位与水质
+  risks:
+  - 误把少量发现当作稳定食源。
+  - 水边行动会留下脚印和气味。
+  save_as:
+    type: species
+    entity_id: species:native-creek-shrimp
+- id: pal:species:stone-shell-mollusk
+  name: 石壳螺
+  summary: L13或溪流石面可能出现的硬壳螺类候选，可作为鱼笼诱饵、水质线索或钙质来源。
+  rarity: uncommon
+  locations:
+  - loc:l13-stone-trough
+  - loc:l01-creek
+  intents:
+  - gather
+  - explore
+  discovery:
+    mode: confirm_required
+    clue_text: 湿石背面附着小型硬壳，壳色接近石面。
+    confirm_methods:
+    - 只取少量样本
+    - 检查是否活体
+    - 观察壳粉和诱饵效果
+  risks:
+  - 深水边缘不可贸然下水。
+  - 未确认前不能直接食用。
+  save_as:
+    type: species
+    entity_id: species:native-stone-shell-mollusk
+- id: pal:species:burrow-mouse
+  name: 腐叶穴鼠
+  summary: 腐叶层和老树林边缘可能存在的小型穴居动物候选，可作为生态线索和低级猎物痕迹。
+  rarity: common
+  locations:
+  - loc:l05-oldwood
+  - loc:home-clearing
+  intents:
+  - explore
+  - gather
+  discovery:
+    mode: clue_only
+    clue_text: 腐叶下有细小通道和啃咬过的种壳。
+    confirm_methods:
+    - 观察洞口新鲜程度
+    - 夜间远距复查
+    - 避免破坏整片腐叶层
+  risks:
+  - 直接挖掘会破坏土壤和留下痕迹。
+  - 小型猎物可能吸引更大捕食者。
+  save_as:
+    type: species
+    entity_id: species:native-burrow-mouse
+- id: pal:species:wetland-blind-newt
+  name: 湿地盲螈
+  summary: 腐殖湿地或地下湿洞可能出现的两栖类候选，主要作为水文和生态稳定线索。
+  rarity: rare
+  locations:
+  - loc:l14-humus-wetland
+  intents:
+  - explore
+  - gather
+  discovery:
+    mode: clue_only
+    clue_text: 软泥边缘有细长滑痕，像小型两栖类爬过。
+    confirm_methods:
+    - 远距观察
+    - 记录泥痕和水温
+    - 避免直接抓取未知两栖类
+  risks:
+  - 主角未亲探区域，软泥和通风风险优先。
+  - 未确认物种前不能作为食物或药材。
+  save_as:
+    type: species
+    entity_id: species:native-wetland-blind-newt
+- id: pal:species:grassland-raptor
+  name: 草原小型猛禽
+  summary: L15草原边界可能盘旋的小型猛禽候选，可提示开阔地猎物、尸体或外部活动。
+  rarity: uncommon
+  locations:
+  - loc:l15-grassland-cliff
+  intents:
+  - explore
+  - travel
+  discovery:
+    mode: confirm_required
+    clue_text: 草原上方有小型猛禽盘旋，落点方向暂不明确。
+    confirm_methods:
+    - 观察盘旋中心
+    - 找羽毛或猎物残迹
+    - 避免暴露在开阔崖顶
+  risks:
+  - 追踪盘旋点可能进入无遮蔽草原。
+  - 猛禽活动只能指向线索，不能直接确认大型尸体或敌人。
+  save_as:
+    type: species
+    entity_id: species:native-grassland-raptor
+- id: pal:species:glow-midge
+  name: 微光蠓群
+  summary: 潮湿入夜时可能出现的微弱发光小虫候选，可作为湿度、菌丝或异常能量的轻线索。
+  rarity: rare
+  biomes:
+  - creek
+  - mycelium_underground
+  - humus_wetland
+  intents:
+  - explore
+  - rest
+  discovery:
+    mode: clue_only
+    clue_text: 潮湿阴影里有极细微光点起落，像虫群也像孢子反光。
+    confirm_methods:
+    - 低光观察
+    - 让夏娃判断是否为菌丝孢子
+    - 避免吸入未知虫群
+  risks:
+  - 不能直接判定为魔法或菌丝现象。
+  - 近距离吸入可能带来未知刺激。
+  save_as:
+    type: species
+    entity_id: species:native-glow-midge

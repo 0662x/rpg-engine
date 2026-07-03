@@ -1,0 +1,95 @@
+entities:
+- id: creature:slime-acid-medium
+  type: species
+  name: 史莱姆（中型·酸）
+  visibility: known
+  summary: 分类： 魔物（胶质生命体·酸性亚种） 魔物等级： D（需谨慎） 体型： 西瓜大（约 25–30cm 直径） 外观： 淡黄绿半透明凝胶，内部拇指大淡绿核心 核心闪烁频率 ≈ 心跳（约 1.2Hz），紧张时加速 特性： 分泌弱酸性消化液——可缓慢溶解木质、焦化枯叶
+    接触产生轻微化学热（≈ 体感微温） 对干燥沙土明显回避（无法越过沙土隔离带） 感知方式： 推测感知震动和热量（无视觉/听觉） 踩断枯枝后暂停并转向声源方向 不主动追击，感知后短暂停顿即恢复进食 食性： 活木 + 腐叶为主（比普通史莱姆食性更广）
+    颜色变化： 安静时淡黄绿，紧张/受刺激时转深芥末黄 捕获方法： 蜡质阔叶铲起 + 枯枝夹子（不可直接用手） 隔离：沙土圈有效 首次目击： 第5天入夜，空地以西 ~500m 威胁评级： 🟡 需谨慎（酸液可灼伤皮肤，不致死但疼）
+  aliases:
+  - F3
+  - 史莱姆（中型·酸）
+- id: creature:slime-common-small
+  type: species
+  name: 史莱姆（小型·普通）
+  visibility: known
+  summary: 魔物（残缺态）/ 胶质生命体
+  aliases:
+  - F2
+  - 史莱姆（小型·普通）
+- id: creature:slime-hardened-medium
+  type: species
+  name: 史莱姆（中型·硬化）
+  visibility: known
+  summary: 魔物（胶质生命体·硬化亚种）
+  aliases:
+  - F4
+  - 史莱姆（中型·硬化）
+- id: creature:slime-milky-medium
+  type: species
+  name: 史莱姆（中型·乳白？）
+  visibility: known
+  summary: 魔物（胶质生命体·矿物转化亚种？）
+  aliases:
+  - F5
+  - 史莱姆（中型·乳白？）
+- id: creature:slime-water-medium
+  type: species
+  name: 史莱姆（中型·水属性）
+  visibility: known
+  summary: 魔物（胶质生命体·水属性亚种）
+  aliases:
+  - F6
+  - 史莱姆（中型·水属性）
+- id: creature:ungulate-f1
+  type: species
+  name: 偶蹄类（未命名）
+  visibility: known
+  summary: 野生动物 / 潜在猎物
+  aliases:
+  - F1
+  - 偶蹄类（未命名）
+- id: creature:v1-31e9c69edd
+  type: species
+  name: 核心（核）解剖数据
+  visibility: known
+  summary: 来源： 酸史莱姆（D 级·中型）S1 活体摘取 外观： 拇指大，淡绿色，表面细木纹状脉络 质地： 骨质感（≈ 鸟骨硬度），可研磨出浅绿色粉末 发光： 活体内周期性闪烁；离体瞬间熄灭 → 不再发光 推测：发光依赖活体胶质供能
+    连接： 核心通过数十根蠕动胶质纤维与身体各处相连 每根纤维断开时核心乱闪、身体收缩（有明显的神经/魔力传导） 离体后变化： 颜色未变，无味，口感微苦涩 无温度、无自主运动、无魔力波动（目测） 残胶变化： 核心离体后胶质缓慢液化（约 5–10min）
+    液化后无色透明、无酸、微粘 干后形成透明防水膜 ✅（可作防水涂层） 推测： 核心是魔物的魔力器官 & 胶质结构维持器 胶质的酸性由核心调控——核心离体酸性消失 残胶可作天然防水胶/木材涂层 保存状态： 核心：干燥阔叶包裹，常温 残胶：竹杯密封，约
+    30ml
+  aliases:
+  - 核心（核）解剖数据
+- id: creature:v1-bd9c1ff382
+  type: species
+  name: 鸟类
+  visibility: known
+  summary: 观察： 多种鸟鸣，白天活跃 种类： 未识别（有小型对唱鸟，声音如石击瓦） 用途： 尾羽可用于箭羽（未捕获）
+  aliases:
+  - 鸟类
+- id: species:ashmoss-folk
+  type: species
+  name: 灰藓族
+  visibility: known
+  summary: 死亡森林中的智慧种族，四指、灰褐肤色、灰绿防水发、石板符号系统、地下或湖边居住点；社交推进必须区分 An 家庭信任与族群分支信任。
+  aliases:
+  - An的族群
+  - 湖边灰藓族
+  - 灰藓人
+  - 灰藓族
+- id: species:human
+  type: species
+  name: 人类
+  visibility: known
+  summary: 主角所属种族；此世界已有脚印证据显示存在其他人类或类人文明。
+  aliases:
+  - 人类
+- id: species:youhrang-mycelium
+  type: species
+  name: 幽壤菌裔
+  visibility: known
+  summary: 由母孢子树/主母菌核统合的菌丝蘑菇文明体系，可生产腐工蕈、锐孢蕈、思菌蕈等分工单位。
+  aliases:
+  - 幽壤菌裔
+  - 菌丝文明
+  - 菌丝蘑菇文明
+  - 蘑菇文明

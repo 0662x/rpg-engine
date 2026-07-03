@@ -1,0 +1,166 @@
+entities:
+- id: item:v1-0322977645
+  type: item
+  name: 硬化残胶
+  visibility: known
+  summary: 浓胶/硬化涂料
+  aliases:
+  - 硬化残胶
+  item:
+    category: material
+    unit: m
+    stackable: true
+- id: item:v1-1767a0dfd3
+  type: item
+  name: 乳白残液（矿物釉）
+  visibility: known
+  summary: 矿物转化/灰白薄釉
+  aliases:
+  - 乳白残液（矿物釉）
+  item:
+    category: food
+    unit: m
+    stackable: true
+- id: item:v1-18a38459f1
+  type: item
+  name: 酸残胶（S1）
+  visibility: known
+  summary: 防水涂层
+  aliases:
+  - 酸残胶（S1）
+  item:
+    category: material
+    unit: m
+    stackable: true
+- id: item:v1-22e37e913c
+  type: item
+  name: 根源菌丝
+  visibility: known
+  summary: 触觉感知网络
+  aliases:
+  - 根源菌丝
+  item:
+    category: food
+    unit: 面
+    stackable: true
+- id: item:v1-26667819cb
+  type: item
+  name: 硝石针晶
+  visibility: known
+  summary: 约小半杯火药原料，大部分已碾粉；来自L12砂岩岩壳采集，库存应按树屋火药材料收纳处理。
+  aliases:
+  - 硝石
+  - 硝石粉
+  - 硝石针晶
+  item:
+    category: material
+    unit: 杯
+    stackable: true
+- id: item:v1-4681d8edfb
+  type: item
+  name: 硫磺碎晶
+  visibility: known
+  summary: 约一把淡鹅黄色硫磺碎晶，部分已用；来自L7溪源泉眼采集，库存应按树屋火药材料收纳处理。
+  aliases:
+  - 库存硫磺
+  - 库存硫磺碎晶
+  - 淡鹅黄硫磺
+  - 硫磺碎晶
+  item:
+    category: material
+    unit: 把
+    stackable: true
+- id: item:v1-515c3e4a2f
+  type: item
+  name: 备用纤维绳
+  visibility: known
+  summary: ✅
+  aliases:
+  - 备用纤维绳
+  item:
+    category: material
+    unit: m
+    stackable: true
+- id: item:v1-5ae3d48ea9
+  type: item
+  name: 荆棘藤
+  visibility: known
+  summary: 韧皮部魔力汁液
+  aliases:
+  - 荆棘藤
+  item:
+    category: food
+    unit: 株
+    stackable: true
+- id: item:v1-670a49c919
+  type: item
+  name: 蛇纹石
+  visibility: known
+  summary: ✅
+  aliases:
+  - 蛇纹石
+  item:
+    category: tool
+    stackable: true
+- id: item:v1-9852b22696
+  type: item
+  name: 麻纤维
+  visibility: known
+  summary: 纤维原料
+  aliases:
+  - 麻纤维
+  item:
+    category: material
+    unit: kg
+    stackable: true
+- id: item:v1-9bb88c5944
+  type: item
+  name: 普通残胶（S4）
+  visibility: known
+  summary: 防水/透明涂层
+  aliases:
+  - 普通残胶（S4）
+  item:
+    category: material
+    unit: 竹杯
+    stackable: true
+- id: item:v1-ac25ff32a4
+  type: item
+  name: 湖边细纤维
+  visibility: known
+  summary: 弩弦材料
+  aliases:
+  - 湖边细纤维
+  item:
+    category: material
+    stackable: true
+- id: item:v1-c1101bc083
+  type: item
+  name: 优质燧石
+  visibility: known
+  summary: ✅
+  aliases:
+  - 优质燧石
+  item:
+    category: tool
+    stackable: true
+- id: item:v1-d1e0bf81d4
+  type: item
+  name: 石英磨石
+  visibility: known
+  summary: ✅
+  aliases:
+  - 石英磨石
+  item:
+    category: tool
+    stackable: true
+- id: item:v1-d88d8320cf
+  type: item
+  name: 硫磺样本
+  visibility: known
+  summary: ✅
+  aliases:
+  - 硫磺样本
+  item:
+    category: material
+    stackable: true

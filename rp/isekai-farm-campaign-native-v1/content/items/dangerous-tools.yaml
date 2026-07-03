@@ -1,0 +1,63 @@
+entities:
+- id: item:black-powder
+  type: item
+  name: 黑火药（造粒）
+  visibility: known
+  summary: 约小半竹杯湿混造粒黑火药，燃速翻倍，硝石已重结晶纯化；存放在树屋墙角陶碗中，远离火源。
+  aliases:
+  - 造粒火药
+  - 黑火药
+  - 黑火药（造粒）
+  item:
+    category: material
+    unit: 竹杯
+    stackable: true
+- id: item:fishing-trap
+  type: item
+  name: 竹编鱼笼
+  visibility: known
+  summary: 手工竹编鱼笼；数量、编号、位置和收获都属于存档事实，行动时必须逐个确认。
+  aliases:
+  - T1鱼笼
+  - T2鱼笼
+  - 竹编鱼笼
+  - 鱼笼
+  - 鱼笼T1
+  - 鱼笼T2
+  item:
+    category: trap
+    unit: 个
+    stackable: true
+- id: item:landmine-m1
+  type: item
+  name: M1 绳梯底地雷
+  visibility: known
+  summary: M1绳梯底地雷是旧迁移陷阱条目；是否布设、拆除或回收属于存档事实，剧情包不得自动触发。
+  aliases:
+  - M1
+  - 地雷M1
+  - 树屋地雷
+  - 绳梯底地雷
+  item:
+    category: trap
+    unit: 枚
+    stackable: false
+    properties:
+      warning: 旧迁移条目不得自动触发；当前陷阱状态必须以存档为准。
+- id: item:landmine-m2
+  type: item
+  name: M2 围栏竹门外地雷
+  visibility: known
+  summary: 埋在围栏竹门外侧，东西绊线，使用造粒火药和弹片，属于基地外围被动防御陷阱。
+  aliases:
+  - M2
+  - 围栏竹门外地雷
+  - 地雷M2
+  - 栏门外地雷
+  - 竹门外地雷
+  item:
+    category: trap
+    unit: 枚
+    stackable: false
+    properties:
+      warning: 出入竹门必须避开

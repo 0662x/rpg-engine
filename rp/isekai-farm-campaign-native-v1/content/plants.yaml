@@ -1,0 +1,214 @@
+entities:
+- id: plant:abyss-thorn-vine
+  type: plant
+  name: 渊刺藤
+  visibility: known
+  summary: 魔力多年生藤本，根留土可再生四类魔力刺，是四系弩箭头来源。
+  aliases:
+  - 活体渊刺藤
+  - 渊刺藤
+  - 魔力弹药藤
+- id: plant:amaranth
+  type: plant
+  name: 苋菜
+  visibility: known
+  summary: v1导入作物
+  aliases:
+  - 苋菜
+- id: plant:antiaris-toxicaria
+  type: plant
+  name: 见血封喉
+  visibility: known
+  summary: 高毒箭毒木；可作为箭毒来源。具体位置、恢复状态和可采样性属于存档事实，剧情包不预设。
+  aliases:
+  - 见血封喉
+  - 见血封喉（箭毒木）
+  details:
+    plant_profile:
+      toxin_profile: 白色乳汁可作箭毒；有效期、衰减和污染风险需要行动确认。
+      handling_risks:
+      - 高毒误触、误食或误伤友方
+      - 污染工具、食物或储物区
+      - 旧毒箭有效期未知，不能默认稳定
+      save_boundary: 可靠位置、树体恢复、采样量和毒剂库存属于存档行动结果。
+- id: plant:bast-fiber
+  type: plant
+  name: 韧皮纤维植物
+  visibility: known
+  summary: 绳索、弓弦、弩弦、绑扎
+  aliases:
+  - 韧皮纤维植物
+  - 韧皮纤维植物（未命名）
+- id: plant:cowpea
+  type: plant
+  name: 矮生豇豆
+  visibility: known
+  summary: 持续结荚，可多次采收
+  aliases:
+  - 矮生豇豆
+- id: plant:crystal-node-bamboo
+  type: plant
+  name: 晶节竹
+  visibility: known
+  summary: 晶体环天生完美圆形+分子级表面平整 自润滑晶膜——持续分泌纳米石墨化碳粉（固态润滑/不挥发/不粘尘） 不同节位晶体形态不同（实心晶柱→扁圆晶环→并生偏心环） 茎秆天生笔直，穿过晶环中心如轴穿轴承
+  aliases:
+  - 晶节竹
+  - 晶节竹（凸轮/轴承材料）
+- id: plant:curewood
+  type: plant
+  name: 愈疮木
+  visibility: known
+  summary: 自润滑、极硬、弹性模量高于铁木、天然防潮
+  aliases:
+  - 愈疮木
+- id: plant:dragonbreath-willow
+  type: plant
+  name: 龙息柳
+  visibility: known
+  summary: 零内耗弹性——木质纤维排列成亿万道S弯微锁结构， 压缩时层叠嵌套储弹力，释放时逐层弹开，不产热。
+  aliases:
+  - 龙息柳
+  - 龙息柳（弩臂材料）
+- id: plant:eagle-eye-fruit
+  type: plant
+  name: 鹰瞳果
+  visibility: known
+  summary: 非光学放大→魔力收集目标全部光信息（可见+红外+紫外边缘） →压缩进肉眼可见波段。暗处可夜视。干后自硬不需打磨。
+  aliases:
+  - 鹰瞳果
+  - 鹰瞳果（魔力瞄镜）
+- id: plant:giant-solid-bamboo
+  type: plant
+  name: 巨型实心竹
+  visibility: known
+  summary: 结构强度高，竹节天然隔断
+  aliases:
+  - 巨型实心竹
+- id: plant:hemp
+  type: plant
+  name: 麻
+  visibility: known
+  summary: 分类： 草本纤维植物 产物： 韧皮纤维（强度≈椴树韧皮 ×3，可纺极细线） 用途： 弩弦、绳索、未来可织布
+  aliases:
+  - 麻
+- id: plant:ironwood
+  type: plant
+  name: 铁木
+  visibility: known
+  summary: 极硬，耐腐，手工难以切削
+  aliases:
+  - 铁木
+- id: plant:leafy-mix
+  type: plant
+  name: 生菜+芥蓝混栽
+  visibility: known
+  summary: v1导入作物
+  aliases:
+  - 生菜+芥蓝混栽
+- id: plant:mirror-moss
+  type: plant
+  name: 镜面苔
+  visibility: known
+  summary: 定向零摩擦——苔细胞排列成微观沟槽，顺槽向滑动摩擦趋零， 垂直按压摩擦正常。活苔可自修复磨损。 可共生在任何木质表面（星髓木/愈疮木/普通木材）
+  aliases:
+  - 镜面苔
+  - 镜面苔（箭轨涂层）
+- id: plant:moon-spider-vine
+  type: plant
+  name: 月蛛藤
+  visibility: known
+  summary: 零蠕变——任何低于断裂极限的持续拉力下长度不变 纳米倒刺自锁——两根互搓即咬合，不打结不滑脱 已知植物界最高抗拉强度（≈蜘蛛牵引丝×3）
+  aliases:
+  - 月蛛藤
+  - 月蛛藤（弩弦材料）
+- id: plant:potato
+  type: plant
+  name: 土豆
+  visibility: known
+  summary: v1导入作物
+  aliases:
+  - 土豆
+  - 土豆②
+- id: plant:saltgrass
+  type: plant
+  name: 盐角草
+  visibility: known
+  summary: v1导入作物
+  aliases:
+  - 盐角草
+- id: plant:seasoning
+  type: plant
+  name: 调料区作物
+  visibility: known
+  summary: 野葱、野蒜、薄荷、紫苏、罗勒、辣椒和生姜组成的调味系统。
+  aliases:
+  - 调味作物
+  - 调料作物
+  - 调料区
+- id: plant:sesame
+  type: plant
+  name: 芝麻
+  visibility: known
+  summary: 一把芝麻籽→约大半杯油（出油率远超松子）
+  aliases:
+  - 芝麻
+- id: plant:soybean
+  type: plant
+  name: 大豆
+  visibility: known
+  summary: 毛豆持续掰/干豆≈数把→豆腐/豆浆/酱油原料
+  aliases:
+  - 大豆
+- id: plant:star-pith-wood
+  type: plant
+  name: 星髓木
+  visibility: known
+  summary: 六向等刚度（无木纹方向偏好）——星尘结晶沿木纤维定向生长 振动自阻尼——冲击波被星尘结晶散射为热（发射后弩身仅微温） 温湿度不敏感——星尘骨架锁定尺寸
+  aliases:
+  - 星髓木
+  - 星髓木（弩身材料）
+- id: plant:storage-pumpkin
+  type: plant
+  name: 储存南瓜
+  visibility: known
+  summary: v1导入作物
+  aliases:
+  - 储存南瓜
+- id: plant:straight-spine-fir
+  type: plant
+  name: 直脊杉
+  visibility: known
+  summary: 纵向刚度最大化——木质纤维全部平行排列/横向无连接 直径天生拇指粗（=镜面苔轨宽） 密度≈愈疮木七成/重到吃满动能、轻到不影响箭速 表面致密几乎不吸水
+  aliases:
+  - 直脊杉
+  - 直脊杉（箭杆材料）
+- id: plant:sugar-beet
+  type: plant
+  name: 甜菜
+  visibility: known
+  summary: 块根→切碎煮水→滤渣→浓缩=糖浆
+  aliases:
+  - 甜菜
+- id: plant:sweet-potato
+  type: plant
+  name: 红薯
+  visibility: known
+  summary: v1导入作物
+  aliases:
+  - 红薯
+  - 红薯②
+- id: plant:tung-tree
+  type: plant
+  name: 油桐
+  visibility: known
+  summary: 木材防水涂层、防腐、防虫
+  aliases:
+  - 油桐
+- id: plant:weaving-vine
+  type: plant
+  name: 编织藤条
+  visibility: known
+  summary: 韧性极好，手指扯不断；用于编盾牌、背包网面和粗藤骨架。
+  aliases:
+  - 编织藤条
+  - 藤条植物
