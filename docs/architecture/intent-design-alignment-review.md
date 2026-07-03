@@ -13,6 +13,9 @@ Short answer: **partial alignment, conditional pass**. The refactor is safe only
 when it is treated as an **Intent Candidate Preparation Refactor**, not as the
 full future `IntentCoordinator` or `plan_turn` implementation.
 
+The future coordinator target is recorded separately in
+`docs/architecture/future-turn-coordinator-design.md`.
+
 ## Sources Reviewed
 
 The review searched current specs, architecture docs, prompts, and older
@@ -253,4 +256,3 @@ The historical target remains:
 AI helps understand player language.
 The deterministic kernel owns facts, legality, preview, validation, and save.
 ```
-

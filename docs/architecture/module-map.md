@@ -43,7 +43,9 @@ area is recorded in `docs/architecture/intent-coordinator-refactor-plan.md`;
 the six-role architecture review and amendments are recorded in
 `docs/architecture/intent-coordinator-team-review.md`. Historical AI intent
 design-goal alignment is recorded in
-`docs/architecture/intent-design-alignment-review.md`.
+`docs/architecture/intent-design-alignment-review.md`. The future internal
+`IntentCoordinator` / `TurnCoordinator` target is recorded in
+`docs/architecture/future-turn-coordinator-design.md`.
 
 ## Context and Visibility
 

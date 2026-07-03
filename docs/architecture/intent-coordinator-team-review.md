@@ -15,6 +15,9 @@ Historical design-goal alignment is recorded in
 confirms this work is a candidate-preparation cleanup, not the full future
 `IntentCoordinator` or `plan_turn` implementation.
 
+Future `IntentCoordinator` / `TurnCoordinator` boundaries are recorded in
+`docs/architecture/future-turn-coordinator-design.md`.
+
 ## Review Method
 
 Six read-only specialist reviews were performed:

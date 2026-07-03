@@ -12,6 +12,9 @@ Historical AI intent design alignment is recorded in
 that Phase 1 is an **Intent Candidate Preparation Refactor**, not the full
 future `IntentCoordinator` or `plan_turn` implementation.
 
+The future internal coordinator target is recorded in
+`docs/architecture/future-turn-coordinator-design.md`.
+
 Six-role architecture review amendments are recorded in
 `docs/architecture/intent-coordinator-team-review.md`. That review tightens this
 plan with characterization tests, `message_only` preflight blockers, Phase 3
