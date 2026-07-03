@@ -1,6 +1,6 @@
 # BMAD 文档体系迁移计划
 
-文档状态：**ACTIVE：Round 3 已完成，Round 4 归档准备中**
+文档状态：**ACTIVE：Round 4 归档映射中**
 
 日期：2026-07-04
 
@@ -16,8 +16,9 @@
   包边界内容；`docs/data-models.md` 已合并 SQLite / manifest / proposal / registry
   数据模型内容；`docs/cli-contracts.md` 已合并当前 CLI public / low-level / admin
   合同内容；`docs/mcp-contracts.md` 已合并 MCP profile / tool / adapter 合同内容。
-- Round 4 及以后：待执行。旧 `docs/architecture`、`docs/specs`、`docs/guides`、
-  `docs/prompts` 仍保留为迁移来源，尚未归档。
+- Round 4：已开始。旧 `docs/architecture`、`docs/specs`、`docs/guides`、`docs/prompts`
+  的归档映射见 [`../round-4-archive-map.md`](../round-4-archive-map.md)；尚未移动或归档旧文件。
+- Round 5：待执行。归档和 stub 完成后做链接、入口和轻量回归门禁。
 
 ## 目标
 
@@ -178,12 +179,16 @@ docs/
 
 目标：
 
+- 先生成旧文档归档映射表，识别 `stub+archive`、`archive-evidence`、
+  `extract-before-archive` 和 `decision-needed` 文件。
 - 把旧 `docs/architecture`、`docs/specs`、`docs/guides`、`docs/prompts` 中已迁移内容
   归档到 `docs/archive/pre-bmad-docs-2026-07-03/`。
 - 只保留必要的 compatibility stub 或入口说明。
 
 验收：
 
+- 归档前已处理 [`../round-4-archive-map.md`](../round-4-archive-map.md) 中列出的
+  `extract-before-archive` 和 `decision-needed` 项。
 - 不丢历史。
 - 旧链接要么更新，要么通过 stub 指向新位置。
 - `rg` 检查不再有主要入口指向旧权威文档。

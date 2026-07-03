@@ -41,8 +41,9 @@ confirm 和 commit 权威。`SaveManager.player_turn()` 可以产生 pending pro
 
 Round 1 Deep Scan 已完成，扫描材料保留在 [`../_bmad-output/`](../_bmad-output/)。
 Round 2 已建立 canonical docs 骨架。Round 3 已把 AI intent、Save/Campaign、数据模型、
-CLI 和 MCP 领域内容合并到 canonical 文档。旧文档暂时不移动、不删除，后续 Round 4 会把
-已迁移内容归档或改成兼容入口。
+CLI 和 MCP 领域内容合并到 canonical 文档。Round 4 已开始旧文档归档映射；当前旧文档暂时
+不移动、不删除，先按 [`../_bmad-output/round-4-archive-map.md`](../_bmad-output/round-4-archive-map.md)
+处理需要摘取或决策的内容。
 
 当前 canonical 文档：
 
