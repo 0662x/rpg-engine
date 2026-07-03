@@ -39,7 +39,9 @@ Primary authority for this area: `docs/specs/standard-intent-chain.md` and
 `docs/specs/ai-intent-prewarm.md`. New natural-language player entry behavior
 should flow through the standard intent chain instead of adding routing policy
 to CLI, MCP, platform, or save-manager surfaces. Refactor sequencing for this
-area is recorded in `docs/architecture/intent-coordinator-refactor-plan.md`.
+area is recorded in `docs/architecture/intent-coordinator-refactor-plan.md`;
+the six-role architecture review and amendments are recorded in
+`docs/architecture/intent-coordinator-team-review.md`.
 
 ## Context and Visibility
 

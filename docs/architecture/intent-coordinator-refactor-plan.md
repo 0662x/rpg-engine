@@ -7,6 +7,11 @@ Date: 2026-07-03
 This document records the safe refactor plan for consolidating AI intent
 orchestration without changing player-facing behavior.
 
+Six-role architecture review amendments are recorded in
+`docs/architecture/intent-coordinator-team-review.md`. That review tightens this
+plan with characterization tests, `message_only` preflight blockers, Phase 3
+sub-phases, and release gates. When implementing, read the team review first.
+
 ## Purpose
 
 The current AI intent chain mostly has the right authority boundary: external
@@ -277,6 +282,14 @@ python3 -m pytest -q tests/test_preflight_cache.py tests/test_runtime.py tests/t
 
 ### Phase 3: Bundle Internal Intent Parameters
 
+Phase 3 must be split into smaller reviewable pieces:
+
+- 3a: Runtime internal bundling.
+- 3b: ContextBuilder bundling.
+- 3c: MCP/CLI/SaveManager call-site bundling.
+
+Do not combine these into one broad cross-surface refactor.
+
 Scope:
 
 - Keep public method signatures stable.
@@ -298,7 +311,7 @@ Minimum verification:
 
 ```bash
 python3 -m pytest -q tests/test_mcp_adapter.py tests/test_save_manager.py \
-  -k "player_turn or player_act or player_workflow or standard_entry or external_candidate"
+  -k "player_profile or player_turn or player_act or player_workflow or standard_entry or external_candidate"
 ```
 
 ### Phase 4: Platform Verification Only
