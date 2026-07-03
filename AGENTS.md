@@ -22,6 +22,57 @@ process layer.
 - Long-lived BMAD / AI-agent project context is `docs/project-context.md`.
 - The required workflow rules are in `docs/governance/bmad-workflow.md`.
 
+### Strict BMAD Skill Activation
+
+When the user mentions `bmad`, `BMAD`, a BMAD menu code, a BMAD skill name, or
+asks what the next BMAD step should be, treat it as a real BMAD invocation, not
+as a generic planning prompt.
+
+Required sequence:
+
+1. Route through the installed BMAD catalog. If the user did not name a concrete
+   skill, start with `bmad-help`: read `.agents/skills/bmad-help/SKILL.md`
+   completely, then use `_bmad/_config/bmad-help.csv`,
+   `_bmad/_config/skill-manifest.csv`, relevant `_bmad/**/config.yaml` files,
+   existing artifacts, and `docs/project-context.md` to decide the next skill.
+2. Prefer Game Dev Studio (`gds-*`) skills for RPG Engine game/engine work,
+   BMM (`bmad-*`) skills for general software/product work, Core skills for
+   repo-wide BMAD utilities, and TEA skills for test architecture.
+3. Before doing task work, read the selected
+   `.agents/skills/<skill>/SKILL.md` completely. Do not claim BMAD was used
+   from memory or from a hand-written approximation.
+4. If the selected skill has activation/customization instructions, run
+   `python3 _bmad/scripts/resolve_customization.py --skill .agents/skills/<skill> --key workflow`
+   or follow the skill's stated fallback merge rules. Execute
+   `activation_steps_prepend`, load `persistent_facts`, load the module config,
+   greet in the configured `communication_language`, and execute
+   `activation_steps_append` before the workflow body.
+5. If the skill points to `instructions.md`, a checklist, CSV requirements, or a
+   step file, read the required file fully before acting on it.
+6. For step-file workflows such as `bmad-quick-dev`, `gds-quick-dev`,
+   `bmad-dev-story`, or `gds-dev-story`, load only the current step file,
+   complete steps in order, never skip or optimize the sequence, and halt at any
+   checkpoint that requires human input.
+7. When recommending next BMAD work, report the menu code, display name, skill
+   name, action context/args when present, whether the step is optional or
+   required, and recommend a fresh context window unless the user asks to run it
+   immediately.
+8. When producing BMAD-governed artifacts or final summaries, include BMAD
+   provenance: the user trigger, catalog row or menu code, skill path read,
+   customization resolver result or fallback, config loaded, instruction/step
+   files followed, and verification gates run.
+9. If a named skill is missing, unreadable, or exposes no customization surface
+   for the requested behavior, say so plainly and stop or choose the closest
+   valid BMAD path with that limitation stated. Do not invent unsupported BMAD
+   behavior.
+10. Repo-level agent rules belong in this `AGENTS.md`. Formal BMAD per-skill
+    behavior customization belongs under `_bmad/custom/<skill>.toml` or
+    `_bmad/custom/<skill>.user.toml` when the target skill's `customize.toml`
+    exposes the requested field.
+
+Existing BMAD-style documents without recorded skill provenance are useful
+working artifacts, but future BMAD claims require the evidence above.
+
 For high-risk changes, do not jump straight to implementation. Classify the
 change first and follow the BMAD workflow:
 
