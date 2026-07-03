@@ -14,7 +14,8 @@
 - Round 3：执行中。`docs/ai-intent-chain.md` 已合并 AI intent / prewarm / surface
   领域内容；`docs/save-and-campaign-packages.md` 已合并 Campaign / Save / SaveManager
   包边界内容；`docs/data-models.md` 已合并 SQLite / manifest / proposal / registry
-  数据模型内容；其余领域文档仍待执行。
+  数据模型内容；`docs/cli-contracts.md` 已合并当前 CLI public / low-level / admin
+  合同内容；其余领域文档仍待执行。
 - Round 4 及以后：待执行。旧 `docs/architecture`、`docs/specs`、`docs/guides`、
   `docs/prompts` 仍保留为迁移来源，尚未归档。
 
@@ -168,6 +169,8 @@ docs/
 - AI trust boundary 不弱化。
 - `player_turn -> pending/no save` 和 `player_confirm -> commit` 边界不改写。
 - 旧文档重要结论能在新文档找到位置。
+- CLI public surface、low-level `play` surface、platform sidecar 和 legacy/admin surface
+  的权限边界不混写。
 
 ### Round 4：归档旧分类
 

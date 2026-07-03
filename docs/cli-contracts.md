@@ -1,0 +1,349 @@
+# CLI 合同
+
+文档状态：**CURRENT：BMAD canonical CLI contract authority**
+
+本文件是 RPG Engine / AIGM Kernel 当前命令行入口、玩家可见流程、低层运行时工具和维护命令的
+canonical 文档。旧 `docs/specs/cli.md` 仍保留为迁移来源，但日常开发应先读本文件，并以
+当前 `rpg_engine/cli_v1.py`、`rpg_engine/cli.py`、`SaveManager`、`GMRuntime` 和 MCP/profile
+代码事实为准。
+
+## 核心结论
+
+CLI 是 kernel 的参考入口，不是另一套业务逻辑。
+
+```text
+aigm / rpg_engine / python3 -m rpg_engine
+  -> V1 public groups: campaign, save, player, play, platform, mcp, eval
+  -> legacy/admin groups: init, query, context, package, proposal, turn, ...
+```
+
+普通玩家自然语言主路径是：
+
+```text
+player start/new/switch
+  -> player turn
+  -> query / clarification / blocked / pending action
+  -> player confirm --session-id
+  -> validated commit
+```
+
+硬边界：
+
+- `player turn` 可以返回 query、clarification、blocked 或写 pending action，但不能提交游戏事实。
+- `player confirm --session-id` 是普通玩家 CLI 路径唯一的提交门。
+- `play *` 是低层 runtime / developer / trusted-gm 工具，不是普通玩家 UI 的默认入口。
+- `platform *` 是平台消息 sidecar 包装层，必须继续走 SaveManager 的 start、act/turn 和 confirm 边界。
+- `mcp serve` 只启动 MCP adapter；MCP 权限由 profile gate 决定，不由 CLI flag 绕过。
+- `save patch`、legacy/admin 命令和 package/projection/migration 命令都是维护能力，不能伪装成玩家行动。
+- CLI 不应直接写 SQLite 事实表；事实写入必须经过 validation、proposal/commit 和 projection/outbox 机制。
+
+## 入口和输出合同
+
+`pyproject.toml` 暴露两个安装脚本：
+
+- `aigm`
+- `rpg_engine`
+
+它们和 `python3 -m rpg_engine` 进入同一个 `rpg_engine.cli:main` 命令树。文档、测试和示例可以用
+`python3 -m rpg_engine` 保持本地源码可执行，也可以用安装后的 `aigm` 验证 installed CLI。
+
+V1 命令统一支持：
+
+```bash
+--format markdown|json
+```
+
+默认输出是 markdown / human-readable 文本。`--format json` 用于自动化、测试、MCP-adjacent
+调试和客户端集成。失败命令必须返回非零退出码；JSON 失败结果应保留 `ok=false` 或 `errors`
+等结构化错误字段。
+
+Legacy/admin 命令来自 `rpg_engine/cli.py`，参数和输出格式不完全统一。新增面向玩家或平台的行为时，
+优先扩展 V1 public groups；只有维护、迁移、调试和 package 运维能力才应放在 legacy/admin surface。
+
+## V1 命令组
+
+| 组 | 面向对象 | 合同 |
+| --- | --- | --- |
+| `campaign` | 作者 / CI | 创建、校验、解释和诊断 Campaign Package；不能保存玩家进度。 |
+| `save` | 维护 / package flow | 初始化、检查、导入导出和安全 patch Save Package；不能绕过玩家 action resolution。 |
+| `player` | 普通玩家入口 | 管理 workspace saves，执行自然语言 turn，确认 pending action。 |
+| `play` | developer / trusted-gm | 低层 runtime query、preview、validate、commit 和 health 工具。 |
+| `platform` | 平台 sidecar | 归一化平台消息、绑定平台 session、prewarm 和转发玩家入口。 |
+| `mcp` | AI client integration | 打印 MCP client config 或启动 adapter；具体工具权限由 MCP profile 决定。 |
+| `eval` | QA / regression | 运行 deterministic intent 和 MCP transcript eval，不写 gameplay facts。 |
+
+## Campaign 命令
+
+当前子命令：
+
+```text
+campaign validate
+campaign test
+campaign copy-example
+campaign new
+campaign doctor
+campaign outline
+campaign explain
+campaign check-ai
+campaign split
+```
+
+合同：
+
+- `validate` 和 `test` 是作者与 CI 门禁。`test` 可以初始化临时 save 做 smoke checks，但不能改正式 save。
+- `copy-example` 和 `new` 创建 Campaign Package 文件；`--force` 是显式覆盖能力。
+- `doctor`、`outline`、`explain`、`check-ai` 是 authoring diagnostics。
+- `split --dry-run` 只建议拆分；`split --apply` 是作者内容维护能力，不是运行时事实写入。
+- Campaign 工具不得写 `data/game.sqlite`、`save.yaml`、workspace registry、pending action 或玩家事实。
+
+## Save 命令
+
+当前子命令：
+
+```text
+save init
+save inspect
+save validate
+save export
+save import
+save patch
+```
+
+合同：
+
+- `save init <campaign_dir> <save_dir>` 从 Campaign Package 初始化 Save Package。
+- `inspect` 和 `validate` 读取 Save Package 结构、manifest、SQLite 和投影状态。
+- `export` 生成 `.aigmsave` 归档；归档默认可能包含 GM hidden 信息。
+- `import` 需要显式 `--yes`，写入目标目录时必须遵守目标目录和 `--force` 语义。
+- `patch` 是维护 patch 通道，默认应保留 pre-patch backup；它不能作为玩家行动、AI proposal 或
+  action resolver 的替代入口。
+
+Save 命令可以管理 Save Package 文件，但不能把未确认的自然语言 action 直接写成事实。玩家事实仍必须走
+`player turn -> player confirm` 或 trusted 低层 `play preview/validate/commit` 链。
+
+## Player 命令
+
+当前子命令：
+
+```text
+player inspect
+player campaigns
+player saves
+player current
+player start
+player query
+player turn
+player act
+player confirm
+player new
+player switch
+player duplicate
+```
+
+合同：
+
+- `inspect`、`campaigns`、`saves`、`current` 是 workspace registry 和当前 save 查询。
+- `start` 会继续 active save，或在允许时从 campaign/starter 创建一个 save。
+- `new`、`switch`、`duplicate` 只管理 active save 指向和 save copy，不写 gameplay facts。
+- `query` 是结构化只读查询，不保存、不推进时间、不需要 confirm。
+- `turn` 是普通自然语言标准入口。它可以接受 `--external-intent-candidate`，但 external candidate
+  永远是 low-trust input；kernel 仍要运行 internal/rules/arbiter/binder/preview 边界。
+- `act` 是兼容 wrapper。它不接受 `--external-intent-candidate`，避免旧调用面把 external AI
+  候选塞进兼容路径。
+- `confirm --session-id` 只确认当前 pending player action；session id 必须来自 `player turn` 或
+  兼容 `player act` 的 ready-to-confirm 返回。
+
+玩家命令返回给普通玩家的结果不得暴露内部 `delta_draft` 或完整 `turn_proposal`。ready action 应只显示
+玩家可见 preview、确认提示和 `session_id`。确认成功后 pending action 必须清理。
+
+## Play 命令
+
+当前子命令：
+
+```text
+play preflight
+play start-turn
+play query
+play act
+play preview
+play validate-delta
+play commit
+play health
+play ux-metrics
+```
+
+合同：
+
+- `preflight` 只预计算 advisory internal intent review；结果是 single-use / identity-bound 辅助证据。
+- `start-turn` 构建上下文并分类玩家输入；它不是普通玩家提交入口。
+- `query` 只读。
+- `act` 是低层自然语言 preview/act primitive。即使存在 `--auto-confirm-low-risk`，普通玩家 UI
+  也不应把它当作标准保存入口。
+- `preview` 预演一个已选择 action，不能保存。
+- `validate-delta` 校验 delta，不能保存。
+- `commit` 只能提交已经 validation 和 approval 过的 TurnProposal/delta；默认应保留 backup、
+  State Auditor 和 projection evidence。普通玩家保存仍应从 `player confirm` 进入。
+- `health` 和 `ux-metrics` 是只读诊断。
+
+任何使用 `play commit` 的脚本都必须能解释 proposal 来源、approval 来源、delta 来源和 backup/audit
+策略。不能把 raw AI 文本、external candidate 或未确认 preview 直接交给 `commit`。
+
+## Platform 命令
+
+当前子命令：
+
+```text
+platform message
+platform start
+platform act
+platform confirm
+platform metrics
+platform expire
+platform deactivate
+```
+
+合同：
+
+- 平台参数可以来自 `--event-json`，也可以来自 `--platform`、`--session-key`、`--message-id`、
+  `--actor-id`、`--chat-type`、`--message-type` 和文本参数。
+- `message` 只处理平台消息事件和 advisory prewarm，可选择 drain 做诊断；它不推进游戏事实。
+- `start` 从平台消息 start/continue game，创建或绑定 active save 时仍必须通过 SaveManager。
+- `act` 从平台消息调用 player act/turn 语义，并转发 passive preflight identity；不能绕过 pending/confirm。
+- `confirm --session-id` 从平台消息确认 pending player action；平台 gate 必须校验 active binding。
+- `metrics`、`expire`、`deactivate` 管理 sidecar canary metrics 和平台 session binding，不写游戏事实。
+
+Platform sidecar 可以配置 prewarm、intent helper 和 active binding 策略；这些配置只影响候选评审和
+平台 gate，不授予 external AI、平台消息或 prewarm cache 提交事实的权限。
+
+## MCP 命令
+
+当前子命令：
+
+```text
+mcp serve
+mcp print-config
+```
+
+合同：
+
+- `serve --root <root>` 在 stdio transport 上启动 V1 MCP adapter。所有 campaign/save/starter 默认路径都应在
+  `--root` 下解析，并保持 relative path boundary。
+- `print-config <root>` 打印 AI client MCP JSON config，默认 server name 是 `aigm-kernel`，默认 command 是
+  `aigm`。
+- `--registry-active` 可以让省略 save 的 MCP 调用解析 workspace active save，但 registry 仍不是事实源。
+- `--mcp-profile` 决定工具暴露和权限。player profile 只能使用 player-safe surface；developer/trusted
+  profile 才能使用低层 preview、validate、commit 或 AI override。
+- `--ai-profile` 和各类 helper override 只配置辅助 AI；它们不能绕过 MCP profile gate、hidden-content
+  gate、validation 或 commit gate。
+
+MCP 详细工具合同会在 Round 3 的 MCP 合同文档中单独收敛。本文件只定义 CLI 如何启动和配置 MCP。
+
+## Eval 命令
+
+当前子命令：
+
+```text
+eval run
+```
+
+`eval run` 可以选择 intent、intent consensus、clarification-loop、real canary 或 MCP transcript suite。
+它的职责是产生 regression evidence，不是 gameplay 或 maintenance 写入入口。新增 eval suite 时应保持
+fixture 可复现，并把对应 focused tests 写入变更记录。
+
+## Legacy / Admin Surface
+
+当前 legacy/admin 顶层命令包括：
+
+```text
+init
+query
+context
+memory
+render-current
+render-cards
+save-turn
+validate
+response
+proposal
+delta
+turn
+reflection
+ops
+backup
+migrate
+projection
+package
+simulate
+content
+apply-content-delta
+action
+plugin
+check
+audit
+preview
+palette
+import-v1
+importer
+```
+
+合同：
+
+- 这些命令主要服务 migration、projection repair、package upgrade、content maintenance、ops reports、
+  proposal queue、legacy turn flow 和 developer diagnostics。
+- 它们可以保留为维护面，但不应成为新普通玩家体验的入口。
+- 会写入的命令必须遵守 backup、validation、projection/outbox、approval 和 path boundary。
+- `query`、`context`、`preview`、`validate`、`check`、`audit` 等只读或诊断命令不得被客户端解释为事实已发生。
+- `save-turn`、`turn accept-response`、`proposal apply`、`apply-content-delta`、`package upgrade` 等写入命令
+  只能在 trusted maintenance / GM / migration 场景使用。
+
+## AI 和 Preflight 参数
+
+相关参数族：
+
+```text
+--intent-ai
+--intent-backend
+--intent-provider
+--intent-model
+--intent-timeout
+--intent-base-url
+--intent-api-key-env
+--intent-fallback-backend
+--external-intent-candidate
+--preflight-id
+--preflight-message-id
+--preflight-platform
+--preflight-session-key
+--preflight-source-user-text-hash
+```
+
+合同：
+
+- `--external-intent-candidate` 只在明确支持的入口中出现，尤其是 `player turn` 和低层 `play` intent preview
+  能力；它不能表达确认、approval、hidden access 或保存授权。
+- Internal AI、semantic helper、Archivist 和 State Auditor 都是辅助角色。它们可以影响 review、suggestion
+  或 audit evidence，不能替代 confirm / validation / commit。
+- Preflight cache 只缓存 advisory internal review；消费时必须绑定 text hash、message/session identity
+  和 single-use 语义。
+- API key env、provider、model 和 backend 参数只是 helper 配置，不改变 CLI/MCP profile 权限。
+
+## 开发检查清单
+
+改 CLI 相关代码或文档时，至少检查：
+
+- 新命令属于 V1 public group 还是 legacy/admin surface？
+- 普通玩家是否仍只能通过 `player turn -> player confirm` 保存事实？
+- 新参数是否可能把 external AI、preflight 或平台消息升级成事实权限？
+- JSON 输出是否稳定、可测试，并保留结构化失败信息？
+- 写入命令是否有 path boundary、backup、validation、projection/outbox 和 approval 证据？
+- 文档示例是否避免把 low-level `play` 工具描述成普通玩家默认入口？
+- MCP 或 platform 相关 CLI flag 是否仍受 profile gate 和 platform gate 限制？
+
+推荐 focused gate：
+
+```bash
+python3 -m pytest -q tests/test_v1_cli.py tests/test_save_manager.py tests/test_mcp_adapter.py tests/test_platform_sidecar.py tests/test_platform_prewarm.py
+```
+
+如果改到 legacy package/projection/maintenance 命令，再追加对应 package、projection、migration 或 content
+tests。
