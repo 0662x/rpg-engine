@@ -1653,6 +1653,114 @@ class GMRuntimeTests(unittest.TestCase):
             self.assertEqual(trace["internal_helper"]["backend"], "preflight_cache")
             self.assertEqual(trace["selected_outcome"]["source"], "ai_consensus")
 
+    def test_preflight_reuses_prepared_candidate_inputs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = GMRuntime.from_path(copy_minimal_campaign(tmp))
+            external = {
+                "kind": "single",
+                "mode": "action",
+                "action": "rest",
+                "slots": {"until": "morning"},
+                "plan": [],
+                "confidence": "high",
+                "missing_slots": [],
+                "needs_confirmation": [],
+                "safety_flags": [],
+                "reason": "外部 AI 判断这是休息行动。",
+            }
+            with connect(runtime.campaign) as conn:
+                candidate_bound_prepared = prepare_intent_candidates(
+                    conn,
+                    "休息到早上",
+                    external_candidate_input=ExternalCandidateInput(external),
+                )
+                message_only_prepared = prepare_intent_candidates(conn, "休息到早上")
+
+            captured: list[dict[str, object]] = []
+
+            def fake_collect(_campaign: object, _conn: object, captured_text: str, **kwargs: object) -> AIHelperResult:
+                external_candidate = kwargs.get("external_candidate")
+                captured.append(
+                    {
+                        "user_text": captured_text,
+                        "external_candidate": external_candidate,
+                        "rule_candidate": kwargs.get("rule_candidate"),
+                    }
+                )
+                return AIHelperResult(
+                    task="internal_intent_review",
+                    backend="direct",
+                    provider="deepseek",
+                    model="deepseek-v4-flash",
+                    status="ok",
+                    parsed={
+                        "kind": "single",
+                        "mode": "action",
+                        "action": "rest",
+                        "slots": {"until": "morning"},
+                        "plan": [],
+                        "confidence": "high",
+                        "missing_slots": [],
+                        "needs_confirmation": [],
+                        "safety_flags": [],
+                        "reason": "preflight preparation matches live route.",
+                        "agreement_with_external": "agree" if external_candidate is not None else "no_external",
+                        "disagreements": [],
+                        "external_candidate_quality": "usable" if external_candidate is not None else "no_external",
+                    },
+                    audit={"backend": "direct"},
+                )
+
+            with patch("rpg_engine.runtime.collect_internal_intent_candidate", side_effect=fake_collect):
+                candidate_bound = runtime.preflight_intent(
+                    "休息到早上",
+                    intent_backend="direct",
+                    external_intent_candidate=external,
+                    message_id="qq:candidate-bound-reuse",
+                )
+                message_only = runtime.preflight_intent(
+                    "休息到早上",
+                    intent_backend="direct",
+                    external_intent_candidate=external,
+                    message_id="qq:message-only-reuse",
+                    preflight_identity_profile="message_only",
+                )
+
+            self.assertTrue(candidate_bound.ok, candidate_bound.to_dict())
+            self.assertTrue(message_only.ok, message_only.to_dict())
+            self.assertEqual(len(captured), 2)
+            self.assertEqual(captured[0]["user_text"], candidate_bound_prepared.text)
+            candidate_bound_rule = captured[0]["rule_candidate"]
+            candidate_bound_external = captured[0]["external_candidate"]
+            prepared_external = candidate_bound_prepared.external_low_trust_candidate
+            self.assertIsNotNone(candidate_bound_rule)
+            self.assertIsNotNone(candidate_bound_external)
+            self.assertIsNotNone(prepared_external)
+            if candidate_bound_rule is None or candidate_bound_external is None or prepared_external is None:
+                self.fail("candidate-bound preflight should pass prepared rule and external candidates")
+            self.assertEqual(candidate_bound_rule.to_dict(), candidate_bound_prepared.rules_candidate.to_dict())
+            self.assertEqual(candidate_bound_external.to_dict(), prepared_external.to_dict())
+            self.assertEqual(captured[1]["user_text"], message_only_prepared.text)
+            message_only_rule = captured[1]["rule_candidate"]
+            self.assertIsNotNone(message_only_rule)
+            if message_only_rule is None:
+                self.fail("message-only preflight should still pass a prepared rule candidate")
+            self.assertEqual(message_only_rule.to_dict(), message_only_prepared.rules_candidate.to_dict())
+            self.assertIsNone(captured[1]["external_candidate"])
+
+    def test_message_only_preflight_still_validates_supplied_external_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = GMRuntime.from_path(copy_minimal_campaign(tmp))
+
+            with self.assertRaisesRegex(ValueError, "external_intent_candidate schema validation failed"):
+                runtime.preflight_intent(
+                    "休息到早上",
+                    intent_backend="direct",
+                    external_intent_candidate={"kind": "single"},
+                    message_id="qq:message-only-invalid-external",
+                    preflight_identity_profile="message_only",
+                )
+
     def test_message_only_preflight_pending_is_visible_while_internal_ai_runs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             runtime = GMRuntime.from_path(copy_minimal_campaign(tmp))

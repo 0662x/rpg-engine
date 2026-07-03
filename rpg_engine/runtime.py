@@ -25,16 +25,15 @@ from .capabilities import ACTION_CAPABILITIES, CAPABILITY_INTENTS, capability_fo
 from .commit_service import commit_turn_proposal
 from .context_builder import ContextBuildResult, build_context
 from .db import connect
-from .ai_intent.external import normalize_external_intent_candidate
 from .ai_intent.internal_review import collect_internal_intent_candidate
 from .intent_router import (
     ActionIntent,
+    ExternalCandidateInput,
     action_intent_from_dict,
     action_intent_to_dict,
-    build_legacy_rule_route,
-    build_rules_intent_candidate,
     detect_preview_action_mismatch,
     normalize_player_text,
+    prepare_intent_candidates,
     route_intent,
     turn_contract_from_dict,
     turn_contract_to_dict,
@@ -660,25 +659,17 @@ class GMRuntime:
                 errors=("source_user_text_hash mismatch",),
             )
         with connect(self.campaign) as conn:
-            external = (
-                normalize_external_intent_candidate(external_intent_candidate, user_text=text)
-                if external_intent_candidate is not None
-                else None
-            )
-            helper_external = None if effective_identity_profile == PREFLIGHT_IDENTITY_MESSAGE_ONLY else external
-            legacy_route = build_legacy_rule_route(conn, text, explicit_mode=None, explicit_submode=None)
-            outcome = legacy_route.outcome
-            rule_candidate = build_rules_intent_candidate(
+            prepared = prepare_intent_candidates(
+                conn,
                 text,
-                rule_mode=legacy_route.rule_mode,
-                rule_submode=legacy_route.rule_submode,
-                inferred=legacy_route.inferred,
-                route_mode=outcome.mode,
-                route_action=outcome.action,
-                route_options=outcome.options,
-                route_kind=outcome.kind,
-                confidence=outcome.confidence,
+                external_candidate_input=ExternalCandidateInput(external_intent_candidate),
             )
+            helper_external = (
+                None
+                if effective_identity_profile == PREFLIGHT_IDENTITY_MESSAGE_ONLY
+                else prepared.external_low_trust_candidate
+            )
+            rule_candidate = prepared.rules_candidate
             record = create_pending_intent_preflight(
                 conn,
                 self.campaign,

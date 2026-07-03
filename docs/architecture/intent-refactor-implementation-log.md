@@ -257,3 +257,94 @@ Documentation sync:
 - Final expert follow-up review complete. Engine boundary, AI intent safety,
   gameplay turn flow, Platform/MCP integration, QA/regression, and repo/docs
   reviewers all signed off with no blockers.
+
+## Round 3: Phase 2 Reuse Candidate Preparation In Preflight
+
+Status: **COMPLETE**
+
+Goal:
+
+Make `GMRuntime.preflight_intent()` reuse the same side-effect-limited
+candidate preparation helper as live routing.
+
+Code scope:
+
+- `rpg_engine/runtime.py`
+- `tests/test_runtime.py`
+
+Runtime behavior impact:
+
+- `GMRuntime.preflight_intent()` no longer hand-builds external/rules
+  candidates.
+- Candidate-bound preflight passes `ExternalCandidateInput` to
+  `prepare_intent_candidates()` and uses the resulting
+  `external_low_trust_candidate` plus `rules_candidate`.
+- `message_only` preflight still routes supplied external input through
+  preparation so schema errors surface as before, but drops the prepared
+  external candidate before cache creation and internal review. The cache
+  identity stays passive.
+- Preflight cache creation, identity profile normalization, pending/ready/failed
+  transitions, helper audit, and commits remain in `GMRuntime.preflight_intent()`.
+- No MCP, CLI, platform, `AIIntentRouter`, `preflight_cache`, resolver,
+  validation, or commit code changed.
+
+Added regression coverage:
+
+- `test_preflight_reuses_prepared_candidate_inputs`
+  - Captures the `rule_candidate` and `external_candidate` passed to internal
+    intent review during candidate-bound preflight.
+  - Compares them to `prepare_intent_candidates()` output.
+  - Verifies `message_only` preflight still passes no external candidate to
+    internal review while using the same prepared rules candidate.
+- `test_message_only_preflight_still_validates_supplied_external_candidate`
+  - Preserves the existing schema rejection behavior for malformed supplied
+    external candidates even under `message_only`.
+
+Verification so far:
+
+```bash
+python3 -m pytest -q tests/test_runtime.py \
+  -k "preflight_reuses_prepared_candidate_inputs or message_only_preflight or preflight_cache_reuses"
+
+python3 -m pytest -q tests/test_preflight_cache.py tests/test_runtime.py tests/test_mcp_adapter.py \
+  -k "preflight"
+
+git diff --check
+```
+
+Result:
+
+```text
+5 passed, 53 deselected
+29 passed, 68 deselected
+git diff --check passed
+```
+
+Expert code review:
+
+- Engine boundary: pass after preserving `message_only` supplied external
+  schema validation while still dropping the prepared external before cache
+  creation/internal review.
+- AI intent safety: pass. Optional tighter error-message assertion was applied.
+- Gameplay turn flow: pass. Confirmed preflight state ordering and player-facing
+  flow boundaries are unchanged.
+- Platform/MCP integration: pass. Confirmed no MCP, CLI, platform, SaveManager,
+  or preflight-cache entry files changed.
+- QA/regression: pass after the `message_only` malformed external behavior was
+  restored and covered.
+- Repo/docs: pass. Confirmed log wording matches the final compatibility
+  behavior and verification results.
+
+Review fixes applied:
+
+- Changed the first draft from "skip external preparation for `message_only`"
+  to "prepare all supplied external input, then drop the prepared external for
+  `message_only` before cache/internal review".
+- Added malformed external candidate regression coverage for `message_only`.
+- Tightened the regression to assert the schema-validation error message.
+
+Documentation sync:
+
+- This implementation log records the Phase 2 change and its current
+  verification gate.
+- Final Round 3 expert review is complete with no blockers.
