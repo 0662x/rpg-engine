@@ -1,8 +1,18 @@
 # BMAD 文档体系迁移计划
 
-文档状态：**PROPOSED：迁移计划，尚未执行文档搬迁**
+文档状态：**ACTIVE：Round 1 已完成，Round 2 canonical docs 骨架已执行**
 
 日期：2026-07-03
+
+## 执行状态
+
+- Round 1：已完成。Deep Scan 产物保留在 `_bmad-output/`，同步记录见
+  [`../round-1-sync-report.md`](../round-1-sync-report.md)。
+- Round 2：已执行。`docs/` 下已建立 canonical docs 骨架，`docs/README.md` 已收敛为
+  指向 `docs/index.md` 的兼容入口。同步记录见
+  [`../round-2-canonical-docs-report.md`](../round-2-canonical-docs-report.md)。
+- Round 3 及以后：待执行。旧 `docs/architecture`、`docs/specs`、`docs/guides`、
+  `docs/prompts` 仍保留为迁移来源，尚未归档。
 
 ## 目标
 
