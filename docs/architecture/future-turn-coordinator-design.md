@@ -95,7 +95,7 @@ It may own:
 - constructing `IntentAIConfig`
 - constructing passive `IntentRequestMeta`
 - receiving separate low-trust `ExternalCandidateInput`
-- calling pure `prepare_intent_candidates()`
+- calling side-effect-limited `prepare_intent_candidates()`
 - calling `AIIntentRouter.route_candidates()`
 - returning `ActionIntent`
 - returning versioned trace/provenance
@@ -116,7 +116,7 @@ It must not own:
 - commit, backup, projection, or repair
 
 Phase 1 code should not create this full class yet. It should first extract
-the pure preparation pieces inside `intent_router.py`.
+the side-effect-limited preparation pieces inside `intent_router.py`.
 
 ## TurnCoordinator
 
@@ -245,7 +245,7 @@ class PreparedIntentCandidates:
     explicit_submode: str | None
     legacy_route: LegacyRuleRoute
     rules_candidate: IntentCandidate
-    external_for_live_route: IntentCandidate | None
+    external_low_trust_candidate: IntentCandidate | None
 ```
 
 Additional future boundary types:
@@ -377,7 +377,8 @@ player_surface_delta_leak_rate = 0
 This is the current near-term work.
 
 1. Add characterization tests.
-2. Extract pure `prepare_intent_candidates()` inside `intent_router.py`.
+2. Extract side-effect-limited `prepare_intent_candidates()` inside
+   `intent_router.py`.
 3. Keep `route_intent(...)` public signature unchanged.
 4. Do not call AI, consume preflight, arbitrate, bind, preview, validate,
    create pending action, or commit from preparation.

@@ -42,7 +42,8 @@ Adopt the **medium, preparation-first refactor**:
 1. Do not move files or create a large new `rpg_engine/intent/` package first.
 2. Do not rewrite `AIIntentRouter`, arbiter, binder, risk policy, preflight
    cache, resolver, validation, commit, MCP profile gates, or platform gates.
-3. First extract a pure candidate preparation helper near `rpg_engine.intent_router`.
+3. First extract a side-effect-limited candidate preparation helper near
+   `rpg_engine.intent_router`.
 4. Make live routing and preflight production reuse the same candidate
    preparation.
 5. Only after that, bundle repeated internal parameters in smaller call-site
@@ -119,8 +120,9 @@ The clear duplication is candidate preparation: live route and preflight
 production both normalize external input, build a legacy rule route, and build a
 rules candidate. This is the first safe extraction target.
 
-The first extraction must be pure: no AI call, no preflight consumption, no
-commit, and no side effects beyond reading the DB for existing rule inference.
+The first extraction must be side-effect-limited: no AI call, no preflight
+consumption, no commit, and no side effects beyond reading the DB for existing
+rule inference.
 
 ### AI Intent Safety Lead
 
@@ -310,7 +312,7 @@ class PreparedIntentCandidates:
     explicit_submode: str | None
     legacy_route: LegacyRuleRoute
     rules_candidate: IntentCandidate
-    external_for_live_route: IntentCandidate | None
+    external_low_trust_candidate: IntentCandidate | None
 ```
 
 For preflight production, the caller must explicitly derive:
@@ -319,7 +321,7 @@ For preflight production, the caller must explicitly derive:
 external_for_internal_review = (
     None
     if preflight_identity_profile == "message_only"
-    else prepared.external_for_live_route
+    else prepared.external_low_trust_candidate
 )
 ```
 
@@ -375,7 +377,7 @@ python3 -m pytest -q tests/test_ai_intent.py tests/test_runtime.py \
   -k "intent_ai or intent_router or external_intent_candidate or semantic_suggestion or gold_set"
 ```
 
-### Phase 1b: Extract Pure Candidate Preparation
+### Phase 1b: Extract Side-Effect-Limited Candidate Preparation
 
 Scope:
 
@@ -595,7 +597,7 @@ python3 -m pytest -q
 The six-role review supports the refactor only under these conditions:
 
 1. Start with candidate preparation, not a broad coordinator rewrite.
-2. Keep preparation pure and visibly non-authoritative.
+2. Keep preparation side-effect-limited and visibly non-authoritative.
 3. Protect `message_only` external isolation as a blocker.
 4. Add characterization tests before relying on the refactor.
 5. Split Phase 3 into Runtime, ContextBuilder, and adapter call-site work.

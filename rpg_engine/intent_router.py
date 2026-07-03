@@ -168,6 +168,43 @@ class TurnContract:
     validation_profile: str
 
 
+@dataclass(frozen=True)
+class IntentAIConfig:
+    mode: str
+    backend: str
+    provider: str
+    model: str
+    timeout: int
+    base_url: str
+    api_key_env: str
+    fallback_backend: str
+
+
+@dataclass(frozen=True)
+class IntentRequestMeta:
+    preflight_id: str = ""
+    message_id: str = ""
+    platform: str = ""
+    session_key: str = ""
+    source_user_text_hash: str = ""
+    preflight_pending_wait_ms: int = 0
+
+
+@dataclass(frozen=True)
+class ExternalCandidateInput:
+    payload: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class PreparedIntentCandidates:
+    text: str
+    explicit_mode: str | None
+    explicit_submode: str | None
+    legacy_route: LegacyRuleRoute
+    rules_candidate: IntentCandidate
+    external_low_trust_candidate: IntentCandidate | None
+
+
 def route_intent(
     campaign: Campaign,
     conn: sqlite3.Connection,
@@ -198,26 +235,37 @@ def route_intent(
 ) -> ActionIntent:
     """Return the single intent contract shared by context, CLI and MCP flows."""
     del semantic_ai, semantic_provider, semantic_model, semantic_timeout
-    text = normalize_player_text(user_text).strip()
-    intent_ai_mode = normalize_intent_ai_mode(intent_ai)
-    intent_backend = normalize_backend(intent_backend, "direct")
-    intent_provider = intent_provider or DEFAULT_AI_PROVIDER
-    intent_model = intent_model or DEFAULT_AI_MODEL
-    intent_timeout = DEFAULT_INTENT_TIMEOUT_SECONDS if intent_timeout is None else max(3, int(intent_timeout))
-    intent_fallback_backend = normalize_fallback_backend(intent_fallback_backend, "off")
-    external_candidate = (
-        normalize_external_intent_candidate(external_intent_candidate, user_text=text)
-        if external_intent_candidate is not None
-        else None
+    ai_config = make_intent_ai_config(
+        intent_ai=intent_ai,
+        intent_backend=intent_backend,
+        intent_provider=intent_provider,
+        intent_model=intent_model,
+        intent_timeout=intent_timeout,
+        intent_base_url=intent_base_url,
+        intent_api_key_env=intent_api_key_env,
+        intent_fallback_backend=intent_fallback_backend,
     )
-    explicit_mode = mode if mode != "auto" else None
-    explicit_submode = submode
-    legacy_route = build_legacy_rule_route(
+    request_meta = make_intent_request_meta(
+        preflight_id=preflight_id,
+        message_id=message_id,
+        platform=platform,
+        session_key=session_key,
+        source_user_text_hash=source_user_text_hash,
+        preflight_pending_wait_ms=preflight_pending_wait_ms,
+    )
+    prepared = prepare_intent_candidates(
         conn,
-        text,
-        explicit_mode=explicit_mode,
-        explicit_submode=explicit_submode,
+        user_text,
+        mode=mode,
+        submode=submode,
+        external_candidate_input=ExternalCandidateInput(external_intent_candidate),
     )
+    text = prepared.text
+    explicit_mode = prepared.explicit_mode
+    explicit_submode = prepared.explicit_submode
+    legacy_route = prepared.legacy_route
+    rules_candidate = prepared.rules_candidate
+    external_candidate = prepared.external_low_trust_candidate
     outcome = legacy_route.outcome
     alternatives: list[ActionAlternative] = list(legacy_route.alternatives)
     guards: list[str] = list(legacy_route.guards)
@@ -244,38 +292,27 @@ def route_intent(
             new = f"{semantic_mode}:{semantic_submode}"
             overrides.append(f"AI 语义判断仅记录，不覆盖最终路由：`{old}` vs `{new}`。")
 
-    rules_candidate = build_rules_intent_candidate(
-        text,
-        rule_mode=legacy_route.rule_mode,
-        rule_submode=legacy_route.rule_submode,
-        inferred=legacy_route.inferred,
-        route_mode=outcome.mode,
-        route_action=outcome.action,
-        route_options=outcome.options,
-        route_kind=outcome.kind,
-        confidence=outcome.confidence,
-    )
     intent_router = AIIntentRouter(conn)
     intent_route = intent_router.route_candidates(
         campaign,
         text,
-        intent_ai_mode=intent_ai_mode,
+        intent_ai_mode=ai_config.mode,
         external_candidate=external_candidate,
         rule_candidate=rules_candidate,
         rules_outcome=outcome,
-        backend=intent_backend,
-        provider=intent_provider,
-        model=intent_model,
-        timeout=intent_timeout,
-        base_url=str(intent_base_url or ""),
-        api_key_env=str(intent_api_key_env or ""),
-        fallback_backend=intent_fallback_backend,
-        preflight_id=str(preflight_id or ""),
-        message_id=str(message_id or ""),
-        platform=str(platform or ""),
-        session_key=str(session_key or ""),
-        source_user_text_hash=str(source_user_text_hash or ""),
-        preflight_pending_wait_ms=preflight_pending_wait_ms,
+        backend=ai_config.backend,
+        provider=ai_config.provider,
+        model=ai_config.model,
+        timeout=ai_config.timeout,
+        base_url=ai_config.base_url,
+        api_key_env=ai_config.api_key_env,
+        fallback_backend=ai_config.fallback_backend,
+        preflight_id=request_meta.preflight_id,
+        message_id=request_meta.message_id,
+        platform=request_meta.platform,
+        session_key=request_meta.session_key,
+        source_user_text_hash=request_meta.source_user_text_hash,
+        preflight_pending_wait_ms=request_meta.preflight_pending_wait_ms,
     )
     guards.extend(intent_route.guards)
     intent_ai_trace = intent_route.trace
@@ -337,6 +374,93 @@ def route_intent(
         plan=outcome.plan,
         repair_options=outcome.repair_options,
         clarification=outcome.clarification,
+    )
+
+
+def make_intent_ai_config(
+    *,
+    intent_ai: str = "off",
+    intent_backend: str = "direct",
+    intent_provider: str | None = None,
+    intent_model: str | None = None,
+    intent_timeout: int | None = None,
+    intent_base_url: str | None = None,
+    intent_api_key_env: str | None = None,
+    intent_fallback_backend: str | None = None,
+) -> IntentAIConfig:
+    return IntentAIConfig(
+        mode=normalize_intent_ai_mode(intent_ai),
+        backend=normalize_backend(intent_backend, "direct"),
+        provider=intent_provider or DEFAULT_AI_PROVIDER,
+        model=intent_model or DEFAULT_AI_MODEL,
+        timeout=DEFAULT_INTENT_TIMEOUT_SECONDS if intent_timeout is None else max(3, int(intent_timeout)),
+        base_url=str(intent_base_url or ""),
+        api_key_env=str(intent_api_key_env or ""),
+        fallback_backend=normalize_fallback_backend(intent_fallback_backend, "off"),
+    )
+
+
+def make_intent_request_meta(
+    *,
+    preflight_id: str | None = None,
+    message_id: str | None = None,
+    platform: str | None = None,
+    session_key: str | None = None,
+    source_user_text_hash: str | None = None,
+    preflight_pending_wait_ms: int = 0,
+) -> IntentRequestMeta:
+    return IntentRequestMeta(
+        preflight_id=str(preflight_id or ""),
+        message_id=str(message_id or ""),
+        platform=str(platform or ""),
+        session_key=str(session_key or ""),
+        source_user_text_hash=str(source_user_text_hash or ""),
+        preflight_pending_wait_ms=preflight_pending_wait_ms,
+    )
+
+
+def prepare_intent_candidates(
+    conn: sqlite3.Connection,
+    user_text: str,
+    *,
+    mode: str = "auto",
+    submode: str | None = None,
+    external_candidate_input: ExternalCandidateInput | None = None,
+) -> PreparedIntentCandidates:
+    text = normalize_player_text(user_text).strip()
+    external_payload = external_candidate_input.payload if external_candidate_input is not None else None
+    external_candidate = (
+        normalize_external_intent_candidate(external_payload, user_text=text)
+        if external_payload is not None
+        else None
+    )
+    explicit_mode = mode if mode != "auto" else None
+    explicit_submode = submode
+    legacy_route = build_legacy_rule_route(
+        conn,
+        text,
+        explicit_mode=explicit_mode,
+        explicit_submode=explicit_submode,
+    )
+    outcome = legacy_route.outcome
+    rules_candidate = build_rules_intent_candidate(
+        text,
+        rule_mode=legacy_route.rule_mode,
+        rule_submode=legacy_route.rule_submode,
+        inferred=legacy_route.inferred,
+        route_mode=outcome.mode,
+        route_action=outcome.action,
+        route_options=outcome.options,
+        route_kind=outcome.kind,
+        confidence=outcome.confidence,
+    )
+    return PreparedIntentCandidates(
+        text=text,
+        explicit_mode=explicit_mode,
+        explicit_submode=explicit_submode,
+        legacy_route=legacy_route,
+        rules_candidate=rules_candidate,
+        external_low_trust_candidate=external_candidate,
     )
 
 

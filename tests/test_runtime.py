@@ -9,16 +9,24 @@ import threading
 import time
 import unittest
 from copy import deepcopy
-from dataclasses import asdict, is_dataclass, replace
+from dataclasses import asdict, fields, is_dataclass, replace
 from pathlib import Path
 from unittest.mock import patch
 
 import yaml
 
+from rpg_engine.ai.defaults import DEFAULT_AI_MODEL, DEFAULT_AI_PROVIDER
 from rpg_engine.ai.provider import AIHelperResult
 from rpg_engine.db import connect, init_database, upsert_entity
 from rpg_engine.campaign import load_campaign
-from rpg_engine.intent_router import route_intent, turn_contract_from_dict
+from rpg_engine.intent_router import (
+    ExternalCandidateInput,
+    make_intent_ai_config,
+    make_intent_request_meta,
+    prepare_intent_candidates,
+    route_intent,
+    turn_contract_from_dict,
+)
 from rpg_engine.preflight_cache import (
     PREFLIGHT_IDENTITY_MESSAGE_ONLY,
     create_pending_intent_preflight,
@@ -619,6 +627,142 @@ class GMRuntimeTests(unittest.TestCase):
             self.assertEqual(trace["intent_ai"]["external_candidate"]["action"], "rest")
             self.assertEqual(trace["intent_ai"]["decision"]["source"], "rules_fallback")
             self.assertEqual(trace["final_intent"]["action"], "rest")
+
+    def test_prepare_intent_candidates_is_side_effect_limited_candidate_stage(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = GMRuntime.from_path(copy_official_campaign(tmp))
+            external = {
+                "kind": "single",
+                "mode": "action",
+                "action": "rest",
+                "slots": {"until": "morning"},
+                "plan": [],
+                "confidence": "high",
+                "missing_slots": [],
+                "needs_confirmation": [],
+                "safety_flags": [],
+                "reason": "外部 AI 判断这是休息行动。",
+            }
+
+            with connect(runtime.campaign) as conn:
+                with patch("rpg_engine.intent_router.AIIntentRouter", side_effect=AssertionError("AI router must not run")):
+                    prepared = prepare_intent_candidates(
+                        conn,
+                        "休息到早上",
+                        external_candidate_input=ExternalCandidateInput(external),
+                    )
+
+            self.assertEqual(prepared.text, "休息到早上")
+            self.assertIsNone(prepared.explicit_mode)
+            self.assertIsNone(prepared.explicit_submode)
+            self.assertEqual(prepared.legacy_route.outcome.action, "rest")
+            self.assertEqual(prepared.rules_candidate.to_dict()["source"], "rules")
+            self.assertEqual(prepared.rules_candidate.action, "rest")
+            external_candidate = prepared.external_low_trust_candidate
+            self.assertIsNotNone(external_candidate)
+            if external_candidate is None:
+                self.fail("external candidate should be normalized")
+            self.assertEqual(external_candidate.source, "external_ai")
+            self.assertEqual(external_candidate.action, "rest")
+
+            ai_config = make_intent_ai_config(
+                intent_ai="consensus",
+                intent_backend="hermes",
+                intent_provider="custom-provider",
+                intent_model="custom-model",
+                intent_timeout=1,
+                intent_base_url="https://ai.example.test/v1",
+                intent_api_key_env="TEST_AI_KEY",
+                intent_fallback_backend="hermes",
+            )
+            self.assertEqual(ai_config.mode, "consensus")
+            self.assertEqual(ai_config.backend, "hermes_z")
+            self.assertEqual(ai_config.provider, "custom-provider")
+            self.assertEqual(ai_config.model, "custom-model")
+            self.assertEqual(ai_config.timeout, 3)
+            self.assertEqual(ai_config.base_url, "https://ai.example.test/v1")
+            self.assertEqual(ai_config.api_key_env, "TEST_AI_KEY")
+            self.assertEqual(ai_config.fallback_backend, "hermes_z")
+
+            default_ai_config = make_intent_ai_config()
+            self.assertEqual(default_ai_config.provider, DEFAULT_AI_PROVIDER)
+            self.assertEqual(default_ai_config.model, DEFAULT_AI_MODEL)
+
+            request_meta = make_intent_request_meta(
+                preflight_id="pf:1",
+                message_id="msg:1",
+                platform="qq",
+                session_key="room:1",
+                source_user_text_hash="hash:1",
+                preflight_pending_wait_ms=25,
+            )
+            self.assertEqual(
+                {field.name for field in fields(request_meta)},
+                {
+                    "preflight_id",
+                    "message_id",
+                    "platform",
+                    "session_key",
+                    "source_user_text_hash",
+                    "preflight_pending_wait_ms",
+                },
+            )
+            self.assertEqual(
+                asdict(request_meta),
+                {
+                    "preflight_id": "pf:1",
+                    "message_id": "msg:1",
+                    "platform": "qq",
+                    "session_key": "room:1",
+                    "source_user_text_hash": "hash:1",
+                    "preflight_pending_wait_ms": 25,
+                },
+            )
+            self.assertEqual(
+                asdict(make_intent_request_meta()),
+                {
+                    "preflight_id": "",
+                    "message_id": "",
+                    "platform": "",
+                    "session_key": "",
+                    "source_user_text_hash": "",
+                    "preflight_pending_wait_ms": 0,
+                },
+            )
+
+    def test_route_intent_keeps_conflicting_external_candidate_trace_only_when_ai_off(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = GMRuntime.from_path(copy_official_campaign(tmp))
+            conflicting_external = {
+                "kind": "single",
+                "mode": "action",
+                "action": "social",
+                "slots": {"npc": "Scout Ren", "topic": "闲聊"},
+                "plan": [],
+                "confidence": "high",
+                "missing_slots": [],
+                "needs_confirmation": [],
+                "safety_flags": [],
+                "reason": "外部 AI 错把休息请求判断成社交行动。",
+            }
+
+            with connect(runtime.campaign) as conn:
+                intent = route_intent(
+                    runtime.campaign,
+                    conn,
+                    "休息到早上",
+                    external_intent_candidate=conflicting_external,
+                )
+
+            trace = intent.decision_trace
+            intent_ai_trace = trace["intent_ai"]
+            self.assertEqual(intent.action, "rest")
+            self.assertEqual(intent.source, "action_inference")
+            self.assertEqual(trace["final_intent"]["action"], "rest")
+            self.assertEqual(intent_ai_trace["decision"]["source"], "rules_fallback")
+            self.assertEqual(intent_ai_trace["selected_outcome"]["action"], "rest")
+            self.assertEqual(intent_ai_trace["external_candidate"]["source"], "external_ai")
+            self.assertEqual(intent_ai_trace["external_candidate"]["action"], "social")
 
     def test_intent_candidate_preparation_characterization_snapshots(self) -> None:
         external_rest = {

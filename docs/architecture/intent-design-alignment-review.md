@@ -75,7 +75,7 @@ The review was organized as an AI game development panel with six roles:
 | AI Safety / Trust Boundary Lead | Conditional pass. `IntentRequestMeta` must be passive identity only. |
 | Gameplay / Player Experience Lead | Conditional pass. `player_turn` and `player_confirm` must remain the mental model. |
 | Platform / Prewarm Architect | Conditional pass. Platform prewarm remains disposable acceleration, not runtime authority. |
-| Refactor / QA Lead | Conditional pass. Start with pure preparation and characterization tests. |
+| Refactor / QA Lead | Conditional pass. Start with side-effect-limited preparation and characterization tests. |
 | Engine Architecture Lead | Conditional pass. Do not move resolver, binder, validation, commit, MCP, or platform gates in the first phase. |
 
 Consensus:
@@ -117,7 +117,7 @@ platform or explicit preflight request
 | Historical goal | Current refactor fit | Required adjustment |
 | --- | --- | --- |
 | External AI is low trust | Mostly aligned | Keep external candidate visibly separate from passive request metadata. |
-| Internal AI independently reviews | Aligned if preparation stays pure | `message_only` preflight must pass `external_for_internal_review = None`. |
+| Internal AI independently reviews | Aligned if preparation stays side-effect-limited | `message_only` preflight must pass `external_for_internal_review = None`. |
 | Kernel owns final intent and save | Aligned | Do not move binder, resolver, validation, pending action, or commit. |
 | Rules stop being the main judge | Partial | `legacy_route` is a characterization baseline and rules candidate source, not the future authority model. |
 | `player_turn` is the player entry | Aligned | Docs and prompts must keep `preview_from_text` marked low-level/transition. |
@@ -142,17 +142,18 @@ These are blockers for implementation:
    authority.
 4. External candidate input must stay adjacent but separate, for example as
    `ExternalCandidateInput` or `external_candidate_input`.
-5. Candidate preparation must be pure: normalize text, normalize external
-   candidate, build legacy route, build rules candidate. It must not call AI,
-   consume preflight, arbitrate, bind, preview, validate, create pending action,
-   or commit.
+5. Candidate preparation must be side-effect-limited: normalize text, normalize
+   external candidate, build legacy route, build rules candidate, and read DB
+   state only for existing rule inference. It must not call AI, consume
+   preflight, arbitrate, bind, preview, validate, create pending action, or
+   commit.
 6. Preflight production must explicitly preserve the identity distinction:
 
 ```python
 external_for_internal_review = (
     None
     if preflight_identity_profile == "message_only"
-    else prepared.external_for_live_route
+    else prepared.external_low_trust_candidate
 )
 ```
 
@@ -209,7 +210,7 @@ class PreparedIntentCandidates:
     explicit_submode: str | None
     legacy_route: LegacyRuleRoute
     rules_candidate: IntentCandidate
-    external_for_live_route: IntentCandidate | None
+    external_low_trust_candidate: IntentCandidate | None
 ```
 
 ## Implementation Guidance

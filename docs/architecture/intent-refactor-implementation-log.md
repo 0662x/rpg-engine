@@ -154,3 +154,106 @@ Documentation sync:
 
 - This log was created and indexed from `docs/README.md`.
 - `docs/architecture/module-map.md` links this log as implementation evidence.
+
+## Round 2: Phase 1b Extract Side-Effect-Limited Candidate Preparation
+
+Status: **COMPLETE**
+
+Goal:
+
+Extract a side-effect-limited `prepare_intent_candidates()` helper inside
+`intent_router.py` while keeping `route_intent(...)` as the compatibility
+facade. "Side-effect-limited" means no AI, preflight consumption, arbitration,
+binding, preview, pending-action creation, save validation, or commit. The
+helper still reads current campaign state through legacy rule routing and action
+inference to prepare deterministic candidates.
+
+Code scope:
+
+- `rpg_engine/intent_router.py`
+- `tests/test_runtime.py`
+
+Runtime behavior impact:
+
+- Behavior-preserving refactor intended.
+- `route_intent(...)` public signature unchanged.
+- No `AIIntentRouter`, preflight cache, resolver, validation, commit,
+  SaveManager, MCP, CLI, or platform code changed.
+
+Added internal types:
+
+- `IntentAIConfig`
+- `IntentRequestMeta`
+- `ExternalCandidateInput`
+- `PreparedIntentCandidates`
+
+Added helpers:
+
+- `make_intent_ai_config()`
+- `make_intent_request_meta()`
+- `prepare_intent_candidates()`
+
+Preparation helper boundary:
+
+- Normalizes player text.
+- Normalizes optional low-trust external candidate.
+- Builds legacy rule route.
+- Builds deterministic rules candidate.
+- Returns the external input as `external_low_trust_candidate`; this is trace
+  and AI-router input, not an authority to apply directly.
+- May read the campaign DB through legacy route/action inference.
+- Does not call AI.
+- Does not consume preflight.
+- Does not arbitrate.
+- Does not bind slots.
+- Does not preview, validate, create pending action, or commit.
+
+Verification so far:
+
+```bash
+python3 -m pytest -q tests/test_runtime.py \
+  -k "prepare_intent_candidates or candidate_preparation_characterization or conflicting_external_candidate"
+
+python3 -m pytest -q tests/test_ai_intent.py tests/test_runtime.py tests/test_save_manager.py \
+  -k "intent_ai or intent_router or external_intent_candidate or semantic_suggestion or gold_set or candidate_preparation_characterization or route_preparation_cases_unsaved or prepare_intent_candidates or conflicting_external_candidate"
+```
+
+Result:
+
+```text
+3 passed, 53 deselected, 5 subtests passed
+20 passed, 85 deselected, 40 subtests passed
+```
+
+Expert code review:
+
+- Engine boundary: pass. Noted non-blocking risk that helper tests should make
+  side-effect boundaries explicit.
+- AI intent safety: requested a conflicting low-trust external-candidate
+  negative case before safety signoff.
+- Gameplay turn flow: pass. Confirmed ordinary player flow remains
+  `player_turn -> player_confirm`; `route_intent`, `prepare_intent_candidates`,
+  and `preview_from_text` are not normal player entry points.
+- Platform/MCP integration: pass. Confirmed MCP/CLI/platform and SaveManager
+  surfaces did not gain external candidate intake or new entry points.
+- QA/regression: pass with non-blocking suggestions to assert all
+  `IntentRequestMeta` and `IntentAIConfig` normalization fields.
+- Repo/docs: pass with request to avoid calling the helper strictly "pure".
+
+Review fixes applied:
+
+- Added `test_route_intent_keeps_conflicting_external_candidate_trace_only_when_ai_off`.
+- Expanded helper tests to assert `IntentRequestMeta` full field values,
+  empty-string normalization, and `IntentAIConfig` backend/fallback/provider/
+  model/base-url/api-key normalization.
+- Renamed prepared external field from `external_for_live_route` to
+  `external_low_trust_candidate`.
+
+Documentation sync:
+
+- Updated Round 2 terminology from "pure" to "side-effect-limited".
+- Synced architecture docs that referenced the prepared external-candidate
+  field name.
+- Final expert follow-up review complete. Engine boundary, AI intent safety,
+  gameplay turn flow, Platform/MCP integration, QA/regression, and repo/docs
+  reviewers all signed off with no blockers.

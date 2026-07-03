@@ -197,7 +197,7 @@ class PreparedIntentCandidates:
     explicit_submode: str | None
     legacy_route: LegacyRuleRoute
     rules_candidate: IntentCandidate
-    external_for_live_route: IntentCandidate | None
+    external_low_trust_candidate: IntentCandidate | None
 ```
 
 `IntentRequestMeta` is passive identity only. It must not contain external
