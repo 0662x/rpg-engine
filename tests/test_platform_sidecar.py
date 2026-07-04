@@ -8,7 +8,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from rpg_engine.game_session import ACTIVE_GAME, INACTIVE, PlatformMessage
+from rpg_engine.game_session import ACTIVE_GAME, INACTIVE, PlatformMessage, hash_identity
 from rpg_engine.platform_prewarm import GameSessionBindingStore, PlatformPrewarmConfig
 from rpg_engine.platform_sidecar import (
     PlatformSidecar,
@@ -174,13 +174,15 @@ class PlatformSidecarTests(unittest.TestCase):
             root = Path(tmp)
             shutil.copytree(MINIMAL_FIXTURE, root / "campaigns" / "minimal")
             sidecar = PlatformSidecar(root, config=sidecar_config(enabled=True))
+            raw_session = "qq:user:raw-session"
+            raw_actor = "user:raw-actor"
             start = sidecar.start_or_continue_from_message(
                 {
                     "platform": "qq",
-                    "session_key": "qq:user:1",
+                    "session_key": raw_session,
                     "message_id": "qq:start",
                     "text": "开始游戏",
-                    "actor_id": "user:1",
+                    "actor_id": raw_actor,
                 },
                 campaign="campaigns/minimal",
             )
@@ -191,10 +193,10 @@ class PlatformSidecarTests(unittest.TestCase):
                 prewarm = sidecar.handle_message_event(
                     {
                         "platform": "qq",
-                        "session_key": "qq:user:1",
+                        "session_key": raw_session,
                         "message_id": "qq:act",
                         "text": "休息到早上",
-                        "actor_id": "user:1",
+                        "actor_id": raw_actor,
                     }
                 )
                 worker_results = sidecar.drain_prewarm()
@@ -209,10 +211,10 @@ class PlatformSidecarTests(unittest.TestCase):
                 acted = sidecar.player_act_from_message(
                     {
                         "platform": "qq",
-                        "session_key": "qq:user:1",
+                        "session_key": raw_session,
                         "message_id": "qq:act",
                         "text": "休息到早上",
-                        "actor_id": "user:1",
+                        "actor_id": raw_actor,
                     }
                 ).to_dict()
             finally:
@@ -234,18 +236,42 @@ class PlatformSidecarTests(unittest.TestCase):
             self.assertGreaterEqual(metrics["sidecar"]["player_act_count"], 1)
             self.assertGreaterEqual(metrics["sidecar"]["ready_to_confirm_count"], 1)
 
+            pending = json.loads((root / ".aigm" / "pending-player-action.json").read_text(encoding="utf-8"))
+            raw_pending = json.dumps(pending, ensure_ascii=False)
+            preflight_record = pending["turn_proposal"]["intent"]["decision_trace"]["intent_ai"]["preflight"]["record"]
+            self.assertEqual(pending["session_key_hash"], hash_identity(raw_session))
+            self.assertEqual(pending["actor_id_hash"], hash_identity(raw_actor))
+            self.assertEqual(preflight_record["session_key_hash"], hash_identity(raw_session))
+            self.assertNotIn("session_key", preflight_record)
+            self.assertNotIn(raw_session, raw_pending)
+            self.assertNotIn(raw_actor, raw_pending)
+
             duplicate = sidecar.player_act_from_message(
                 {
                     "platform": "qq",
-                    "session_key": "qq:user:1",
+                    "session_key": raw_session,
                     "message_id": "qq:act",
                     "text": "休息到早上",
-                    "actor_id": "user:1",
+                    "actor_id": raw_actor,
                 }
             ).to_dict()
 
             self.assertFalse(duplicate["ok"], duplicate)
             self.assertEqual(duplicate["platform_gate"]["reason"], "duplicate_action_message")
+
+            confirmed = sidecar.player_confirm_from_message(
+                {
+                    "platform": "qq",
+                    "session_key": raw_session,
+                    "message_id": "qq:confirm",
+                    "text": "确认",
+                    "actor_id": raw_actor,
+                },
+                session_id=acted["session_id"],
+            ).to_dict()
+
+            self.assertTrue(confirmed["ok"], confirmed)
+            self.assertTrue(confirmed["saved"], confirmed)
 
     def test_platform_act_uses_bound_save_instead_of_global_active_save(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

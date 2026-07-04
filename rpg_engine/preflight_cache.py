@@ -91,6 +91,13 @@ class PreflightRecord:
             "identity": self.identity.to_dict(),
         }
 
+    def to_trace_dict(self) -> dict[str, Any]:
+        data = self.to_dict()
+        session_key = clean(data.pop("session_key", ""))
+        if session_key:
+            data["session_key_hash"] = hash_identity(session_key)
+        return data
+
 
 @dataclass(frozen=True)
 class PreflightLookupResult:
@@ -108,7 +115,7 @@ class PreflightLookupResult:
         return {
             "status": self.status,
             "reason": self.reason,
-            "record": self.record.to_dict() if self.record else None,
+            "record": self.record.to_trace_dict() if self.record else None,
         }
 
 
@@ -712,6 +719,10 @@ def save_id(campaign: Campaign) -> str:
 
 def hash_text(value: str) -> str:
     return hashlib.sha256(normalize_text(value).encode("utf-8")).hexdigest()
+
+
+def hash_identity(value: str) -> str:
+    return hashlib.sha256(clean(value).encode("utf-8")).hexdigest()
 
 
 def hash_json(value: dict[str, Any]) -> str:
