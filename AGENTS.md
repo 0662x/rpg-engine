@@ -12,11 +12,30 @@ the kernel decides what becomes durable fact.
 
 Current documentation starts at `docs/README.md`.
 
+## Language Policy
+
+- Default all user-facing conversation for this repository to Chinese.
+- Write project documentation, BMAD artifacts, reports, plans, reviews, and
+  proposal text in Chinese unless the user explicitly asks for another language.
+- Keep code identifiers, file paths, command names, schema keys, API names,
+  established English product terms, and quoted source text unchanged when
+  translating would reduce precision.
+- If a BMAD template is in English, translate generated prose and headings to
+  Chinese while preserving required IDs, menu codes, status keywords, and
+  structured field names.
+
 ## BMAD Workflow
 
 BMAD is installed for this repository as the strong AI-assisted development
 process layer.
 
+- Strict BMAD mode is always on for this repository. As soon as an agent reads
+  this file, all repository work must start from BMAD classification, catalog
+  routing, context loading, and evidence capture.
+- BMAD workflow rules are the highest-priority project rules in this file. If
+  another repository convention appears to conflict with BMAD classification,
+  skill activation, provenance, checkpoints, verification, or artifact handling,
+  follow BMAD first and state the conflict plainly.
 - BMAD modules live under `_bmad/`.
 - Codex and Hermes skills live under `.agents/skills/`.
 - Long-lived BMAD / AI-agent project context is `docs/project-context.md`.
@@ -24,9 +43,12 @@ process layer.
 
 ### Strict BMAD Skill Activation
 
-When the user mentions `bmad`, `BMAD`, a BMAD menu code, a BMAD skill name, or
-asks what the next BMAD step should be, treat it as a real BMAD invocation, not
-as a generic planning prompt.
+For this repository, BMAD invocation is the default. Treat every request that
+touches repository code, docs, tests, plans, reviews, artifacts, or next-step
+guidance as BMAD-governed work, even if the user does not explicitly say
+`bmad`. When the user mentions `bmad`, `BMAD`, a BMAD menu code, a BMAD skill
+name, or asks what the next BMAD step should be, treat it as an explicit BMAD
+invocation, not as a generic planning prompt.
 
 Required sequence:
 
@@ -35,9 +57,12 @@ Required sequence:
    completely, then use `_bmad/_config/bmad-help.csv`,
    `_bmad/_config/skill-manifest.csv`, relevant `_bmad/**/config.yaml` files,
    existing artifacts, and `docs/project-context.md` to decide the next skill.
-2. Prefer Game Dev Studio (`gds-*`) skills for RPG Engine game/engine work,
-   BMM (`bmad-*`) skills for general software/product work, Core skills for
-   repo-wide BMAD utilities, and TEA skills for test architecture.
+2. Prefer BMad Method / BMM (`bmad-*`) skills as the default for RPG Engine
+   repository work, including game, engine, software, product, documentation,
+   and implementation work. Use Game Dev Studio (`gds-*`) only when an existing
+   BMAD artifact, story track, or explicit user request requires a GDS-specific
+   game design or production workflow. Use Core skills for repo-wide BMAD
+   utilities, and TEA skills for test architecture.
 3. Before doing task work, read the selected
    `.agents/skills/<skill>/SKILL.md` completely. Do not claim BMAD was used
    from memory or from a hand-written approximation.
