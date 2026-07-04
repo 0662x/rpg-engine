@@ -165,6 +165,11 @@ commit_turn
 - arbitrary file read/write
 - model proxy
 
+`rpg_engine.surface_inventory.MCP_SURFACE_INVENTORY` 是 MCP 工具暴露的可测试权限清单。每个工具必须声明
+canonical taxonomy、write authority、intended caller 和 forbidden bypasses；默认 player profile 的
+工具必须全部是 player-safe，低层工具必须通过 MCP profile gate 留在 developer / trusted / maintenance /
+admin profiles。
+
 ## Player-Safe 工具合同
 
 | 工具 | 合同 |

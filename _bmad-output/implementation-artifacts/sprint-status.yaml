@@ -1,0 +1,101 @@
+# generated: 2026-07-04T23:27:52+1000
+# last_updated: 2026-07-04T23:52:22+1000
+# project: RPG Engine
+# project_key: NOKEY
+# tracking_system: file-system
+# story_location: /Users/oliver/.hermes/rpg-engine/_bmad-output/implementation-artifacts
+
+# STATUS DEFINITIONS:
+# ==================
+# Epic Status:
+#   - backlog: Epic not yet started
+#   - in-progress: Epic actively being worked on
+#   - done: All stories in epic completed
+#
+# Epic Status Transitions:
+#   - backlog -> in-progress: Automatically when first story is created (via create-story)
+#   - in-progress -> done: Manually when all stories reach 'done' status
+#
+# Story Status:
+#   - backlog: Story only exists in epic file
+#   - ready-for-dev: Story file created in stories folder
+#   - in-progress: Developer actively working on implementation
+#   - review: Ready for code review (via Dev's code-review workflow)
+#   - done: Story completed
+#
+# Retrospective Status:
+#   - optional: Can be completed but not required
+#   - done: Retrospective has been completed
+#
+# Action Item Status:
+#   - open: Committed during a retrospective, not yet addressed
+#   - in-progress: Actively being worked on
+#   - done: Completed
+#
+# WORKFLOW NOTES:
+# ===============
+# - Epic transitions to 'in-progress' automatically when first story is created
+# - Stories can be worked in parallel if team capacity allows
+# - Developer typically creates next story after previous one is 'done' to incorporate learnings
+# - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
+# - Retrospective appends its action items to action_items; sprint-status surfaces open ones
+
+generated: 2026-07-04T23:27:52+1000
+last_updated: 2026-07-05T05:58:13+1000
+project: RPG Engine
+project_key: NOKEY
+tracking_system: file-system
+story_location: /Users/oliver/.hermes/rpg-engine/_bmad-output/implementation-artifacts
+
+development_status:
+  epic-1: in-progress
+  1-1-surface-authority-inventory-and-contract: done
+  1-2-player-turn-pending-contract: review
+  1-3-player-confirm-validation-commit-gate: backlog
+  1-4-save-fact-authority-and-runtime-state-boundary: backlog
+  1-5-projection-and-outbox-health-evidence: backlog
+  1-6-mcp-player-profile-权限门: backlog
+  1-7-cli-命令薄适配边界: backlog
+  1-8-platform-forwarding-与审计边界: backlog
+  epic-1-retrospective: optional
+
+  epic-2: backlog
+  2-1-campaign-and-save-ownership-contract: backlog
+  2-2-content-type-and-merge-contract: backlog
+  2-3-entity-identity-access-contract: backlog
+  2-4-relationship-access-contract: backlog
+  2-5-progress-track-and-clock-access-contract: backlog
+  2-6-跨-campaign-的模型边界冒烟测试: backlog
+  epic-2-retrospective: optional
+
+  epic-3: backlog
+  3-1-contextbuildresult-contract-and-audit: backlog
+  3-2-player-safe-context-query-与-prompt-隐藏信息边界: backlog
+  3-3-派生玩家视图与检索产物的隐藏信息边界: backlog
+  3-4-relationship-progress-and-plot-signal-context: backlog
+  3-5-long-term-memory-summary-provenance: backlog
+  3-6-context-budget-and-quality-diagnostics: backlog
+  3-7-跨-campaign-的-context-与玩家安全回路集成冒烟测试: backlog
+  epic-3-retrospective: optional
+
+  epic-4: backlog
+  4-1-low-trust-intent-candidate-contract: backlog
+  4-2-ai-latency-policy-and-safe-degradation: backlog
+  4-3-advisory-preflight-cache-boundary: backlog
+  4-4-resident-ai-advisory-envelope-contract: backlog
+  4-5-resident-ai-advisory-代表性适配: backlog
+  4-6-entity-relationship-and-progress-advisory-review: backlog
+  4-7-plot-progression-advisory-without-storylet-requirement: backlog
+  epic-4-retrospective: optional
+
+  epic-5: backlog
+  5-1-campaign-package-结构诊断: backlog
+  5-2-campaign-引用-relationship-与-progress-诊断: backlog
+  5-3-campaign-context-usability-与-capability-诊断: backlog
+  5-4-author-ai-and-prompt-contract-diagnostics: backlog
+  5-5-palette-and-random-table-governance: backlog
+  5-6-discovery-state-lifecycle-reports: backlog
+  5-7-proposal-queue-apply-and-revert-rules: backlog
+  5-8-high-impact-content-delta-review-and-promotion: backlog
+  5-9-residual-risk-evidence-gates: backlog
+  epic-5-retrospective: optional

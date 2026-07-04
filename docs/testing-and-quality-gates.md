@@ -83,6 +83,9 @@ Surface / intent 基线材料：
 
 - `tests/fixtures/intent_router_gold_set.yaml`
 - `tests/fixtures/mcp_external_agent_transcripts.yaml`
+- `tests/test_surface_inventory.py` 校验 public / semi-public entry surface 的 canonical taxonomy、
+  write authority、forbidden bypasses、MCP default profile、V1 CLI groups、runtime API、platform
+  sidecar/prewarm 和 projection/outbox 覆盖。
 - `docs/architecture/phase-0-performance-baseline.md` 是归档 stub；原始本机性能基线已随
   `phase-0-performance-baseline.md` 归档到 `docs/archive/pre-bmad-docs-2026-07-03/`。
 

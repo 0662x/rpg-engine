@@ -36,6 +36,12 @@ flowchart TD
   Cache -. "正式入口重新校验后才可消费" .-> Intent
 ```
 
+`rpg_engine.surface_inventory` 是当前 public / semi-public entry surface 的可测试权限清单。
+每个 entry 必须同时声明 domain category、canonical taxonomy、write authority、intended caller、
+default exposure、normal-play status、authority gate 和 forbidden bypasses。Canonical taxonomy 只能是
+`player-safe`、`trusted low-level`、`maintenance/admin`、`platform sidecar`、`platform prewarm`
+或 `projection/outbox`；新增入口缺少这些元数据时，`tests/test_surface_inventory.py` 必须失败。
+
 ## 玩家安全链
 
 普通玩家动作的主链是：
