@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -101,14 +102,28 @@ def commit_turn_delta(
     if validation.delta_digest != stable_delta_digest(delta):
         raise ValueError("validation report does not match commit delta")
 
-    backup_record = create_backup(campaign, reason=backup_reason) if backup else None
+    backup_record = None
     archivist_suggestion_id = None
     archivist_proposal_ids: tuple[str, ...] = ()
     archivist_ai_status = None
     memory_report_path = None
     memory_summaries = None
 
-    turn_id = save_turn_delta(campaign, conn, delta)
+    def create_pre_commit_backup() -> None:
+        nonlocal backup_record
+        backup_record = create_backup(campaign, reason=backup_reason)
+
+    def remove_pre_commit_backup() -> None:
+        if backup_record is not None:
+            shutil.rmtree(backup_record.path)
+
+    turn_id = save_turn_delta(
+        campaign,
+        conn,
+        delta,
+        before_write=create_pre_commit_backup if backup else None,
+        rollback_write_artifacts=remove_pre_commit_backup if backup else None,
+    )
     if archivist_suggest:
         archivist_result = run_archivist_workflow(
             conn,

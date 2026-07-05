@@ -35,37 +35,49 @@ def create_backup(campaign: Campaign, *, reason: str = "manual") -> BackupInfo:
     backup_id = path.name
     path.mkdir(parents=True, exist_ok=False)
 
-    database_source = campaign.database_path
-    if database_source.exists():
-        database_target = path / "data" / "game.sqlite"
-        database_target.parent.mkdir(parents=True, exist_ok=True)
-        source_conn = sqlite3.connect(database_source)
-        target_conn = sqlite3.connect(database_target)
-        try:
-            source_conn.backup(target_conn)
-        finally:
-            target_conn.close()
-            source_conn.close()
+    try:
+        database_source = campaign.database_path
+        if database_source.exists():
+            database_target = path / "data" / "game.sqlite"
+            database_target.parent.mkdir(parents=True, exist_ok=True)
+            source_conn = sqlite3.connect(database_source)
+            target_conn = sqlite3.connect(database_target)
+            try:
+                source_conn.backup(target_conn)
+            finally:
+                target_conn.close()
+                source_conn.close()
 
-    for relative in ["package-lock.json", "data/events.jsonl", "snapshots/current.md", "snapshots/current.json"]:
-        source = campaign.root / relative
-        if source.exists():
-            target = path / relative
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, target)
-    for relative_dir in ["cards", "reports"]:
-        source_dir = campaign.root / relative_dir
-        if source_dir.exists():
-            shutil.copytree(source_dir, path / relative_dir)
-    manifest = {
-        "id": backup_id,
-        "created_at": created_at,
-        "reason": reason,
-        "campaign_id": campaign.campaign_id,
-        "campaign_name": campaign.name,
-    }
-    (path / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
-    return BackupInfo(id=backup_id, path=path, created_at=created_at, reason=reason)
+        for relative in ["package-lock.json", "data/events.jsonl", "snapshots/current.md", "snapshots/current.json"]:
+            source = campaign.root / relative
+            if source.exists():
+                target = path / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, target)
+        for relative_dir in ["cards", "reports"]:
+            source_dir = campaign.root / relative_dir
+            if source_dir.exists():
+                shutil.copytree(source_dir, path / relative_dir)
+        manifest = {
+            "id": backup_id,
+            "created_at": created_at,
+            "reason": reason,
+            "campaign_id": campaign.campaign_id,
+            "campaign_name": campaign.name,
+        }
+        (path / "manifest.json").write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+        return BackupInfo(id=backup_id, path=path, created_at=created_at, reason=reason)
+    except Exception as exc:
+        try:
+            shutil.rmtree(path)
+        except FileNotFoundError:
+            pass
+        except Exception as cleanup_exc:
+            exc.add_note(f"partial backup cleanup failed: {cleanup_exc!r}")
+        raise
 
 
 def list_backups(campaign: Campaign) -> list[BackupInfo]:

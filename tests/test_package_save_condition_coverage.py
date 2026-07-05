@@ -880,7 +880,10 @@ class SaveManagerConditionCoverageTests(unittest.TestCase):
             ):
                 confirmed = manager.player_confirm("sid")
             self.assertTrue(confirmed["saved"])
+            self.assertTrue(captured["proposal"]["human_confirmed"])
             self.assertEqual(captured["proposal"]["provenance"]["confirmed_via"], "player_confirm")
+            self.assertEqual(captured["proposal"]["provenance"]["confirmation_session_id"], "sid")
+            self.assertIsInstance(captured["proposal"]["provenance"]["confirmed_at"], str)
             self.assertFalse(manager.pending_action_path().exists())
 
     def test_save_manager_helper_contracts_and_malformed_registry_edges(self) -> None:

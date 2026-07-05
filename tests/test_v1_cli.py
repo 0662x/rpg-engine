@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -139,6 +140,34 @@ class V1CliTests(unittest.TestCase):
             self.assertFalse(blocked["ok"])
             self.assertTrue(forced["ok"], forced)
             self.assertTrue((target / "campaign.yaml").exists())
+
+    def test_player_confirm_cli_json_hides_raw_commit_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            shutil.copytree(MINIMAL_FIXTURE, root / "campaigns" / "minimal")
+
+            started = load_stdout_json(
+                run_cli("player", "start", root, "--campaign", "campaigns/minimal", "--format", "json")
+            )
+            acted = load_stdout_json(run_cli("player", "turn", root, "休息到早上", "--format", "json"))
+            confirmed = load_stdout_json(
+                run_cli("player", "confirm", root, "--session-id", acted["session_id"], "--format", "json")
+            )
+
+            self.assertTrue(started["ok"], started)
+            self.assertTrue(acted["ready_to_confirm"], acted)
+            self.assertTrue(confirmed["ok"], confirmed)
+            self.assertTrue(confirmed["saved"], confirmed)
+            for hidden_key in (
+                "delta",
+                "delta_draft",
+                "turn_proposal",
+                "validation_report",
+                "projection_report",
+                "state_audit",
+                "check_errors",
+            ):
+                self.assertNotIn(hidden_key, confirmed)
 
     def test_save_init_inspect_validate_export_import(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

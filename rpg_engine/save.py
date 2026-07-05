@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -33,7 +34,14 @@ def next_turn_id(conn: sqlite3.Connection) -> str:
     return f"turn:{number:06d}"
 
 
-def save_turn_delta(campaign: Campaign, conn: sqlite3.Connection, delta: dict[str, Any]) -> str:
+def save_turn_delta(
+    campaign: Campaign,
+    conn: sqlite3.Connection,
+    delta: dict[str, Any],
+    *,
+    before_write: Callable[[], None] | None = None,
+    rollback_write_artifacts: Callable[[], None] | None = None,
+) -> str:
     schema_errors = validate_delta_schema(delta, conn)
     if schema_errors:
         raise ValueError("Invalid turn delta:\n" + "\n".join(f"- {error}" for error in schema_errors))
@@ -45,10 +53,14 @@ def save_turn_delta(campaign: Campaign, conn: sqlite3.Connection, delta: dict[st
     delta_meta = enrich_time_weather_meta({str(key): str(value) for key, value in delta.get("meta", {}).items()})
 
     uow = UnitOfWork(campaign, conn, delta)
+    write_artifacts_started = False
     try:
         existing_turn = uow.begin()
         if existing_turn:
             return existing_turn
+        if before_write:
+            write_artifacts_started = True
+            before_write()
         turn_values = (
             turn_id,
             delta.get("session_id"),
@@ -152,8 +164,17 @@ def save_turn_delta(campaign: Campaign, conn: sqlite3.Connection, delta: dict[st
 
         uow.mark_standard_projections(turn_id=turn_id, event_records=event_records)
         uow.commit()
-    except Exception:
-        uow.rollback()
+    except Exception as exc:
+        try:
+            uow.rollback()
+        except Exception as rollback_exc:
+            exc.add_note(f"rollback failed: {rollback_exc!r}")
+        finally:
+            if write_artifacts_started and rollback_write_artifacts:
+                try:
+                    rollback_write_artifacts()
+                except Exception as cleanup_exc:
+                    exc.add_note(f"write artifact rollback failed: {cleanup_exc!r}")
         raise
 
     uow.finalize_artifacts()

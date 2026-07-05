@@ -14,7 +14,9 @@ from types import SimpleNamespace
 from unittest import mock
 
 from rpg_engine.ai.defaults import DEFAULT_AI_MODEL, DEFAULT_AI_PROVIDER
+from rpg_engine.backup import list_backups
 from rpg_engine.game_session import hash_identity
+from rpg_engine.runtime import GMRuntime
 from rpg_engine.save_manager import DEFAULT_PENDING_ACTION_TTL_SECONDS, SaveManager, SaveManagerError
 from rpg_engine.save_service import init_v1_save, inspect_v1_save
 from tests.helpers import consensus_candidate, internal_query_review, internal_review, query_candidate
@@ -329,8 +331,215 @@ class SaveManagerTests(unittest.TestCase):
                 session_key="room:pending-contract",
                 actor_id="actor:one",
             )
+            confirmed_text = json.dumps(confirmed, ensure_ascii=False)
             self.assertTrue(confirmed["saved"], confirmed)
+            self.assertIn("ok", confirmed)
+            self.assertIn("message", confirmed)
+            self.assertIn("write_status", confirmed)
+            self.assertIn("projection_status", confirmed)
+            self.assertIn("warnings", confirmed)
+            self.assertIn("errors", confirmed)
+            self.assertNotIn("delta", confirmed)
+            self.assertNotIn("turn_proposal", confirmed)
+            self.assertNotIn("delta_draft", confirmed)
+            self.assertNotIn("room:pending-contract", confirmed_text)
+            self.assertNotIn("actor:one", confirmed_text)
             self.assertIsNone(manager.read_pending_action())
+
+    def test_player_confirm_real_pending_failures_do_not_mutate_or_clear_pending(self) -> None:
+        cases = [
+            ("missing_session", {"session_id": ""}, "requires the pending action session_id"),
+            ("wrong_session", {"session_id": "player_action:wrong"}, "does not match"),
+            ("wrong_platform", {"platform": "discord", "session_key": "room:confirm", "actor_id": "actor:one"}, "different platform"),
+            ("wrong_session_key", {"platform": "qq", "session_key": "room:wrong", "actor_id": "actor:one"}, "different platform session"),
+            ("missing_actor", {"platform": "qq", "session_key": "room:confirm", "actor_id": ""}, "requires matching platform actor"),
+            ("wrong_actor", {"platform": "qq", "session_key": "room:confirm", "actor_id": "actor:two"}, "different platform actor"),
+        ]
+        for case_id, overrides, expected_error in cases:
+            with self.subTest(case=case_id), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                campaign_dir = root / "campaigns" / "official"
+                shutil.copytree(OFFICIAL_EXAMPLE, campaign_dir)
+                manager = SaveManager(root, default_campaign="campaigns/official")
+                started = manager.start_or_continue(campaign="campaigns/official")
+                save_path = root / started["save"]["path"]
+                acted = manager.player_turn(
+                    user_text="休息到早上",
+                    platform="qq",
+                    session_key="room:confirm",
+                    actor_id="actor:one",
+                )
+                before_confirm = authoritative_save_snapshot(save_path)
+
+                kwargs = {
+                    "session_id": acted["session_id"],
+                    "platform": "qq",
+                    "session_key": "room:confirm",
+                    "actor_id": "actor:one",
+                    **overrides,
+                }
+                with self.assertRaisesRegex(SaveManagerError, expected_error):
+                    manager.player_confirm(**kwargs)
+
+                self.assertEqual(authoritative_save_snapshot(save_path), before_confirm)
+                pending = manager.read_pending_action()
+                self.assertIsNotNone(pending)
+                self.assertEqual(pending["session_id"], acted["session_id"])
+
+    def test_player_confirm_real_pending_wrong_save_does_not_mutate_either_save_or_clear_pending(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            campaign_dir = root / "campaigns" / "official"
+            shutil.copytree(OFFICIAL_EXAMPLE, campaign_dir)
+            manager = SaveManager(root, default_campaign="campaigns/official")
+            first = manager.start_or_continue(campaign="campaigns/official", label="First")
+            first_save_path = root / first["save"]["path"]
+            acted = manager.player_turn(user_text="休息到早上")
+            pending = manager.read_pending_action()
+            self.assertIsNotNone(pending)
+            self.assertEqual(pending["save_id"], first["save"]["id"])
+            first_before_confirm = authoritative_save_snapshot(first_save_path)
+
+            second = manager.create_save(campaign="campaigns/official", label="Second", activate=True)
+            second_save_path = root / second["save"]["path"]
+            second_before_confirm = authoritative_save_snapshot(second_save_path)
+            self.assertNotEqual(first["save"]["id"], second["save"]["id"])
+
+            with self.assertRaisesRegex(SaveManagerError, "different active save"):
+                manager.player_confirm(acted["session_id"])
+
+            self.assertEqual(authoritative_save_snapshot(first_save_path), first_before_confirm)
+            self.assertEqual(authoritative_save_snapshot(second_save_path), second_before_confirm)
+            still_pending = manager.read_pending_action()
+            self.assertIsNotNone(still_pending)
+            self.assertEqual(still_pending["session_id"], acted["session_id"])
+            self.assertEqual(still_pending["save_id"], first["save"]["id"])
+
+    def test_player_confirm_bound_save_path_confirms_original_save_after_active_switch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            campaign_dir = root / "campaigns" / "official"
+            shutil.copytree(OFFICIAL_EXAMPLE, campaign_dir)
+            manager = SaveManager(root, default_campaign="campaigns/official")
+            first = manager.start_or_continue(campaign="campaigns/official", label="First")
+            first_save_path = root / first["save"]["path"]
+            acted = manager.player_turn(
+                user_text="休息到早上",
+                platform="qq",
+                session_key="room:bound-save",
+                actor_id="actor:one",
+            )
+            first_before_confirm = authoritative_save_snapshot(first_save_path)
+
+            second = manager.create_save(campaign="campaigns/official", label="Second", activate=True)
+            second_save_path = root / second["save"]["path"]
+            second_before_confirm = authoritative_save_snapshot(second_save_path)
+
+            confirmed = manager.player_confirm(
+                acted["session_id"],
+                save_path=str(first["save"]["path"]),
+                platform="qq",
+                session_key="room:bound-save",
+                actor_id="actor:one",
+            )
+            first_after_confirm = authoritative_save_snapshot(first_save_path)
+
+            self.assertTrue(confirmed["saved"], confirmed)
+            self.assertEqual(confirmed["active_save_id"], first["save"]["id"])
+            self.assertNotEqual(first_after_confirm["current_turn_id"], first_before_confirm["current_turn_id"])
+            self.assertEqual(authoritative_save_snapshot(second_save_path), second_before_confirm)
+            self.assertEqual(manager.current_save(refresh=False)["active_save_id"], second["save"]["id"])
+            self.assertIsNone(manager.read_pending_action())
+
+    def test_player_confirm_expired_or_incomplete_real_pending_does_not_mutate_save(self) -> None:
+        cases = [
+            ("incomplete_delta", {"delta": []}, "incomplete", True),
+            ("incomplete_proposal", {"turn_proposal": []}, "incomplete", True),
+            ("expired", {"expires_at": "2000-01-01T00:00:00+00:00"}, "expired", False),
+        ]
+        for case_id, payload_updates, expected_error, expect_pending in cases:
+            with self.subTest(case=case_id), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                campaign_dir = root / "campaigns" / "official"
+                shutil.copytree(OFFICIAL_EXAMPLE, campaign_dir)
+                manager = SaveManager(root, default_campaign="campaigns/official")
+                started = manager.start_or_continue(campaign="campaigns/official")
+                save_path = root / started["save"]["path"]
+                acted = manager.player_turn(user_text="休息到早上")
+                pending = manager.read_pending_action()
+                self.assertIsNotNone(pending)
+                manager.write_pending_action({**pending, **payload_updates})
+                before_confirm = authoritative_save_snapshot(save_path)
+
+                with self.assertRaisesRegex(SaveManagerError, expected_error):
+                    manager.player_confirm(acted["session_id"])
+
+                self.assertEqual(authoritative_save_snapshot(save_path), before_confirm)
+                if expect_pending:
+                    self.assertIsNotNone(manager.read_pending_action())
+                else:
+                    self.assertIsNone(manager.read_pending_action())
+
+    def test_player_confirm_stale_expected_turn_rejects_without_mutating_or_clearing_pending(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            campaign_dir = root / "campaigns" / "official"
+            shutil.copytree(OFFICIAL_EXAMPLE, campaign_dir)
+            manager = SaveManager(root, default_campaign="campaigns/official")
+            started = manager.start_or_continue(campaign="campaigns/official")
+            save_path = root / started["save"]["path"]
+            acted = manager.player_turn(user_text="休息到早上")
+            pending = manager.read_pending_action()
+            self.assertIsNotNone(pending)
+            self.assertEqual(pending["delta"]["expected_turn_id"], "turn:seed")
+
+            runtime = GMRuntime.from_path(save_path)
+            interleaving = runtime.preview_action(
+                "random_table",
+                {"table": "table:bridge-risk", "reason": "interleaving confirm guard test"},
+            )
+            self.assertTrue(interleaving.ready_to_save, interleaving.errors)
+            committed = runtime.commit_turn(interleaving.delta_draft or {}, turn_proposal=interleaving.turn_proposal)
+            self.assertEqual(committed.write_status, "committed")
+            backups_after_interleaving = list_backups(runtime.campaign)
+            before_confirm = authoritative_save_snapshot(save_path)
+            self.assertEqual(before_confirm["current_turn_id"], committed.turn_id)
+
+            with self.assertRaisesRegex(ValueError, "stale write"):
+                manager.player_confirm(acted["session_id"])
+
+            self.assertEqual(authoritative_save_snapshot(save_path), before_confirm)
+            self.assertEqual(list_backups(runtime.campaign), backups_after_interleaving)
+            still_pending = manager.read_pending_action()
+            self.assertIsNotNone(still_pending)
+            self.assertEqual(still_pending["session_id"], acted["session_id"])
+
+    def test_player_confirm_write_failure_after_guard_removes_precommit_backup_and_preserves_pending(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            campaign_dir = root / "campaigns" / "official"
+            shutil.copytree(OFFICIAL_EXAMPLE, campaign_dir)
+            manager = SaveManager(root, default_campaign="campaigns/official")
+            started = manager.start_or_continue(campaign="campaigns/official")
+            save_path = root / started["save"]["path"]
+            acted = manager.player_turn(user_text="休息到早上")
+            pending = manager.read_pending_action()
+            self.assertIsNotNone(pending)
+            delta = {**pending["delta"], "turn_id": "turn:seed"}
+            proposal = {**pending["turn_proposal"], "delta": {**pending["turn_proposal"]["delta"], "turn_id": "turn:seed"}}
+            manager.write_pending_action({**pending, "delta": delta, "turn_proposal": proposal})
+            runtime = GMRuntime.from_path(save_path)
+            backups_before_confirm = list_backups(runtime.campaign)
+            before_confirm = authoritative_save_snapshot(save_path)
+
+            with self.assertRaisesRegex(sqlite3.IntegrityError, "UNIQUE constraint failed"):
+                manager.player_confirm(acted["session_id"])
+
+            self.assertEqual(authoritative_save_snapshot(save_path), before_confirm)
+            self.assertEqual(list_backups(runtime.campaign), backups_before_confirm)
+            still_pending = manager.read_pending_action()
+            self.assertIsNotNone(still_pending)
+            self.assertEqual(still_pending["session_id"], acted["session_id"])
 
     def test_player_turn_non_ready_outcomes_clear_stale_pending_and_cannot_be_confirmed(self) -> None:
         cases = [

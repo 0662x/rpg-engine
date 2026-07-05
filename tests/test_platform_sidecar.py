@@ -269,9 +269,22 @@ class PlatformSidecarTests(unittest.TestCase):
                 },
                 session_id=acted["session_id"],
             ).to_dict()
+            confirmed_text = json.dumps(confirmed, ensure_ascii=False)
 
             self.assertTrue(confirmed["ok"], confirmed)
             self.assertTrue(confirmed["saved"], confirmed)
+            for hidden_key in (
+                "delta",
+                "delta_draft",
+                "turn_proposal",
+                "validation_report",
+                "projection_report",
+                "state_audit",
+                "check_errors",
+            ):
+                self.assertNotIn(hidden_key, confirmed)
+            self.assertNotIn(raw_session, confirmed_text)
+            self.assertNotIn(raw_actor, confirmed_text)
 
     def test_platform_act_uses_bound_save_instead_of_global_active_save(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

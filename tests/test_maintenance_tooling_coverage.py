@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sqlite3
 import tempfile
 import unittest
@@ -1063,6 +1064,75 @@ class MemoryBackupAndWorldSettingCoverageTests(unittest.TestCase):
         self.assertEqual(restored_lock, '{"lock": 1}\n')
         self.assertEqual(restored_card, "original-card\n")
         self.assertIsNone(no_pre_restore)
+
+    def test_backup_create_removes_partial_directory_on_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            root = campaign.root
+            (root / "package-lock.json").write_text('{"lock": 1}\n', encoding="utf-8")
+            expected_path = root / "backups" / "v2" / "backup-20240102T030405Z"
+
+            with (
+                mock.patch("rpg_engine.backup.utc_now", return_value="2024-01-02T03:04:05+00:00"),
+                mock.patch("rpg_engine.backup.shutil.copy2", side_effect=OSError("copy failed")),
+            ):
+                with self.assertRaisesRegex(OSError, "copy failed"):
+                    create_backup(campaign, reason="manual")
+
+            self.assertFalse(expected_path.exists())
+            self.assertEqual(list_backups(campaign), [])
+
+    def test_save_turn_delta_cleans_write_artifacts_when_before_write_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            partial_artifact = campaign.root / "backups" / "v2" / "hook-partial"
+
+            def before_write() -> None:
+                partial_artifact.mkdir(parents=True)
+                raise RuntimeError("hook failed")
+
+            def cleanup() -> None:
+                shutil.rmtree(partial_artifact, ignore_errors=True)
+
+            with connect(campaign) as conn:
+                with self.assertRaisesRegex(RuntimeError, "hook failed"):
+                    save_turn_delta(
+                        campaign,
+                        conn,
+                        {
+                            "user_text": "hook failure",
+                            "intent": "wait",
+                            "changed": False,
+                            "summary": "No change.",
+                        },
+                        before_write=before_write,
+                        rollback_write_artifacts=cleanup,
+                    )
+
+            self.assertFalse(partial_artifact.exists())
+
+    def test_save_turn_delta_cleanup_failure_preserves_original_write_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+
+            def cleanup() -> None:
+                raise RuntimeError("cleanup failed")
+
+            with connect(campaign) as conn:
+                with self.assertRaisesRegex(sqlite3.IntegrityError, "UNIQUE constraint failed"):
+                    save_turn_delta(
+                        campaign,
+                        conn,
+                        {
+                            "turn_id": "turn:seed",
+                            "user_text": "duplicate seed",
+                            "intent": "wait",
+                            "changed": False,
+                            "summary": "Duplicate seed.",
+                        },
+                        before_write=lambda: None,
+                        rollback_write_artifacts=cleanup,
+                    )
 
     def test_world_setting_validation_upsert_render_and_database_checks(self) -> None:
         bad_record = {

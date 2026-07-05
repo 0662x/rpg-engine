@@ -1,5 +1,5 @@
 # generated: 2026-07-04T23:27:52+1000
-# last_updated: 2026-07-05T11:58:33+1000
+# last_updated: 2026-07-06T05:11:49+1000
 # project: RPG Engine
 # project_key: NOKEY
 # tracking_system: file-system
@@ -41,7 +41,7 @@
 # - Retrospective appends its action items to action_items; sprint-status surfaces open ones
 
 generated: 2026-07-04T23:27:52+1000
-last_updated: 2026-07-05T11:58:33+1000
+last_updated: 2026-07-06T05:11:49+1000
 project: RPG Engine
 project_key: NOKEY
 tracking_system: file-system
@@ -51,7 +51,7 @@ development_status:
   epic-1: in-progress
   1-1-surface-authority-inventory-and-contract: done
   1-2-player-turn-pending-contract: done
-  1-3-player-confirm-validation-commit-gate: ready-for-dev
+  1-3-player-confirm-validation-commit-gate: done
   1-4-save-fact-authority-and-runtime-state-boundary: ready-for-dev
   1-5-projection-and-outbox-health-evidence: backlog
   1-6-mcp-player-profile-权限门: backlog
