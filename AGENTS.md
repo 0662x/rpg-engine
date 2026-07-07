@@ -119,6 +119,12 @@ story cycle unless the user explicitly requests a different route:
    review workflow mark the story `done` and sync `sprint-status.yaml`. If new
    patch or decision-needed findings remain, stop and report the exact next
    BMAD action.
+9. After a story reaches `done` and sprint sync succeeds, commit the completed
+   story-cycle changes and push them to the configured GitHub remote unless the
+   user explicitly asked not to commit or push. Use a concise commit message
+   that names the completed story or boundary. Before committing, run the
+   relevant verification gates and `git diff --check`; after pushing, confirm
+   `HEAD` and the remote branch point at the new commit.
 
 This fast path is an orchestration default, not permission to skip skill rules.
 For every skill in the chain, still read the selected `SKILL.md` completely,
@@ -145,6 +151,11 @@ Default automation preferences:
   skill-defined HALT condition.
 - Prefer a fresh context window for a full story cycle, but run in the current
   context when the user explicitly asks to proceed immediately.
+- For `bmad-story-cycle-auto`, treat commit-and-push as part of the normal
+  completion path after final clean review and sprint sync. If unrelated
+  uncommitted changes are present, state that they are part of the current BMAD
+  workspace and either include them when they are required by the story chain or
+  stop for user direction when their ownership is unclear.
 
 Existing BMAD-style documents without recorded skill provenance are useful
 working artifacts, but future BMAD claims require the evidence above.
@@ -263,3 +274,6 @@ python3 -m py_compile path/to/file.py
 - Check that docs and tests match the changed behavior.
 - Confirm no formal current save package was mutated.
 - Summarize the changed boundary, not just the changed files.
+- For BMAD story-cycle work that reached `done`, commit and push the completed
+  changes to the configured GitHub remote unless the user explicitly opted out.
+  Report the commit hash, branch, remote, and final verification summary.
