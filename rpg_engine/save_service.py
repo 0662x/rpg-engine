@@ -19,6 +19,23 @@ def relative_to_save(target: Path, path: Path) -> str:
     return Path(os.path.relpath(path, target)).as_posix()
 
 
+def validate_save_target_outside_source(source_root: Path, target: Path) -> None:
+    source_root = source_root.resolve()
+    target = target.resolve()
+    try:
+        target.relative_to(source_root)
+    except ValueError:
+        pass
+    else:
+        raise ValueError(f"save directory must not be inside source campaign package: {target}")
+    try:
+        source_root.relative_to(target)
+    except ValueError:
+        pass
+    else:
+        raise ValueError(f"save directory must not contain source campaign package: {target}")
+
+
 def normalize_content_paths_for_save(source: Any, target: Path) -> dict[str, Any]:
     content = source.config.get("content", {})
     if not isinstance(content, dict):
@@ -49,6 +66,7 @@ def copy_content_file_for_save(source: Any, target: Path, relative_path: str) ->
 def init_v1_save(campaign_dir: str | Path, save_dir: str | Path, *, force: bool = False) -> dict[str, Any]:
     source = load_campaign(campaign_dir)
     target = Path(save_dir).expanduser().resolve()
+    validate_save_target_outside_source(source.root, target)
     if target.exists() and any(target.iterdir()):
         if not force:
             raise FileExistsError(f"save directory is not empty: {target}")

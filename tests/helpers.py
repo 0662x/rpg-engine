@@ -142,11 +142,19 @@ def event_log_text(save_root: Path) -> str:
 
 def tree_digest(root: Path) -> str:
     digest = hashlib.sha256()
-    for path in sorted(item for item in root.rglob("*") if item.is_file()):
-        digest.update(str(path.relative_to(root)).encode("utf-8"))
+    for path in sorted(root.rglob("*")):
+        if path.is_symlink():
+            digest.update(f"L:{path.relative_to(root).as_posix()}".encode("utf-8"))
+            digest.update(b"\0")
+            digest.update(os.readlink(path).encode("utf-8"))
+            digest.update(b"\0")
+            continue
+        marker = "D" if path.is_dir() else "F"
+        digest.update(f"{marker}:{path.relative_to(root).as_posix()}".encode("utf-8"))
         digest.update(b"\0")
-        digest.update(path.read_bytes())
-        digest.update(b"\0")
+        if path.is_file():
+            digest.update(path.read_bytes())
+            digest.update(b"\0")
     return digest.hexdigest()
 
 

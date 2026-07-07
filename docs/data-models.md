@@ -79,7 +79,11 @@ flowchart TD
 | `defaults.sample_texts` | 作者提供的路由和 smoke 覆盖样例。 |
 | `content.*` | 相对 YAML 内容路径。 |
 
-Campaign manifest 和 content 是来源数据，不是当前游玩状态。
+Campaign manifest 和 content 是来源数据，不是当前游玩状态。Campaign validation 会报告
+Campaign root 中混入的 Save/runtime artifacts，例如 `save.yaml`、`data/game.sqlite`、
+`data/events.jsonl`、`snapshots/`、`cards/`、`memory/`、`backups/`、`reports/` 和
+`.aigm/save-registry.json`、`.aigm/pending-*`。这些报告是 ownership warnings；validation
+不会把这些 artifacts 当作作者内容导入，也不会自动修复或删除它们。
 
 ### Save Manifest
 
@@ -96,7 +100,8 @@ Campaign manifest 和 content 是来源数据，不是当前游玩状态。
 | `source_campaign_path` | 用作 trusted content root 的来源 campaign 路径。 |
 | `created_at` | 创建时间戳。 |
 
-`save.yaml` 是元数据，不覆盖 SQLite 中的当前事实。
+`save.yaml` 是元数据，不覆盖 SQLite 中的当前事实。`save init` 的目标 Save Package 必须位于
+source Campaign root 之外，避免运行态 manifests、SQLite 和投影产物写入作者包目录。
 
 ### Runtime Campaign Manifest In Save
 

@@ -29,6 +29,7 @@ from rpg_engine.cli_v1 import (
 )
 import rpg_engine.cli_v1 as cli_v1
 import rpg_engine.mcp_adapter as mcp_adapter
+from tests.helpers import tree_digest
 
 
 ENGINE_ROOT = Path(__file__).resolve().parents[1]
@@ -543,11 +544,15 @@ class V1CliTests(unittest.TestCase):
     def test_save_init_inspect_validate_export_import(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
+            source_campaign = root / "source-campaign"
+            shutil.copytree(MINIMAL_FIXTURE, source_campaign)
             save_dir = root / "save"
             imported_dir = root / "imported"
             archive_path = root / "run.aigmsave"
+            source_digest_before = tree_digest(source_campaign)
 
-            init = load_stdout_json(run_cli("save", "init", MINIMAL_FIXTURE, save_dir, "--format", "json"))
+            init = load_stdout_json(run_cli("save", "init", source_campaign, save_dir, "--format", "json"))
+            source_digest_after = tree_digest(source_campaign)
             inspect = load_stdout_json(run_cli("save", "inspect", save_dir, "--format", "json"))
             validate = run_cli("save", "validate", save_dir)
             export = load_stdout_json(
@@ -560,12 +565,26 @@ class V1CliTests(unittest.TestCase):
             imported_inspect = load_stdout_json(run_cli("save", "inspect", imported_dir, "--format", "json"))
 
             self.assertTrue(init["ok"], init)
+            self.assertEqual(source_digest_after, source_digest_before)
             save_manifest = yaml.safe_load((save_dir / "save.yaml").read_text(encoding="utf-8"))
             save_campaign = yaml.safe_load((save_dir / "campaign.yaml").read_text(encoding="utf-8"))
             self.assertFalse(Path(save_manifest["source_campaign_path"]).is_absolute())
+            self.assertEqual((save_dir / save_manifest["source_campaign_path"]).resolve(), source_campaign.resolve())
+            self.assertEqual(save_campaign["database"], "data/game.sqlite")
+            self.assertEqual(save_campaign["events"], "data/events.jsonl")
+            self.assertEqual(save_campaign["current_snapshot"], "snapshots/current.md")
+            self.assertEqual(save_campaign["current_snapshot_json"], "snapshots/current.json")
+            self.assertEqual(save_campaign["cards"], "cards")
             for values in save_campaign["content"].values():
                 paths = values if isinstance(values, list) else [values]
                 self.assertTrue(all(not Path(path).is_absolute() for path in paths))
+            self.assertTrue((save_dir / "campaign.yaml").exists())
+            self.assertTrue((save_dir / "save.yaml").exists())
+            self.assertTrue((save_dir / "data" / "game.sqlite").exists())
+            self.assertTrue((save_dir / "data" / "events.jsonl").exists())
+            self.assertTrue((save_dir / "snapshots" / "current.md").exists())
+            self.assertTrue((save_dir / "snapshots" / "current.json").exists())
+            self.assertTrue((save_dir / "cards").exists())
             self.assertEqual(inspect["current_turn_id"], "turn:seed")
             contract = inspect["authority_contract"]
             self.assertEqual(contract["current_fact_authority"]["path"], "data/game.sqlite")
@@ -607,6 +626,35 @@ class V1CliTests(unittest.TestCase):
             self.assertFalse((imported_dir / ".aigm" / "pending-player-clarification.json").exists())
             with zipfile.ZipFile(archive_path) as archive:
                 self.assertIn("save.yaml", archive.namelist())
+
+    def test_save_init_rejects_target_inside_source_campaign(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_campaign = root / "source-campaign"
+            shutil.copytree(MINIMAL_FIXTURE, source_campaign)
+            source_digest_before = tree_digest(source_campaign)
+            nested_save = source_campaign / "saves" / "run"
+
+            result = load_stdout_json(run_cli("save", "init", source_campaign, nested_save, "--format", "json", check=False))
+
+            self.assertFalse(result["ok"], result)
+            self.assertIn("save directory must not be inside source campaign package", "\n".join(result["errors"]))
+            self.assertEqual(tree_digest(source_campaign), source_digest_before)
+            self.assertFalse(nested_save.exists())
+
+    def test_save_init_rejects_target_that_contains_source_campaign_even_with_force(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_campaign = root / "workspace" / "source-campaign"
+            shutil.copytree(MINIMAL_FIXTURE, source_campaign)
+            source_digest_before = tree_digest(source_campaign)
+
+            result = load_stdout_json(run_cli("save", "init", source_campaign, root / "workspace", "--force", "--format", "json", check=False))
+
+            self.assertFalse(result["ok"], result)
+            self.assertIn("save directory must not contain source campaign package", "\n".join(result["errors"]))
+            self.assertEqual(tree_digest(source_campaign), source_digest_before)
+            self.assertTrue((source_campaign / "campaign.yaml").exists())
 
     def test_save_validate_rejects_dirty_projection_and_event_log_drift(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

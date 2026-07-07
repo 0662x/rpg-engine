@@ -160,7 +160,21 @@ class PackageServiceConditionCoverageTests(unittest.TestCase):
             self.assertEqual(migration_entry_path(root, 3), None)
             self.assertEqual(migration_entry_path(root, {}), None)
             self.assertEqual(migration_entry_path(root, {"path": ""}), None)
-            self.assertEqual(migration_entry_path(root, "/tmp/migration.yaml"), Path("/tmp/migration.yaml"))
+            with self.assertRaisesRegex(ValueError, "must be relative"):
+                migration_entry_path(root, "/tmp/migration.yaml")
+            with self.assertRaisesRegex(ValueError, "escapes package root"):
+                migration_entry_path(root, "../outside-migration.yaml")
+
+    def test_package_source_rejects_migration_paths_that_escape_package_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "package"
+            root.mkdir()
+            outside = Path(tmp) / "outside-migration.yaml"
+            write_yaml(outside, {"id": "migration:outside", "operations": []})
+            write_yaml(root / "package.yaml", {"id": "pkg", "version": "1", "migrations": ["../outside-migration.yaml"]})
+
+            with self.assertRaisesRegex(ValueError, "package migration path escapes package root"):
+                load_package_source(root)
 
     def test_package_validation_detects_duplicate_cross_type_ids_and_database_refs(self) -> None:
         registry = get_default_registry()
@@ -323,7 +337,10 @@ class PackageServiceConditionCoverageTests(unittest.TestCase):
 
         self.assertEqual(compact_record({"a": None, "b": [], "c": {}, "d": 0}), {"d": 0})
         self.assertEqual(content_paths(Path("/root"), "content/entities.yaml"), [Path("/root/content/entities.yaml")])
-        self.assertEqual(content_paths(Path("/root"), ["/abs.yaml", "rel.yaml"]), [Path("/abs.yaml"), Path("/root/rel.yaml")])
+        with self.assertRaisesRegex(ValueError, "must be relative"):
+            content_paths(Path("/root"), "/abs.yaml")
+        with self.assertRaisesRegex(ValueError, "escapes package root"):
+            content_paths(Path("/root"), "../escape.yaml")
         self.assertEqual(validate_migration_operation_shape({"type": "rename_alias", "entity_id": "", "from": "a"}, "op"), ["op.entity_id: required", "op.to: required"])
         self.assertEqual(validate_package_migrations(PackageSource(Path("/tmp"), Path("pkg"), {"migrations": "bad"})), ["manifest.migrations must be array"])
         with self.assertRaises(FileNotFoundError):

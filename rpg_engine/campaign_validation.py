@@ -33,6 +33,30 @@ REQUIRED_V1_FILES = (
 REQUIRED_CONTENT_KEYS = ("entities", "rules", "clocks")
 OPTIONAL_CONTENT_KEYS = ("routes", "world_settings", "random_tables", "relationships", "palettes")
 SMOKE_TYPES = {"start_turn", "query", "preview", "validate_delta", "random_table"}
+RUNTIME_ARTIFACT_FILES = (
+    "save.yaml",
+    "data/game.sqlite",
+    "data/events.jsonl",
+)
+RUNTIME_ARTIFACT_DIRS = ("data", "snapshots", "cards", "memory", "backups", "reports", "exports")
+RUNTIME_ARTIFACT_SUFFIXES = (
+    ".aigmsave",
+    ".sqlite",
+    ".sqlite3",
+    ".sqlite-wal",
+    ".sqlite3-wal",
+    ".sqlite-shm",
+    ".sqlite3-shm",
+    ".sqlite-journal",
+    ".sqlite3-journal",
+    ".db",
+    ".db-wal",
+    ".db-shm",
+    ".db-journal",
+)
+RUNTIME_AIGM_DIR = ".aigm"
+RUNTIME_AIGM_PENDING_PREFIX = "pending-"
+RUNTIME_AIGM_FILES = ("save-registry.json",)
 
 
 @dataclass(frozen=True)
@@ -131,6 +155,7 @@ def validate_campaign_package(campaign_dir: str | Path) -> CampaignValidationRes
         capabilities = parse_capabilities(data, errors)
         validate_v1_structure(root, data, errors)
         validate_no_v1_code_extensions(root, errors)
+        validate_no_runtime_artifacts(root, warnings)
         validate_content_paths(root, data, errors)
         validate_required_files(root, errors)
         validate_random_tables(root, data, errors)
@@ -184,18 +209,7 @@ def run_campaign_smoke_tests(campaign_dir: str | Path) -> CampaignTestResult:
         shutil.copytree(
             source_root,
             target,
-            ignore=shutil.ignore_patterns(
-                "data",
-                "snapshots",
-                "cards",
-                "backups",
-                "reports",
-                "exports",
-                "*.sqlite",
-                "*.sqlite-*",
-                "*.db",
-                "*.db-*",
-            ),
+            ignore=root_runtime_artifact_ignore(source_root),
         )
         campaign = load_campaign(target)
         init_database(campaign, force=True)
@@ -281,6 +295,73 @@ def validate_no_v1_code_extensions(root: Path, errors: list[str]) -> None:
             errors.append(f"{relative_path(root, path)}: V1 campaign packages must not include Python code")
 
 
+def validate_no_runtime_artifacts(root: Path, warnings: list[str]) -> None:
+    seen: set[str] = set()
+
+    def warn(path: Path, *, directory: bool = False) -> None:
+        relative = relative_path(root, path)
+        if directory and not relative.endswith("/"):
+            relative += "/"
+        if relative in seen:
+            return
+        seen.add(relative)
+        warnings.append(f"{relative}: runtime Save Package artifact should not be included in a Campaign Package")
+
+    for relative in RUNTIME_ARTIFACT_FILES:
+        path = root / relative
+        if path.exists() or path.is_symlink():
+            warn(path)
+    aigm = root / RUNTIME_AIGM_DIR
+    if aigm.is_symlink():
+        warn(aigm, directory=True)
+    elif aigm.exists() and not aigm.is_dir():
+        warn(aigm)
+    elif aigm.is_dir():
+        for path in sorted(aigm.iterdir()):
+            if path.name in RUNTIME_AIGM_FILES or path.name.startswith(RUNTIME_AIGM_PENDING_PREFIX):
+                warn(path, directory=path.is_dir())
+    for path in sorted(root.rglob("*")):
+        if path.is_file() or path.is_symlink():
+            if path.name.endswith(RUNTIME_ARTIFACT_SUFFIXES):
+                warn(path)
+    for relative in RUNTIME_ARTIFACT_DIRS:
+        path = root / relative
+        if path.is_symlink():
+            warn(path, directory=True)
+            continue
+        if not path.exists():
+            continue
+        if not path.is_dir():
+            warn(path)
+            continue
+        artifacts = sorted(item for item in path.rglob("*") if item.is_file() or item.is_symlink())
+        if not artifacts:
+            warn(path, directory=True)
+            continue
+        for item in artifacts:
+            warn(item, directory=item.is_dir())
+
+
+def root_runtime_artifact_ignore(source_root: Path):
+    source_root = source_root.resolve()
+
+    def ignore(directory: str, names: list[str]) -> set[str]:
+        current = Path(directory).resolve()
+        if current != source_root:
+            return set()
+        ignored: set[str] = set()
+        for name in names:
+            path = current / name
+            if name in RUNTIME_ARTIFACT_DIRS or name == RUNTIME_AIGM_DIR or name == "save.yaml":
+                ignored.add(name)
+            elif path.is_file() or path.is_symlink():
+                if name.endswith(RUNTIME_ARTIFACT_SUFFIXES):
+                    ignored.add(name)
+        return ignored
+
+    return ignore
+
+
 def validate_content_paths(root: Path, data: dict[str, Any], errors: list[str]) -> None:
     content = data.get("content", {})
     if not isinstance(content, dict):
@@ -296,6 +377,11 @@ def validate_content_paths(root: Path, data: dict[str, Any], errors: list[str]) 
                 errors.append(f"campaign.yaml.content.{key}: must use relative package path, got {value}")
                 continue
             full_path = root / path
+            try:
+                full_path.resolve().relative_to(root.resolve())
+            except ValueError:
+                errors.append(f"campaign.yaml.content.{key}: path escapes campaign root {value}")
+                continue
             if not full_path.exists():
                 errors.append(f"campaign.yaml.content.{key}: missing file {value}")
             elif not full_path.is_file():
@@ -414,7 +500,22 @@ def palette_paths(root: Path, data: dict[str, Any], errors: list[str]) -> list[P
     if isinstance(content, dict) and "palettes" in content:
         return content_paths(root, content["palettes"], errors, "palettes")
     palette_dir = root / "content" / "palettes"
-    return sorted(palette_dir.glob("*.yaml")) if palette_dir.exists() else []
+    if not palette_dir.exists():
+        return []
+    try:
+        palette_dir.resolve().relative_to(root.resolve())
+    except ValueError:
+        errors.append("content/palettes: path escapes campaign root")
+        return []
+    paths: list[Path] = []
+    for path in sorted(palette_dir.glob("*.yaml")):
+        try:
+            path.resolve().relative_to(root.resolve())
+        except ValueError:
+            errors.append(f"{relative_path(root, path)}: path escapes campaign root")
+            continue
+        paths.append(path)
+    return paths
 
 
 def validate_palette_entry(
@@ -718,7 +819,17 @@ def content_paths(root: Path, raw: Any, errors: list[str], key: str) -> list[Pat
         if not isinstance(value, str) or not value.strip():
             errors.append(f"campaign.yaml.content.{key}: entries must be non-empty paths")
             continue
-        paths.append(root / value)
+        path = Path(value)
+        if path.is_absolute():
+            errors.append(f"campaign.yaml.content.{key}: must use relative package path, got {value}")
+            continue
+        candidate = root / path
+        try:
+            candidate.resolve().relative_to(root.resolve())
+        except ValueError:
+            errors.append(f"campaign.yaml.content.{key}: path escapes campaign root {value}")
+            continue
+        paths.append(candidate)
     return paths
 
 

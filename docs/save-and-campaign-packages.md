@@ -92,7 +92,13 @@ Campaign Package 不应包含：
 - `memory/`
 - `backups/`
 - `save.yaml`
+- `.aigm/save-registry.json`
+- `.aigm/pending-*`
 - 运行时报告、缓存或玩家当前进度
+
+`campaign validate` 会把这些 Save/runtime artifacts 报告为 Campaign ownership warning。
+这些 warning 是稳定的 ownership evidence：它们提示作者包混入了运行态材料，但不会自动删除文件、
+不会初始化或修复 Save facts，也不会把这些文件导入为作者内容。
 
 V1 普通作者包不执行代码。新作者模板不应依赖 Python 插件、脚本化规则、绝对路径或任意
 本地文件引用。
@@ -208,6 +214,13 @@ python3 -m rpg_engine save init ./examples/v1_minimal_adventure ./saves/my-run
 7. 刷新 `events_jsonl`、`search`、`snapshots` 和 `cards` 投影。
 
 `--force` 是维护能力，不应成为普通玩家入口默认行为。
+
+Save init 必须保留 source Campaign no-mutation 边界：初始化可以在目标 Save Package 中写入
+运行态 `campaign.yaml`、`save.yaml`、SQLite 和投影产物，但不得改写来源 Campaign Package 文件。
+目标 Save Package 不得位于 source Campaign root 内部；否则会把运行态文件写进作者包目录，
+破坏 Campaign/Save ownership contract。
+普通 play 后续产生的 facts、events、relationship/progress changes 和 projections 也只能落在
+Save Package fact boundary 内。
 
 ## Save Inspect 与 Validate
 
@@ -551,6 +564,8 @@ Markdown 链接和 diff whitespace 门禁。
 - 是否改变 Campaign Package 与 Save Package 的职责分离。
 - 是否改变 `data/game.sqlite` 的事实权威。
 - 是否把 registry 或 `.aigmsave` 误写成事实源。
+- 是否让 `campaign validate` 漏报 Campaign root 中的 Save/runtime artifacts。
+- 是否让 save init、starter copy、player turn/confirm 或 projection refresh 改写 source Campaign。
 - 是否让 `player_turn` 绕过 pending/no-save 边界。
 - 是否让 `player_confirm` 之外的默认玩家路径写入事实。
 - 是否扩大默认 MCP player profile 的低层工具权限。

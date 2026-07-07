@@ -20,7 +20,7 @@ from .db import utc_now
 from .game_session import clean, hash_identity
 from .intent_router import make_intent_ai_config, make_intent_request_meta
 from .runtime import GMRuntime, intent_ai_config_kwargs, intent_request_meta_kwargs
-from .save_service import init_v1_save, inspect_v1_save, normalize_content_paths_for_save
+from .save_service import init_v1_save, inspect_v1_save, normalize_content_paths_for_save, validate_save_target_outside_source
 from .validation_issues import issues_from_messages
 
 
@@ -238,6 +238,7 @@ class SaveManager:
         save_id = make_save_id()
         target_relative = make_save_target_relative(campaign_obj.campaign_id, save_id)
         target = self.resolve_relative(target_relative, "save target")
+        validate_save_target_outside_source(campaign_obj.root, target)
         ensure_empty_target(target)
 
         source = "save_init"

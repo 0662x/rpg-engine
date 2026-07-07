@@ -13,13 +13,15 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
+import yaml
+
 from rpg_engine.ai.defaults import DEFAULT_AI_MODEL, DEFAULT_AI_PROVIDER
 from rpg_engine.backup import list_backups
 from rpg_engine.game_session import hash_identity
 from rpg_engine.runtime import GMRuntime
 from rpg_engine.save_manager import DEFAULT_PENDING_ACTION_TTL_SECONDS, SaveManager, SaveManagerError
 from rpg_engine.save_service import init_v1_save, inspect_v1_save
-from tests.helpers import consensus_candidate, internal_query_review, internal_review, query_candidate
+from tests.helpers import consensus_candidate, internal_query_review, internal_review, query_candidate, tree_digest
 
 
 ENGINE_ROOT = Path(__file__).resolve().parents[1]
@@ -102,7 +104,11 @@ class SaveManagerTests(unittest.TestCase):
             campaign_dir = root / "campaigns" / "minimal"
             starter_dir = root / "starters" / "minimal"
             shutil.copytree(MINIMAL_FIXTURE, campaign_dir)
+            source_digest_before = tree_digest(campaign_dir)
             init_v1_save(campaign_dir, starter_dir)
+            (starter_dir / "reports").mkdir(exist_ok=True)
+            (starter_dir / "reports" / "starter-marker.txt").write_text("copied from starter\n", encoding="utf-8")
+            source_digest_after_starter_init = tree_digest(campaign_dir)
 
             created = load_json(
                 run_cli(
@@ -126,11 +132,45 @@ class SaveManagerTests(unittest.TestCase):
             self.assertNotIn("SQLite", created["onboarding_text"])
             self.assertEqual(continued["mode"], "continued")
             self.assertEqual(continued["active_save_id"], created["active_save_id"])
+            self.assertEqual(created["save"]["source"], "starter_copy")
+            self.assertEqual(source_digest_after_starter_init, source_digest_before)
+            self.assertEqual(tree_digest(campaign_dir), source_digest_before)
 
             save_path = root / created["save"]["path"]
+            save_manifest = yaml.safe_load((save_path / "save.yaml").read_text(encoding="utf-8"))
+            save_campaign = yaml.safe_load((save_path / "campaign.yaml").read_text(encoding="utf-8"))
             inspected = inspect_v1_save(save_path)
             self.assertTrue(inspected["ok"], inspected)
             self.assertTrue((root / ".aigm" / "save-registry.json").exists())
+            self.assertFalse(Path(save_manifest["source_campaign_path"]).is_absolute())
+            self.assertEqual((save_path / save_manifest["source_campaign_path"]).resolve(), campaign_dir.resolve())
+            self.assertEqual(save_campaign["database"], "data/game.sqlite")
+            self.assertEqual(save_campaign["events"], "data/events.jsonl")
+            self.assertEqual(save_campaign["current_snapshot"], "snapshots/current.md")
+            self.assertEqual(save_campaign["current_snapshot_json"], "snapshots/current.json")
+            self.assertEqual(save_campaign["cards"], "cards")
+            self.assertTrue((save_path / "campaign.yaml").exists())
+            self.assertTrue((save_path / "save.yaml").exists())
+            self.assertTrue((save_path / "data" / "game.sqlite").exists())
+            self.assertTrue((save_path / "data" / "events.jsonl").exists())
+            self.assertTrue((save_path / "snapshots" / "current.md").exists())
+            self.assertTrue((save_path / "snapshots" / "current.json").exists())
+            self.assertTrue((save_path / "cards").exists())
+            self.assertEqual(
+                (save_path / "reports" / "starter-marker.txt").read_text(encoding="utf-8"),
+                "copied from starter\n",
+            )
+
+    def test_create_save_rejects_save_target_inside_source_campaign_before_creating_dirs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign_dir = Path(tmp) / "campaign"
+            shutil.copytree(MINIMAL_FIXTURE, campaign_dir)
+            manager = SaveManager(campaign_dir, default_campaign=".")
+
+            with self.assertRaisesRegex(ValueError, "save directory must not be inside source campaign package"):
+                manager.create_save()
+
+            self.assertFalse((campaign_dir / "saves").exists())
 
     def test_multiple_saves_can_be_created_listed_and_switched(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -725,6 +765,35 @@ class SaveManagerTests(unittest.TestCase):
             self.assertFalse(manager.pending_action_path().exists())
             with self.assertRaises(SaveManagerError):
                 manager.player_confirm(stale["session_id"])
+
+    def test_player_confirm_commits_only_to_save_package_without_mutating_source_campaign(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            campaign_dir = root / "campaigns" / "minimal"
+            shutil.copytree(MINIMAL_FIXTURE, campaign_dir)
+            source_digest_before = tree_digest(campaign_dir)
+            manager = SaveManager(root, default_campaign="campaigns/minimal")
+            started = manager.start_or_continue(campaign="campaigns/minimal")
+            save_path = root / started["save"]["path"]
+            before_snapshot = authoritative_save_snapshot(save_path)
+
+            acted = manager.player_turn(user_text="休息到早上")
+            mid_source_digest = tree_digest(campaign_dir)
+            confirmed = manager.player_confirm(acted["session_id"])
+            source_digest_after = tree_digest(campaign_dir)
+
+            self.assertTrue(acted["ready_to_confirm"], acted)
+            self.assertTrue(confirmed["ok"], confirmed)
+            self.assertTrue(confirmed["saved"], confirmed)
+            self.assertNotEqual(authoritative_save_snapshot(save_path)["current_turn_id"], before_snapshot["current_turn_id"])
+            self.assertEqual(mid_source_digest, source_digest_before)
+            self.assertEqual(source_digest_after, source_digest_before)
+            self.assertTrue((save_path / "data" / "game.sqlite").exists())
+            self.assertTrue((save_path / "data" / "events.jsonl").exists())
+            self.assertFalse((campaign_dir / "save.yaml").exists())
+            self.assertFalse((campaign_dir / "data" / "game.sqlite").exists())
+            for runtime_dir in ("snapshots", "cards", "memory", "backups", "reports"):
+                self.assertFalse((campaign_dir / runtime_dir).exists())
 
     def test_player_turn_pending_clarification_clears_stale_pending_without_mutating_save(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -62,7 +62,20 @@ def palette_files(campaign: Campaign) -> list[Path]:
     if configured:
         return configured
     palette_dir = campaign.root / "content" / "palettes"
-    return sorted(palette_dir.glob("*.yaml")) if palette_dir.exists() else []
+    if not palette_dir.exists():
+        return []
+    try:
+        palette_dir.resolve().relative_to(campaign.root.resolve())
+    except ValueError:
+        raise ValueError("campaign palette directory escapes campaign root: content/palettes")
+    files: list[Path] = []
+    for path in sorted(palette_dir.glob("*.yaml")):
+        try:
+            path.resolve().relative_to(campaign.root.resolve())
+        except ValueError as exc:
+            raise ValueError(f"campaign palette file escapes campaign root: {campaign.display_path(path)}") from exc
+        files.append(path)
+    return files
 
 
 def suggest_palette_entries(

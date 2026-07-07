@@ -65,10 +65,14 @@ memory/**
 reports/**
 backups/**
 save.yaml
+.aigm/save-registry.json
+.aigm/pending-*
 package-lock.json
 ```
 
-这些文件属于 Save Package、投影产物、运行报告、备份或维护锁定信息。
+这些文件属于 Save Package、投影产物、运行报告、备份、workspace entry state 或维护锁定信息。
+`campaign validate` 会对 Save/runtime artifacts 给出 ownership warning；作者应把它们移出
+Campaign Package，而不是把 warning 当成可发布内容。
 
 ## 推荐内容文件
 

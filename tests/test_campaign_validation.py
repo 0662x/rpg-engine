@@ -9,6 +9,7 @@ import yaml
 
 from rpg_engine.campaign_validation import validate_campaign_package, run_campaign_smoke_tests
 from rpg_engine.campaign import load_campaign
+from rpg_engine.palette import palette_files
 
 
 ENGINE_ROOT = Path(__file__).resolve().parents[1]
@@ -111,6 +112,117 @@ class CampaignValidationTests(unittest.TestCase):
             self.assertIn("plugins/: V1 campaign packages must not include plugins", joined)
             self.assertIn("author_rules.py: V1 campaign packages must not include Python code", joined)
 
+    def test_reports_runtime_artifacts_without_rejecting_author_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = copy_fixture(tmp)
+            (campaign / "AUTHOR_NOTES.md").write_text("Author notes.\n", encoding="utf-8")
+            (campaign / "AUTHOR_AI_PROMPT.md").write_text("Author prompt.\n", encoding="utf-8")
+            (campaign / "docs").mkdir()
+            (campaign / "docs" / "README.md").write_text("Author docs.\n", encoding="utf-8")
+            (campaign / "package-lock.json").write_text("{}\n", encoding="utf-8")
+
+            runtime_files = {
+                "game.sqlite": b"not-a-real-db",
+                "runtime.db": b"not-a-real-db",
+                "runtime.sqlite3": b"not-a-real-db",
+                "game.sqlite-wal": b"wal\n",
+                "runtime.sqlite3-wal": b"wal\n",
+                "data/game.sqlite": b"not-a-real-db",
+                "data/events.jsonl": b"{}\n",
+                "data/runtime-cache.tmp": b"cache\n",
+                "save.yaml": b"campaign_id: runtime\n",
+                "snapshots/current.json": b"{}\n",
+                "cards/INDEX.md": b"# Cards\n",
+                "memory/summary.md": b"memory\n",
+                "backups/backup-1/manifest.json": b"{}\n",
+                "reports/runtime.md": b"runtime report\n",
+                "archive.aigmsave": b"archive\n",
+                ".aigm/save-registry.json": b"{}\n",
+                ".aigm/pending-player-action.json": b"{}\n",
+                ".aigm/pending-player-clarification.json": b"{}\n",
+                ".aigm/pending-late-review.json": b"{}\n",
+            }
+            for relative, content in runtime_files.items():
+                path = campaign / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(content)
+            symlink_runtime: list[str] = []
+            external_runtime_dir = Path(tmp) / "external-runtime"
+            external_runtime_dir.mkdir()
+            try:
+                (campaign / "exports").symlink_to(external_runtime_dir, target_is_directory=True)
+                symlink_runtime.append("exports/")
+                (campaign / ".aigm" / "pending-dangling.json").symlink_to("missing-pending.json")
+                symlink_runtime.append(".aigm/pending-dangling.json")
+                (campaign / "data" / "dangling-runtime.tmp").symlink_to("missing-runtime.tmp")
+                symlink_runtime.append("data/dangling-runtime.tmp")
+                (campaign / "data" / "runtime-dir-link").symlink_to(external_runtime_dir, target_is_directory=True)
+                symlink_runtime.append("data/runtime-dir-link/")
+            except OSError:
+                symlink_runtime = []
+
+            result = validate_campaign_package(campaign)
+
+            self.assertTrue(result.ok, result.errors)
+            joined_warnings = "\n".join(result.warnings)
+            joined_errors = "\n".join(result.errors)
+            for relative in [*runtime_files, *symlink_runtime]:
+                with self.subTest(relative=relative):
+                    self.assertIn(relative, joined_warnings)
+                    self.assertIn(
+                        f"{relative}: runtime Save Package artifact should not be included in a Campaign Package",
+                        result.warnings,
+                    )
+                    self.assertNotIn(relative, joined_errors)
+            self.assertNotIn("AUTHOR_NOTES.md", joined_warnings)
+            self.assertNotIn("AUTHOR_AI_PROMPT.md", joined_warnings)
+            self.assertNotIn("docs/README.md", joined_warnings)
+            self.assertNotIn("package-lock.json", joined_warnings)
+
+    def test_reports_aigm_symlink_without_following_external_pending_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = copy_fixture(tmp)
+            external_runtime_dir = Path(tmp) / "external-aigm"
+            external_runtime_dir.mkdir()
+            (external_runtime_dir / "save-registry.json").write_text("{}\n", encoding="utf-8")
+            (external_runtime_dir / "pending-external.json").write_text("{}\n", encoding="utf-8")
+            try:
+                (campaign / ".aigm").symlink_to(external_runtime_dir, target_is_directory=True)
+            except OSError:
+                self.skipTest("symlink creation is unavailable")
+
+            result = validate_campaign_package(campaign)
+
+            self.assertTrue(result.ok, result.errors)
+            self.assertIn(
+                ".aigm/: runtime Save Package artifact should not be included in a Campaign Package",
+                result.warnings,
+            )
+            joined_warnings = "\n".join(result.warnings)
+            self.assertNotIn(".aigm/save-registry.json", joined_warnings)
+            self.assertNotIn("pending-external.json", joined_warnings)
+
+    def test_rejects_content_paths_that_escape_campaign_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            campaign = copy_fixture(root)
+            outside = root / "outside"
+            outside.mkdir()
+            shutil.copy2(campaign / "content" / "entities.yaml", outside / "entities.yaml")
+            manifest_path = campaign / "campaign.yaml"
+            manifest = load_yaml(manifest_path)
+            manifest["content"]["entities"] = "../outside/entities.yaml"
+            write_yaml(manifest_path, manifest)
+
+            result = validate_campaign_package(campaign)
+
+            self.assertFalse(result.ok)
+            self.assertIn(
+                "campaign.yaml.content.entities: path escapes campaign root ../outside/entities.yaml",
+                result.errors,
+            )
+            self.assertNotIn("entity", result.record_counts)
+
     def test_campaign_runtime_paths_must_stay_under_campaign_root(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             campaign_dir = copy_fixture(tmp)
@@ -144,6 +256,55 @@ class CampaignValidationTests(unittest.TestCase):
 
             self.assertFalse(result.ok)
             self.assertIn("expected output to contain", "\n".join(result.errors))
+
+    def test_campaign_test_ignores_runtime_symlink_artifacts_when_copying_temp_campaign(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = copy_fixture(tmp)
+            external_runtime_dir = Path(tmp) / "external-memory"
+            external_runtime_dir.mkdir()
+            try:
+                (external_runtime_dir / "dangling").symlink_to("missing-target")
+                (campaign / "memory").symlink_to(external_runtime_dir, target_is_directory=True)
+            except OSError:
+                self.skipTest("symlink creation is unavailable")
+
+            result = run_campaign_smoke_tests(campaign)
+
+            self.assertTrue(result.ok, result.errors)
+
+    def test_campaign_test_keeps_author_content_directories_named_like_runtime_dirs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = copy_fixture(tmp)
+            nested_data = campaign / "content" / "data"
+            nested_data.mkdir()
+            shutil.move(campaign / "content" / "entities.yaml", nested_data / "entities.yaml")
+            manifest_path = campaign / "campaign.yaml"
+            manifest = load_yaml(manifest_path)
+            manifest["content"]["entities"] = "content/data/entities.yaml"
+            write_yaml(manifest_path, manifest)
+
+            result = run_campaign_smoke_tests(campaign)
+
+            self.assertTrue(result.ok, result.errors)
+
+    def test_palette_auto_discovery_rejects_symlink_escape(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = copy_fixture(tmp)
+            outside = Path(tmp) / "outside-palettes"
+            outside.mkdir()
+            (outside / "external.yaml").write_text("materials: []\n", encoding="utf-8")
+            palette_dir = campaign / "content" / "palettes"
+            try:
+                palette_dir.symlink_to(outside, target_is_directory=True)
+            except OSError:
+                self.skipTest("symlink creation is unavailable")
+
+            result = validate_campaign_package(campaign)
+
+            self.assertFalse(result.ok)
+            self.assertIn("content/palettes: path escapes campaign root", result.errors)
+            with self.assertRaisesRegex(ValueError, "palette directory escapes campaign root"):
+                palette_files(load_campaign(campaign))
 
 
 if __name__ == "__main__":

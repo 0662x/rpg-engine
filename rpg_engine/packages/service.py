@@ -930,7 +930,14 @@ def migration_entry_path(root: Path, item: Any) -> Path | None:
     if not value.strip():
         return None
     path = Path(value).expanduser()
-    return path if path.is_absolute() else root / path
+    if path.is_absolute():
+        raise ValueError(f"package migration paths must be relative to package root: {value}")
+    candidate = root / path
+    try:
+        candidate.resolve().relative_to(root.resolve())
+    except ValueError as exc:
+        raise ValueError(f"package migration path escapes package root: {value}") from exc
+    return candidate
 
 
 def validate_package_migrations(source: PackageSource) -> list[str]:
@@ -1282,9 +1289,14 @@ def content_paths(root: Path, value: Any) -> list[Path]:
     paths: list[Path] = []
     for item in values:
         path = Path(str(item)).expanduser()
-        if not path.is_absolute():
-            path = root / path
-        paths.append(path)
+        if path.is_absolute():
+            raise ValueError(f"package content paths must be relative to package root: {item}")
+        candidate = root / path
+        try:
+            candidate.resolve().relative_to(root.resolve())
+        except ValueError as exc:
+            raise ValueError(f"package content path escapes package root: {item}") from exc
+        paths.append(candidate)
     return paths
 
 
