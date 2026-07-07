@@ -8,7 +8,11 @@ from typing import Any, Iterable
 from .campaign import Campaign
 from .db import rebuild_fts, utc_now
 from .projections import (
+    PROJECTION_STATE_SCHEMA_COLUMNS,
     PROJECTION_VERSIONS,
+    STORED_PROJECTION_STATUSES,
+    _inspect_outbox_health,
+    _outbox_issue_message,
     current_turn_id,
     ensure_projection_rows,
     mark_projection_clean,
@@ -22,6 +26,29 @@ from .projections import (
 
 REFRESHABLE_STATUSES = {"dirty", "failed", "refreshing", "stale"}
 COMMIT_POLICIES = {"service_managed", "caller_committed_required"}
+
+
+def _format_outbox_report_row(row: dict[str, Any], *, markdown: bool = False) -> str:
+    values = {
+        "status": _report_value(row.get("status")),
+        "topic": _report_value(row.get("topic")),
+        "attempts": _report_value(row.get("attempts")),
+        "created_at": _report_value(row.get("created_at")),
+        "processed_at": _report_value(row.get("processed_at")),
+        "last_error": _report_value(row.get("last_error")),
+    }
+    if markdown:
+        detail = " ".join(f"{key}=`{value}`" for key, value in values.items())
+        return f"- `{_report_value(row.get('id'))}`: {detail}"
+    detail = " ".join(f"{key}={value}" for key, value in values.items())
+    return f"outbox: {_report_value(row.get('id'))} {detail}"
+
+
+def _report_value(value: Any) -> str:
+    if value is None:
+        return "-"
+    text = " ".join(str(value).splitlines()).strip()
+    return text or "-"
 
 
 @dataclass(frozen=True)
@@ -73,6 +100,10 @@ class ProjectionReport:
     skipped: tuple[str, ...] = ()
     artifacts: tuple[str, ...] = ()
     errors: tuple[str, ...] = ()
+    outbox_status: str = "clean"
+    outbox_counts: dict[str, int] = field(default_factory=dict)
+    outbox_non_done: tuple[dict[str, Any], ...] = ()
+    outbox_errors: tuple[str, ...] = ()
     items: tuple[ProjectionItemReport, ...] = ()
     started_at: str | None = None
     finished_at: str | None = None
@@ -80,26 +111,30 @@ class ProjectionReport:
 
     @property
     def ok(self) -> bool:
-        return not self.requested_failed and not self.errors
+        return not self.requested_failed and not self.errors and self.outbox_status == "clean"
 
     @property
     def status(self) -> str:
-        if self.requested_failed:
+        if self.requested_failed or self.errors or self.outbox_status in {"failed", "malformed", "missing"}:
             return "failed" if not self.refreshed else "partial_failure"
         if self.requested_stale:
             return "stale"
         if self.requested_dirty:
             return "dirty"
+        if self.outbox_status == "pending":
+            return "outbox_pending"
         return "clean"
 
     @property
     def global_status(self) -> str:
-        if self.global_failed:
+        if self.global_failed or self.errors or self.outbox_status in {"failed", "malformed", "missing"}:
             return "failed"
         if self.global_stale:
             return "stale"
         if self.global_dirty:
             return "dirty"
+        if self.outbox_status == "pending":
+            return "outbox_pending"
         return "clean"
 
     def item(self, name: str) -> ProjectionItemReport | None:
@@ -134,6 +169,10 @@ class ProjectionReport:
             "skipped": list(self.skipped),
             "artifacts": list(self.artifacts),
             "errors": list(self.errors),
+            "outbox_status": self.outbox_status,
+            "outbox_counts": dict(self.outbox_counts),
+            "outbox_non_done": [dict(row) for row in self.outbox_non_done],
+            "outbox_errors": list(self.outbox_errors),
             "started_at": self.started_at,
             "finished_at": self.finished_at,
             "duration_ms": self.duration_ms,
@@ -158,11 +197,18 @@ class ProjectionReport:
             lines.append(f"- global_dirty: `{', '.join(self.global_dirty)}`")
         if self.global_failed:
             lines.append(f"- global_failed: `{', '.join(self.global_failed)}`")
+        lines.append(f"- outbox_status: `{self.outbox_status}`")
         if self.skipped:
             lines.append(f"- skipped: `{', '.join(self.skipped)}`")
         if self.errors:
             lines.extend(["", "## Errors", ""])
             lines.extend(f"- {error}" for error in self.errors)
+        if self.outbox_counts or self.outbox_non_done:
+            lines.extend(["", "## Outbox", ""])
+            for status, count in self.outbox_counts.items():
+                lines.append(f"- count `{status}`: `{count}`")
+            for row in self.outbox_non_done:
+                lines.append(_format_outbox_report_row(row, markdown=True))
         if self.items:
             lines.extend(["", "## Items", ""])
             for item in self.items:
@@ -198,7 +244,8 @@ class ProjectionService:
 
         started_at = utc_now()
         started = perf_counter()
-        if projection_tables_exist(self.conn):
+        projection_state_errors = self._projection_state_errors()
+        if not projection_state_errors and projection_tables_exist(self.conn):
             ensure_projection_rows(self.conn, turn_id=current_turn_id(self.conn))
             self.conn.commit()
 
@@ -206,22 +253,40 @@ class ProjectionService:
         outbox_artifacts: list[str] = []
         outbox_refreshed: list[str] = []
         original_requested = tuple(names) if names is not None else tuple(PROJECTION_VERSIONS)
-        if include_outbox and (names is None or "events_jsonl" in original_requested):
-            outbox_result = process_outbox(self.campaign, self.conn)
-            outbox_errors.extend(outbox_result.errors)
-            outbox_artifacts.extend(outbox_result.artifacts)
-            if outbox_result.refreshed:
-                outbox_refreshed.append("events_jsonl")
+        if projection_state_errors:
+            requested = list(original_requested)
+            skipped = []
+            items: tuple[ProjectionItemReport, ...] = ()
+        elif include_outbox and (names is None or "events_jsonl" in original_requested):
+            outbox = _inspect_outbox_health(self.conn)
+            if outbox["status"] in {"missing", "malformed"}:
+                outbox_errors.extend(str(error) for error in outbox.get("errors", ()))
+            else:
+                outbox_result = process_outbox(self.campaign, self.conn)
+                outbox_errors.extend(outbox_result.errors)
+                outbox_artifacts.extend(outbox_result.artifacts)
+                if outbox_result.refreshed:
+                    outbox_refreshed.append("events_jsonl")
 
-        requested = list(original_requested)
-        skipped: list[str] = []
-        if dirty_only and projection_tables_exist(self.conn):
-            refreshable = self._names_with_status(REFRESHABLE_STATUSES)
-            requested = [name for name in requested if name in refreshable]
-            skipped = [name for name in original_requested if name not in requested]
+            requested = list(original_requested)
+            skipped: list[str] = []
+            if dirty_only and projection_tables_exist(self.conn):
+                refreshable = self._names_with_status(REFRESHABLE_STATUSES)
+                requested = [name for name in requested if name in refreshable]
+                skipped = [name for name in original_requested if name not in requested]
 
-        item_options = options or {}
-        items = tuple(self._refresh_one(name, options=item_options.get(name, {})) for name in requested)
+            item_options = options or {}
+            items = tuple(self._refresh_one(name, options=item_options.get(name, {})) for name in requested)
+        else:
+            requested = list(original_requested)
+            skipped = []
+            if dirty_only and projection_tables_exist(self.conn):
+                refreshable = self._names_with_status(REFRESHABLE_STATUSES)
+                requested = [name for name in requested if name in refreshable]
+                skipped = [name for name in original_requested if name not in requested]
+
+            item_options = options or {}
+            items = tuple(self._refresh_one(name, options=item_options.get(name, {})) for name in requested)
         return self._build_report(
             profile=profile,
             requested=tuple(requested),
@@ -230,6 +295,7 @@ class ProjectionService:
             outbox_errors=tuple(outbox_errors),
             outbox_artifacts=tuple(outbox_artifacts),
             outbox_refreshed=tuple(dict.fromkeys(outbox_refreshed)),
+            projection_state_errors=tuple(projection_state_errors),
             started_at=started_at,
             finished_at=utc_now(),
             duration_ms=(perf_counter() - started) * 1000,
@@ -358,11 +424,15 @@ class ProjectionService:
         outbox_errors: tuple[str, ...],
         outbox_artifacts: tuple[str, ...],
         outbox_refreshed: tuple[str, ...],
+        projection_state_errors: tuple[str, ...],
         started_at: str,
         finished_at: str,
         duration_ms: float,
     ) -> ProjectionReport:
         states = self._all_states()
+        outbox = _inspect_outbox_health(self.conn)
+        outbox_non_done = tuple(dict(row) for row in outbox.get("non_done", ()))
+        outbox_errors_reported = tuple(str(error) for error in outbox.get("errors", ()))
         requested_set = set(requested)
         global_dirty = tuple(sorted(name for name, status in states.items() if status in {"dirty", "refreshing"}))
         global_failed = tuple(sorted(name for name, status in states.items() if status == "failed"))
@@ -373,7 +443,10 @@ class ProjectionService:
         requested_dirty = tuple(sorted(set(global_dirty) & requested_set))
         requested_clean = tuple(sorted(set(global_clean) & requested_set))
         requested_stale = tuple(sorted(set(global_stale) & requested_set))
-        errors = list(outbox_errors)
+        errors = list(projection_state_errors)
+        errors.extend(outbox_errors)
+        errors.extend(outbox_errors_reported)
+        errors.extend(_outbox_issue_message(row) for row in outbox_non_done if row.get("status") == "failed")
         errors.extend(f"{item.name}: {item.error}" for item in items if item.error)
         artifacts = list(outbox_artifacts)
         for item in items:
@@ -397,6 +470,10 @@ class ProjectionService:
             skipped=skipped,
             artifacts=tuple(artifacts),
             errors=tuple(errors),
+            outbox_status=str(outbox.get("status") or "clean"),
+            outbox_counts={str(status): int(count) for status, count in dict(outbox.get("counts", {})).items()},
+            outbox_non_done=outbox_non_done,
+            outbox_errors=outbox_errors_reported,
             items=items,
             started_at=started_at,
             finished_at=finished_at,
@@ -404,7 +481,54 @@ class ProjectionService:
         )
 
     def _all_states(self) -> dict[str, str]:
-        if not projection_tables_exist(self.conn):
+        if not self._projection_state_table_exists():
+            return {}
+        columns = self._projection_state_columns()
+        if set(PROJECTION_STATE_SCHEMA_COLUMNS) - columns:
             return {}
         rows = self.conn.execute("select name, version, status from projection_state").fetchall()
-        return {str(row["name"]): projection_effective_status(row) for row in rows}
+        states: dict[str, str] = {}
+        for row in rows:
+            raw_status = str(row["status"])
+            states[str(row["name"])] = "failed" if raw_status not in STORED_PROJECTION_STATUSES else projection_effective_status(row)
+        return states
+
+    def _projection_state_errors(self) -> list[str]:
+        if not self._projection_state_table_exists():
+            return ["projection_state: missing"]
+        columns = self._projection_state_columns()
+        errors: list[str] = []
+        missing_columns = sorted(set(PROJECTION_STATE_SCHEMA_COLUMNS) - columns)
+        if missing_columns:
+            errors.append(f"projection_state schema: missing columns {', '.join(missing_columns)}")
+        if "name" in columns:
+            duplicate_names = [
+                str(row["name"])
+                for row in self.conn.execute(
+                    """
+                    select name
+                    from projection_state
+                    group by name
+                    having count(*) > 1
+                    order by name
+                    """
+                ).fetchall()
+                if row["name"] is not None
+            ]
+            if duplicate_names:
+                errors.append(f"projection_state: duplicate names {', '.join(duplicate_names)}")
+        if not missing_columns:
+            for row in self.conn.execute("select name, status from projection_state order by name").fetchall():
+                raw_status = None if row["status"] is None else str(row["status"])
+                if raw_status not in STORED_PROJECTION_STATUSES:
+                    errors.append(f"projection_state.{row['name']}: invalid status {raw_status}")
+        return errors
+
+    def _projection_state_table_exists(self) -> bool:
+        row = self.conn.execute(
+            "select 1 from sqlite_master where type='table' and name='projection_state'"
+        ).fetchone()
+        return bool(row)
+
+    def _projection_state_columns(self) -> set[str]:
+        return {str(row[1]) for row in self.conn.execute("pragma table_info(projection_state)").fetchall()}

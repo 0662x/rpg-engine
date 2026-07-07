@@ -628,15 +628,64 @@ class LowLevelConditionCoverageTests(unittest.TestCase):
                 parse_manifest_files(too_many)
 
             data = b"hello"
+            core_members = {
+                "campaign.yaml": b"campaign: x\n",
+                "save.yaml": b"save: x\n",
+                "data/game.sqlite": b"sqlite-placeholder",
+                "data/events.jsonl": b"",
+                "snapshots/current.md": b"# Current\n",
+                "snapshots/current.json": b"{}",
+            }
+
+            def archive_files_for(members: dict[str, bytes], overrides: dict[str, ArchiveFile] | None = None) -> list[ArchiveFile]:
+                overrides = overrides or {}
+                files: list[ArchiveFile] = []
+                for name, member_data in members.items():
+                    files.append(overrides.get(name, ArchiveFile(name, len(member_data), hashlib.sha256(member_data).hexdigest())))
+                return files
+
+            core_files = archive_files_for(core_members)
             good_file = ArchiveFile("data.txt", len(data), hashlib.sha256(data).hexdigest())
+            missing_core_members = dict(core_members)
+            missing_core_members.pop("campaign.yaml")
+            too_large_members = dict(core_members)
+            size_mismatch_members = dict(core_members)
+            checksum_mismatch_members = dict(core_members)
             corrupt_archives = [
                 (None, {"data.txt": data}, "missing save-archive.json"),
                 ({"archive_schema_version": 999, "files": []}, {}, "schema version mismatch"),
                 (manifest_for([]), {"extra.txt": b"x"}, "unlisted file"),
-                (manifest_for([good_file]), {}, "missing file listed"),
-                (manifest_for([ArchiveFile("data.txt", save_archive.MAX_ARCHIVE_MEMBER_BYTES + 1, good_file.sha256)]), {"data.txt": data}, "member too large"),
-                (manifest_for([ArchiveFile("data.txt", len(data) + 1, good_file.sha256)]), {"data.txt": data}, "size mismatch"),
-                (manifest_for([ArchiveFile("data.txt", len(data), "bad")]), {"data.txt": data}, "checksum mismatch"),
+                (manifest_for(core_files), missing_core_members, "missing file listed"),
+                (
+                    manifest_for(
+                        archive_files_for(
+                            core_members,
+                            {"campaign.yaml": ArchiveFile("campaign.yaml", save_archive.MAX_ARCHIVE_MEMBER_BYTES + 1, hashlib.sha256(core_members["campaign.yaml"]).hexdigest())},
+                        )
+                    ),
+                    too_large_members,
+                    "member too large",
+                ),
+                (
+                    manifest_for(
+                        archive_files_for(
+                            core_members,
+                            {"campaign.yaml": ArchiveFile("campaign.yaml", len(core_members["campaign.yaml"]) + 1, hashlib.sha256(core_members["campaign.yaml"]).hexdigest())},
+                        )
+                    ),
+                    size_mismatch_members,
+                    "size mismatch",
+                ),
+                (
+                    manifest_for(
+                        archive_files_for(
+                            core_members,
+                            {"campaign.yaml": ArchiveFile("campaign.yaml", len(core_members["campaign.yaml"]), "bad")},
+                        )
+                    ),
+                    checksum_mismatch_members,
+                    "checksum mismatch",
+                ),
             ]
             for index, (manifest, members, message) in enumerate(corrupt_archives):
                 bad_archive = root / f"bad-{index}.aigmsave"
@@ -646,7 +695,7 @@ class LowLevelConditionCoverageTests(unittest.TestCase):
                         import_save_archive(bad_archive, root / f"target-{index}")
 
             total_archive = root / "too-large-total.aigmsave"
-            write_archive(total_archive, manifest_for([good_file]), {"data.txt": data})
+            write_archive(total_archive, manifest_for(core_files), core_members)
             with mock.patch("rpg_engine.save_archive.MAX_ARCHIVE_TOTAL_BYTES", 1):
                 with self.assertRaisesRegex(ValueError, "maximum total size"):
                     import_save_archive(total_archive, root / "target-total")

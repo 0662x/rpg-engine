@@ -71,7 +71,7 @@ from .proposal_queue import (
     render_rollback_plan,
     review_proposal,
 )
-from .projection_service import ProjectionReport, ProjectionService
+from .projection_service import ProjectionReport, ProjectionService, _format_outbox_report_row
 from .projections import render_projection_status
 from .render import render_entity, render_scene
 from .reflection import draft_reflection
@@ -1220,15 +1220,32 @@ def main(argv: list[str] | None = None) -> int:
                     commit_policy="caller_committed_required",
                 )
                 print("OK" if result.ok else "FAILED")
+                print(f"profile: {result.profile}")
                 print(f"status: {result.status}")
                 print(f"global_status: {result.global_status}")
+                print(f"requested: {', '.join(result.requested) if result.requested else '-'}")
+                print(f"skipped: {', '.join(result.skipped) if result.skipped else '-'}")
+                print(f"requested_dirty: {', '.join(result.requested_dirty) if result.requested_dirty else '-'}")
+                print(f"requested_failed: {', '.join(result.requested_failed) if result.requested_failed else '-'}")
+                print(f"requested_stale: {', '.join(result.requested_stale) if result.requested_stale else '-'}")
+                print(f"global_dirty: {', '.join(result.global_dirty) if result.global_dirty else '-'}")
+                print(f"global_failed: {', '.join(result.global_failed) if result.global_failed else '-'}")
+                print(f"global_stale: {', '.join(result.global_stale) if result.global_stale else '-'}")
+                print(f"outbox_status: {result.outbox_status}")
+                if result.outbox_counts:
+                    for status, count in result.outbox_counts.items():
+                        print(f"outbox_count: {status}={count}")
+                else:
+                    print("outbox_count: empty=0")
+                print(f"started_at: {result.started_at or '-'}")
+                print(f"finished_at: {result.finished_at or '-'}")
+                print(f"duration_ms: {result.duration_ms:.3f}" if result.duration_ms is not None else "duration_ms: -")
                 for name in result.refreshed:
                     print(f"refreshed: {name}")
                 for name in result.requested_failed:
                     print(f"failed: {name}")
-                for name in result.global_failed:
-                    if name not in result.requested_failed:
-                        print(f"global_failed: {name}")
+                for row in result.outbox_non_done:
+                    print(_format_outbox_report_row(row))
                 for artifact in result.artifacts:
                     print(f"artifact: {artifact}")
                 for error in result.errors:

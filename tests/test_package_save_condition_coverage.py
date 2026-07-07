@@ -904,6 +904,14 @@ class SaveManagerConditionCoverageTests(unittest.TestCase):
 
             with self.assertRaisesRegex(SaveManagerError, "escapes workspace root"):
                 resolve_registry_path(root, "../outside.json")
+            with self.assertRaisesRegex(SaveManagerError, "registry_path must be relative"):
+                resolve_registry_path(root, root / ".aigm" / "absolute-registry.json")
+            with self.assertRaisesRegex(SaveManagerError, "registry_path is required"):
+                resolve_registry_path(root, "")
+            with self.assertRaisesRegex(SaveManagerError, "registry_path is required"):
+                resolve_registry_path(root, "   ")
+            with self.assertRaisesRegex(SaveManagerError, "registry_path must be a file path"):
+                resolve_registry_path(root, ".")
             self.assertEqual(normalize_optional_relative(None, "x"), None)
             self.assertEqual(normalize_optional_relative("  ", "x"), None)
             self.assertEqual(normalize_required_relative("a/b", "x"), "a/b")
@@ -911,8 +919,16 @@ class SaveManagerConditionCoverageTests(unittest.TestCase):
                 normalize_required_relative("/abs", "x")
             with self.assertRaisesRegex(SaveManagerError, "must not contain"):
                 normalize_required_relative("../escape", "x")
+            with self.assertRaisesRegex(SaveManagerError, "must not contain backslashes"):
+                normalize_required_relative("a\\b", "x")
             with self.assertRaisesRegex(SaveManagerError, "escapes workspace root"):
                 ensure_under_root(root, root.parent / "outside", "candidate")
+            with mock.patch.object(manager, "pending_action_path", return_value=root.parent / "pending-action.json"):
+                with self.assertRaisesRegex(SaveManagerError, "escapes workspace root"):
+                    manager.write_pending_action({"save_id": "save", "session_id": "sid", "delta": {}, "turn_proposal": {}})
+            with mock.patch.object(manager, "pending_clarification_path", return_value=root.parent / "pending-clarification.json"):
+                with self.assertRaisesRegex(SaveManagerError, "escapes workspace root"):
+                    manager.write_pending_clarification({"schema_version": "1"})
             nonempty = root / "nonempty"
             nonempty.mkdir()
             (nonempty / "file.txt").write_text("x", encoding="utf-8")
@@ -996,6 +1012,90 @@ class SaveManagerConditionCoverageTests(unittest.TestCase):
             rewrite_save_manifests(target, loaded_campaign)
             self.assertTrue((target / "campaign.yaml").exists())
             self.assertEqual(relative_path(target, campaign_dir), "../campaign")
+
+    def test_malicious_registry_record_refresh_does_not_mutate_registry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            campaign_dir = root / "campaigns" / "minimal"
+            shutil.copytree(MINIMAL_FIXTURE, campaign_dir)
+            manager = SaveManager(root)
+            manager.register_campaign("campaigns/minimal")
+            created = manager.create_save(campaign="campaigns/minimal")
+
+            registry = manager.read_registry()
+            registry["campaigns"][0]["path"] = "../outside"
+            registry["saves"][0]["path"] = "/tmp/outside"
+            manager.write_registry(registry)
+            before = manager.registry_path.read_text(encoding="utf-8")
+
+            campaigns = manager.list_campaigns(refresh=True)
+            current = manager.current_save(refresh=True)
+            listed = manager.list_saves(refresh=True)
+
+            self.assertFalse(campaigns["ok"])
+            self.assertFalse(current["ok"])
+            self.assertFalse(listed["ok"])
+            self.assertEqual(manager.registry_path.read_text(encoding="utf-8"), before)
+            self.assertFalse(manager.pending_action_path().exists())
+            self.assertTrue((root / created["save"]["path"] / "data" / "game.sqlite").exists())
+
+    def test_registry_refresh_rejects_root_escape_and_secondary_paths_without_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as outside_tmp:
+            root = Path(tmp)
+            campaign_dir = root / "campaigns" / "minimal"
+            shutil.copytree(MINIMAL_FIXTURE, campaign_dir)
+            manager = SaveManager(root)
+            manager.register_campaign("campaigns/minimal")
+            created = manager.create_save(campaign="campaigns/minimal")
+            escape_link = root / "saves" / "escape-link"
+            escape_link.parent.mkdir(parents=True, exist_ok=True)
+            escape_link.symlink_to(Path(outside_tmp), target_is_directory=True)
+
+            registry = manager.read_registry()
+            registry["campaigns"][0]["starter_save_path"] = "../outside"
+            registry["saves"][0]["path"] = "saves/escape-link"
+            registry["saves"][0]["campaign_path"] = "campaigns\\bad"
+            manager.write_registry(registry)
+            before = manager.registry_path.read_text(encoding="utf-8")
+
+            campaigns = manager.list_campaigns(refresh=True)
+            current = manager.current_save(refresh=True)
+            listed = manager.list_saves(refresh=True)
+
+            self.assertFalse(campaigns["ok"])
+            self.assertFalse(current["ok"])
+            self.assertFalse(listed["ok"])
+            self.assertIn("starter_save_path", "\n".join(campaigns["errors"]))
+            self.assertEqual(manager.registry_path.read_text(encoding="utf-8"), before)
+            self.assertFalse(manager.pending_action_path().exists())
+            self.assertTrue((root / created["save"]["path"] / "data" / "game.sqlite").exists())
+
+    def test_filtered_save_refresh_rejects_unfiltered_bad_registry_path_without_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            campaign_dir = root / "campaigns" / "minimal"
+            shutil.copytree(MINIMAL_FIXTURE, campaign_dir)
+            manager = SaveManager(root)
+            manager.register_campaign("campaigns/minimal")
+            created = manager.create_save(campaign="campaigns/minimal")
+
+            registry = manager.read_registry()
+            registry["saves"].append(
+                {
+                    "id": "save:bad-unfiltered",
+                    "campaign_id": "other-campaign",
+                    "path": "/tmp/outside",
+                    "archived": False,
+                }
+            )
+            manager.write_registry(registry)
+            before = manager.registry_path.read_text(encoding="utf-8")
+
+            listed = manager.list_saves(campaign_id=str(created["save"]["campaign_id"]), refresh=True)
+
+            self.assertFalse(listed["ok"])
+            self.assertIn("save:bad-unfiltered", "\n".join(listed["errors"]))
+            self.assertEqual(manager.registry_path.read_text(encoding="utf-8"), before)
 
 
 if __name__ == "__main__":

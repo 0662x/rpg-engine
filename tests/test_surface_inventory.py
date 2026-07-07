@@ -328,6 +328,47 @@ class SurfaceInventoryTests(unittest.TestCase):
         self.assertIn("aigm player turn", {entry.name for entry in CLI_V1_SUBCOMMAND_SURFACE_INVENTORY})
         self.assertIn("aigm play commit", {entry.name for entry in CLI_V1_SUBCOMMAND_SURFACE_INVENTORY})
 
+    def test_cli_v1_inventory_keeps_play_commit_out_of_player_safe_path(self) -> None:
+        command_by_name = {entry.name: entry for entry in CLI_V1_COMMAND_SURFACE_INVENTORY}
+        subcommand_by_name = {entry.name: entry for entry in CLI_V1_SUBCOMMAND_SURFACE_INVENTORY}
+
+        player = command_by_name["aigm player"]
+        play = command_by_name["aigm play"]
+        player_confirm = subcommand_by_name["aigm player confirm"]
+        play_commit = subcommand_by_name["aigm play commit"]
+
+        self.assertEqual(player.taxonomy_category, "player-safe")
+        self.assertTrue(player.default_exposed)
+        self.assertTrue(player.normal_play)
+        self.assertIn("player_turn/player_confirm", player.authority_gate)
+        self.assertIn("SaveManager.player_confirm", player_confirm.write_authority)
+
+        self.assertEqual(play.taxonomy_category, "trusted low-level")
+        self.assertFalse(play.default_exposed)
+        self.assertFalse(play.normal_play)
+        self.assertIn("low-level runtime", play.write_authority)
+        self.assertEqual(play_commit.taxonomy_category, "trusted low-level")
+        self.assertEqual(play_commit.profile, "developer_or_trusted_gm_commit")
+        self.assertFalse(play_commit.default_exposed)
+        self.assertFalse(play_commit.normal_play)
+        self.assertIn("GMRuntime", play_commit.write_authority)
+        for entry in CLI_V1_SUBCOMMAND_SURFACE_INVENTORY:
+            if entry.name.startswith("aigm play "):
+                with self.subTest(entry=entry.name):
+                    self.assertEqual(entry.taxonomy_category, "trusted low-level")
+                    self.assertFalse(entry.default_exposed)
+                    self.assertFalse(entry.normal_play)
+
+    def test_cli_contract_docs_describe_v1_help_authority_boundaries(self) -> None:
+        cli_document = (ENGINE_ROOT / "docs" / "cli-contracts.md").read_text(encoding="utf-8")
+
+        self.assertIn("developer/trusted low-level runtime commands", cli_document)
+        self.assertIn("player-safe save registry and turn commands", cli_document)
+        self.assertIn("platform sidecar prewarm and", cli_document)
+        self.assertIn("player entry commands", cli_document)
+        self.assertIn("MCP adapter host/profile commands", cli_document)
+        self.assertIn("play --help", cli_document)
+
     def test_runtime_platform_and_projection_inventory_cover_source_entrypoints(self) -> None:
         for group, entries in NON_SURFACE_PUBLIC_APIS.items():
             with self.subTest(group=group):

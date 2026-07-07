@@ -73,6 +73,18 @@ class ProjectionServiceTests(unittest.TestCase):
                 self.assertGreater(projection_count(report, "cards"), 0)
                 self.assertIsNotNone(report.duration_ms)
                 self.assertIsNotNone(report.item("snapshots").duration_ms)
+                report_dict = report.to_dict()
+                self.assertEqual(report_dict["profile"], "test:projection_success")
+                self.assertEqual(report_dict["requested"], ["snapshots", "cards"])
+                self.assertIsNotNone(report_dict["started_at"])
+                self.assertIsNotNone(report_dict["finished_at"])
+                items = {item["name"]: item for item in report_dict["items"]}
+                self.assertEqual(items["snapshots"]["previous_status"], "dirty")
+                self.assertEqual(items["snapshots"]["turn_id"], current_turn(conn))
+                self.assertEqual(items["snapshots"]["version"], PROJECTION_VERSIONS["snapshots"])
+                self.assertTrue(items["snapshots"]["artifacts"][0].endswith("snapshots/current.md"))
+                self.assertEqual(items["cards"]["version"], PROJECTION_VERSIONS["cards"])
+                self.assertGreater(items["cards"]["metadata"]["count"], 0)
 
     def test_refresh_partial_failure_marks_failed_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -121,6 +133,48 @@ class ProjectionServiceTests(unittest.TestCase):
                 self.assertIn("snapshots", report.refreshed)
                 self.assertIn("cards", report.global_failed)
                 self.assertEqual(report.global_status, "failed")
+                report_dict = report.to_dict()
+                self.assertEqual(report_dict["requested"], ["snapshots"])
+                self.assertEqual(report_dict["requested_failed"], [])
+                self.assertEqual(report_dict["global_failed"], ["cards"])
+                self.assertEqual(report_dict["global_status"], "failed")
+                self.assertIsNotNone(report_dict["duration_ms"])
+
+    def test_targeted_repair_reports_unrelated_failed_outbox(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_campaign(tmp))
+            with connect(campaign) as conn:
+                save_turn_delta(campaign, conn, wait_delta(conn, "projection-targeted-outbox"))
+                conn.execute("update projection_state set status='dirty', last_error=null where name='snapshots'")
+                conn.execute(
+                    """
+                    insert into outbox(id, topic, payload_json, status, attempts, created_at, processed_at, last_error)
+                    values('out:unrelated-failed', 'unsupported.topic', '{}', 'failed', 2, 'now', null, 'unsupported outbox topic')
+                    """
+                )
+                conn.commit()
+
+                report = ProjectionService(campaign, conn).refresh(
+                    names=["snapshots"],
+                    dirty_only=True,
+                    profile="test:targeted_outbox",
+                    commit_policy="caller_committed_required",
+                )
+
+                self.assertFalse(report.ok, report.to_dict())
+                self.assertEqual(report.status, "partial_failure")
+                self.assertEqual(report.global_status, "failed")
+                self.assertEqual(report.outbox_status, "failed")
+                self.assertIn("snapshots", report.refreshed)
+                self.assertIn("outbox.out:unrelated-failed: status is failed", "\n".join(report.errors))
+                report_dict = report.to_dict()
+                self.assertEqual(report_dict["outbox_status"], "failed")
+                self.assertEqual(report_dict["outbox_non_done"][0]["id"], "out:unrelated-failed")
+                self.assertEqual(report_dict["outbox_non_done"][0]["status"], "failed")
+                rendered = report.render()
+                self.assertIn("last_error=`unsupported outbox topic`", rendered)
+                self.assertIn("created_at=`now`", rendered)
+                self.assertIn("processed_at=`-`", rendered)
 
     def test_commit_result_carries_projection_report(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

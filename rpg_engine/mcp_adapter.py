@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 import time
 from dataclasses import dataclass
@@ -26,6 +27,7 @@ from .intent_router import make_intent_ai_config, make_intent_request_meta
 from .runtime import GMRuntime, intent_ai_config_kwargs, intent_request_meta_kwargs
 from .save_manager import SaveManager
 from .save_service import inspect_v1_save
+from .surface_inventory import MCP_SURFACE_INVENTORY
 from .validation_issues import issues_from_messages
 
 
@@ -80,6 +82,51 @@ LOW_LEVEL_MCP_TOOL_NAMES = (
     "commit_turn",
 )
 MCP_TOOL_NAMES = PLAYER_MCP_TOOL_NAMES + LOW_LEVEL_MCP_TOOL_NAMES
+LOW_LEVEL_REQUIRED_PROFILE_NAMES = (DEVELOPER_PROFILE, TRUSTED_GM_PROFILE, MAINTENANCE_PROFILE, ADMIN_PROFILE)
+AUDIT_SUMMARIZED_PAYLOAD_KEYS = {
+    "delta",
+    "delta_draft",
+    "turn_proposal",
+    "proposal",
+    "external_intent_candidate",
+    "internal_intent_candidate",
+    "intent_candidate",
+}
+AUDIT_REDACTED_KEYS = {
+    "private_reasoning",
+    "private_reasonings",
+    "hidden_fact",
+    "hidden_facts",
+    "gm_note",
+    "gm_notes",
+    "secret",
+    "secrets",
+}
+AUDIT_REDACTED_COUNT_KEY = "redacted_sensitive_field_count"
+MCP_SURFACE_BY_TOOL = {entry.name: entry for entry in MCP_SURFACE_INVENTORY}
+
+
+class MCPProfilePermissionError(PermissionError):
+    """Structured permission failure for MCP profile/surface mismatches."""
+
+    def __init__(
+        self,
+        *,
+        tool: str,
+        profile: str,
+        required_profiles: tuple[str, ...],
+        surface_category: str,
+    ) -> None:
+        self.tool = tool
+        self.profile = profile
+        self.required_profiles = required_profiles
+        self.surface_category = surface_category
+        required = ", ".join(required_profiles)
+        super().__init__(
+            "MCP profile/surface category mismatch: "
+            f"tool={tool} profile={profile} surface_category={surface_category} "
+            f"requires one of {required}"
+        )
 
 
 def mcp_tool_names_for_profile(profile: str) -> tuple[str, ...]:
@@ -331,8 +378,18 @@ class AIGMMCPAdapter:
         return self.call_with_audit(
             "player_query",
             request,
-            lambda: self.save_manager().player_query(kind=kind, query_text=query_text, budget=budget),
+            lambda: self._player_query_low_level(kind=kind, query_text=query_text, budget=budget),
         )
+
+    def _player_query_low_level(
+        self,
+        *,
+        kind: str,
+        query_text: str | None,
+        budget: int | None,
+    ) -> dict[str, Any]:
+        self.require_low_level_profile("player_query")
+        return self.save_manager().player_query(kind=kind, query_text=query_text, budget=budget)
 
     def player_turn(
         self,
@@ -416,16 +473,8 @@ class AIGMMCPAdapter:
         return self.call_with_audit(
             "player_act",
             request,
-            lambda: self.save_manager().player_act(
+            lambda: self._player_act_low_level(
                 user_text=user_text,
-                intent_ai=self.config.intent_ai,
-                intent_backend=self.config.intent_backend,
-                intent_provider=self.config.intent_provider,
-                intent_model=self.config.intent_model,
-                intent_timeout=self.config.intent_timeout,
-                intent_base_url=self.config.intent_base_url,
-                intent_api_key_env=self.config.intent_api_key_env,
-                intent_fallback_backend=self.config.intent_fallback_backend,
                 preflight_id=preflight_id,
                 message_id=message_id,
                 platform=platform,
@@ -433,6 +482,36 @@ class AIGMMCPAdapter:
                 source_user_text_hash=source_user_text_hash,
                 preflight_pending_wait_ms=preflight_pending_wait_ms,
             ),
+        )
+
+    def _player_act_low_level(
+        self,
+        *,
+        user_text: str,
+        preflight_id: str,
+        message_id: str,
+        platform: str,
+        session_key: str,
+        source_user_text_hash: str,
+        preflight_pending_wait_ms: int,
+    ) -> dict[str, Any]:
+        self.require_low_level_profile("player_act")
+        return self.save_manager().player_act(
+            user_text=user_text,
+            intent_ai=self.config.intent_ai,
+            intent_backend=self.config.intent_backend,
+            intent_provider=self.config.intent_provider,
+            intent_model=self.config.intent_model,
+            intent_timeout=self.config.intent_timeout,
+            intent_base_url=self.config.intent_base_url,
+            intent_api_key_env=self.config.intent_api_key_env,
+            intent_fallback_backend=self.config.intent_fallback_backend,
+            preflight_id=preflight_id,
+            message_id=message_id,
+            platform=platform,
+            session_key=session_key,
+            source_user_text_hash=source_user_text_hash,
+            preflight_pending_wait_ms=preflight_pending_wait_ms,
         )
 
     def player_confirm(self, session_id: str = "") -> dict[str, Any]:
@@ -611,6 +690,7 @@ class AIGMMCPAdapter:
         }
 
         def run() -> dict[str, Any]:
+            self.require_low_level_profile("start_turn")
             self.require_player_safe_start(
                 mode=mode,
                 semantic_override=semantic_override,
@@ -675,6 +755,7 @@ class AIGMMCPAdapter:
         request = {"kind": kind, "save": save, "query_text": query_text, "view": view, "budget": budget}
 
         def run() -> dict[str, Any]:
+            self.require_low_level_profile("query")
             self.require_view_allowed(view)
             runtime = self.runtime_for_save(save)
             return runtime.query(kind, query_text, view=view, budget=budget).to_dict()
@@ -762,6 +843,7 @@ class AIGMMCPAdapter:
         }
 
         def run() -> dict[str, Any]:
+            self.require_low_level_profile("preview_from_text")
             self.require_player_safe_start(
                 mode=mode,
                 semantic_override=semantic_override,
@@ -948,8 +1030,11 @@ class AIGMMCPAdapter:
 
     def require_low_level_profile(self, tool: str) -> None:
         if self.config.mcp_profile not in LOW_LEVEL_PROFILES:
-            raise PermissionError(
-                f"{tool} requires developer, trusted_gm, maintenance, or admin MCP profile"
+            raise MCPProfilePermissionError(
+                tool=tool,
+                profile=self.config.mcp_profile,
+                required_profiles=LOW_LEVEL_REQUIRED_PROFILE_NAMES,
+                surface_category="trusted low-level",
             )
 
     def require_view_allowed(self, view: str | None) -> None:
@@ -1035,14 +1120,17 @@ class AIGMMCPAdapter:
         path = self.config.audit_log
         if path is None:
             return
+        sensitive_terms = mcp_audit_sensitive_terms(request)
         record = {
             "created_at": utc_now(),
             "server": MCP_SERVER_NAME,
             "tool": tool,
+            "surface_category": mcp_audit_surface_category(tool),
             "duration_ms": duration_ms,
             "status": "error" if result_has_error(result) else "ok",
-            "request": sanitize_for_audit(request),
-            "result": summarize_result_for_audit(result),
+            "identity": mcp_audit_identity(tool, request, profile=self.config.mcp_profile),
+            "request": sanitize_for_audit(request, sensitive_terms=sensitive_terms),
+            "result": summarize_result_for_audit(result, sensitive_terms=sensitive_terms),
         }
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -1519,6 +1607,8 @@ def normalize_optional_relative(value: str | None, label: str) -> str | None:
     raw = str(value).strip()
     if not raw:
         return None
+    if "\\" in raw:
+        raise ValueError(f"{label} must not contain backslashes")
     path = Path(raw)
     if path.is_absolute():
         raise ValueError(f"{label} must be relative to the configured MCP root")
@@ -1536,6 +1626,24 @@ def normalize_mcp_profile(value: str | None) -> str:
 
 def error_dict(exc: Exception) -> dict[str, Any]:
     message = str(exc)
+    if isinstance(exc, MCPProfilePermissionError):
+        return {
+            "ok": False,
+            "errors": [message],
+            "error_details": [
+                {
+                    "code": "MCP_PROFILE_MISMATCH",
+                    "file": "",
+                    "path": exc.tool,
+                    "message": message,
+                    "suggestion": "Use an MCP profile that is allowed to call this surface, or use a player-safe tool.",
+                    "tool": exc.tool,
+                    "profile": exc.profile,
+                    "required_profiles": list(exc.required_profiles),
+                    "surface_category": exc.surface_category,
+                }
+            ],
+        }
     return {"ok": False, "errors": [message], "error_details": issues_from_messages([message], default_code="MCP_ADAPTER_ERROR")}
 
 
@@ -1544,6 +1652,39 @@ def result_has_error(result: dict[str, Any]) -> bool:
         return True
     errors = result.get("errors")
     return bool(errors)
+
+
+def mcp_audit_surface_category(tool: str) -> str:
+    entry = MCP_SURFACE_BY_TOOL.get(tool)
+    return entry.taxonomy_category if entry else "unknown"
+
+
+def mcp_audit_identity(tool: str, request: dict[str, Any], *, profile: str) -> dict[str, Any]:
+    identity: dict[str, Any] = {
+        "profile": profile,
+        "tool": tool,
+    }
+    platform = str(request.get("platform") or "").strip()
+    session_key = str(request.get("session_key") or "").strip()
+    message_id = str(request.get("message_id") or "").strip()
+    if platform:
+        identity["platform"] = platform
+    if session_key:
+        identity["session_key_hash"] = f"sha256:{hash_identity(session_key)}"
+    if message_id:
+        identity["message_id"] = message_id
+    return identity
+
+
+def mcp_audit_sensitive_terms(request: dict[str, Any]) -> tuple[str, ...]:
+    terms = {
+        str(request.get("session_key") or "").strip(),
+        str(request.get("actor_id") or "").strip(),
+        str(request.get("user_id") or "").strip(),
+        str(request.get("sender_id") or "").strip(),
+        str(request.get("from_user_id") or "").strip(),
+    }
+    return tuple(term for term in terms if term)
 
 
 def extract_result_clarification(result: dict[str, Any]) -> dict[str, Any] | None:
@@ -1578,35 +1719,93 @@ def normalize_compact_text(value: Any) -> str:
     return "".join(str(value or "").lower().split()).strip("。！？!?,，")
 
 
-def sanitize_for_audit(value: Any, *, max_text: int = 1200, depth: int = 0) -> Any:
+def sanitize_for_audit(
+    value: Any,
+    *,
+    max_text: int = 1200,
+    depth: int = 0,
+    sensitive_terms: tuple[str, ...] = (),
+) -> Any:
     if depth > 6:
         return "<max-depth>"
     if value is None or isinstance(value, bool | int | float):
         return value
     if isinstance(value, str):
-        if len(value) <= max_text:
-            return value
-        return value[:max_text] + f"... <truncated {len(value) - max_text} chars>"
+        return sanitize_audit_text(value, max_text=max_text, sensitive_terms=sensitive_terms)
     if isinstance(value, Path):
         return str(value)
     if isinstance(value, dict):
         sanitized: dict[str, Any] = {}
+        redacted_sensitive_fields = 0
         for key, item in value.items():
             normalized_key = str(key)
-            if normalized_key == "session_key":
+            audit_key = normalize_audit_key(normalized_key)
+            if audit_key == "session_key":
                 sanitized[normalized_key] = f"sha256:{hash_identity(str(item or ''))}" if str(item or "").strip() else ""
+            elif audit_key in AUDIT_SUMMARIZED_PAYLOAD_KEYS:
+                sanitized[normalized_key] = summarize_sensitive_payload_for_audit(item)
+            elif audit_key in AUDIT_REDACTED_KEYS:
+                redacted_sensitive_fields += 1
             else:
-                sanitized[normalized_key] = sanitize_for_audit(item, max_text=max_text, depth=depth + 1)
+                sanitized[normalized_key] = sanitize_for_audit(
+                    item,
+                    max_text=max_text,
+                    depth=depth + 1,
+                    sensitive_terms=sensitive_terms,
+                )
+        if redacted_sensitive_fields:
+            sanitized[AUDIT_REDACTED_COUNT_KEY] = redacted_sensitive_fields
         return sanitized
     if isinstance(value, (list, tuple)):
-        items = [sanitize_for_audit(item, max_text=max_text, depth=depth + 1) for item in value[:30]]
+        items = [
+            sanitize_for_audit(
+                item,
+                max_text=max_text,
+                depth=depth + 1,
+                sensitive_terms=sensitive_terms,
+            )
+            for item in value[:30]
+        ]
         if len(value) > 30:
             items.append(f"<truncated {len(value) - 30} items>")
         return items
-    return str(value)
+    return sanitize_audit_text(str(value), max_text=max_text, sensitive_terms=sensitive_terms)
 
 
-def summarize_result_for_audit(result: dict[str, Any]) -> dict[str, Any]:
+def sanitize_audit_text(value: str, *, max_text: int, sensitive_terms: tuple[str, ...] = ()) -> str:
+    text = str(value or "")
+    if audit_text_has_sensitive_marker(text):
+        return "<redacted sensitive audit text>"
+    for term in sorted((term for term in sensitive_terms if term), key=len, reverse=True):
+        text = text.replace(term, "<redacted>")
+    if len(text) <= max_text:
+        return text
+    return text[:max_text] + f"... <truncated {len(text) - max_text} chars>"
+
+
+def audit_text_has_sensitive_marker(text: str) -> bool:
+    normalized = normalize_audit_key(text)
+    return any(marker in normalized for marker in AUDIT_REDACTED_KEYS)
+
+
+def normalize_audit_key(value: str) -> str:
+    with_word_boundaries = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", value.strip())
+    return re.sub(r"[^0-9A-Za-z]+", "_", with_word_boundaries).strip("_").lower()
+
+
+def summarize_sensitive_payload_for_audit(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return {
+            "redacted": True,
+            "type": "object",
+            "key_count": len(value),
+        }
+    if isinstance(value, list):
+        return {"redacted": True, "type": "list", "items": len(value)}
+    return {"redacted": True, "type": type(value).__name__}
+
+
+def summarize_result_for_audit(result: dict[str, Any], *, sensitive_terms: tuple[str, ...] = ()) -> dict[str, Any]:
     summary: dict[str, Any] = {}
     for key in (
         "ok",
@@ -1630,7 +1829,7 @@ def summarize_result_for_audit(result: dict[str, Any]) -> dict[str, Any]:
         "counts",
     ):
         if key in result:
-            summary[key] = sanitize_for_audit(result[key])
+            summary[key] = sanitize_for_audit(result[key], sensitive_terms=sensitive_terms)
     if isinstance(result.get("projection_report"), dict):
         projection = result["projection_report"]
         summary["projection_report"] = sanitize_for_audit(
@@ -1641,11 +1840,16 @@ def summarize_result_for_audit(result: dict[str, Any]) -> dict[str, Any]:
                 "global_dirty": projection.get("global_dirty"),
                 "global_failed": projection.get("global_failed"),
                 "refreshed": projection.get("refreshed"),
-            }
+            },
+            sensitive_terms=sensitive_terms,
         )
     for text_key in ("text", "markdown"):
         if text_key in result and result[text_key]:
-            summary[f"{text_key}_preview"] = sanitize_for_audit(str(result[text_key]), max_text=600)
+            summary[f"{text_key}_preview"] = sanitize_for_audit(
+                str(result[text_key]),
+                max_text=600,
+                sensitive_terms=sensitive_terms,
+            )
     if "context" in result and isinstance(result["context"], dict):
         context = result["context"]
         summary["context"] = sanitize_for_audit(
@@ -1653,7 +1857,8 @@ def summarize_result_for_audit(result: dict[str, Any]) -> dict[str, Any]:
                 "request": context.get("request"),
                 "budget": context.get("budget"),
                 "completeness": context.get("completeness"),
-            }
+            },
+            sensitive_terms=sensitive_terms,
         )
     return summary
 

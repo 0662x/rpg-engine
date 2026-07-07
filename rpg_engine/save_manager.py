@@ -68,6 +68,14 @@ class SaveManager:
         registry = self.read_registry()
         campaigns = [dict(item) for item in registry.get("campaigns", []) if isinstance(item, dict)]
         if refresh:
+            path_errors = registry_record_path_errors(self.root, campaigns, "campaign")
+            if path_errors:
+                return {
+                    "ok": False,
+                    "campaigns": campaigns,
+                    "errors": path_errors,
+                    "error_details": issues_from_messages(path_errors, default_code="SAVE_MANAGER_ERROR"),
+                }
             changed = False
             for record in campaigns:
                 try:
@@ -125,6 +133,15 @@ class SaveManager:
             and (campaign_id is None or str(item.get("campaign_id", "")) == campaign_id)
         ]
         if refresh:
+            path_errors = registry_record_path_errors(self.root, saves, "save")
+            if path_errors:
+                return {
+                    "ok": False,
+                    "active_save_id": registry.get("active_save_id"),
+                    "saves": filtered,
+                    "errors": path_errors,
+                    "error_details": issues_from_messages(path_errors, default_code="SAVE_MANAGER_ERROR"),
+                }
             refreshed: list[dict[str, Any]] = []
             changed = False
             for record in saves:
@@ -168,10 +185,25 @@ class SaveManager:
                 "error_details": issues_from_messages([message], default_code="SAVE_MANAGER_ERROR"),
             }
         if refresh:
+            path_errors = registry_record_path_errors(self.root, registry.get("saves", []), "save")
+            if path_errors:
+                return {
+                    "ok": False,
+                    "active_save_id": active_save_id,
+                    "save": None,
+                    "errors": path_errors,
+                    "error_details": issues_from_messages(path_errors, default_code="SAVE_MANAGER_ERROR"),
+                }
             record = self.refresh_save_record(dict(record))
             registry["saves"] = replace_record(registry.get("saves", []), record)
             self.write_registry(registry)
-        return {"ok": True, "active_save_id": active_save_id, "save": record, "errors": []}
+        return {
+            "ok": True,
+            "active_save_id": active_save_id,
+            "save": record,
+            "current_save_authority": current_save_authority(refresh=refresh),
+            "errors": [],
+        }
 
     def switch_save(self, save_id: str, *, refresh: bool = True) -> dict[str, Any]:
         registry = self.read_registry()
@@ -181,6 +213,9 @@ class SaveManager:
         if bool(record.get("archived")):
             raise SaveManagerError(f"save is archived: {save_id}")
         record = dict(record)
+        path_errors = registry_record_path_errors(self.root, registry.get("saves", []), "save")
+        if path_errors:
+            raise SaveManagerError("; ".join(path_errors))
         if refresh:
             record = self.refresh_save_record(record)
             registry["saves"] = replace_record(registry.get("saves", []), record)
@@ -285,9 +320,21 @@ class SaveManager:
         starter_save: str | None = None,
         label: str | None = None,
     ) -> dict[str, Any]:
+        campaign_path = normalize_optional_relative(campaign, "campaign")
+        starter_path = normalize_optional_relative(starter_save, "starter_save")
         current = self.current_save(refresh=True)
         mode = "continued"
         if not current["ok"]:
+            if current.get("active_save_id"):
+                return {
+                    "ok": False,
+                    "mode": "blocked",
+                    "save": None,
+                    "scene": None,
+                    "onboarding_text": "",
+                    "errors": current["errors"],
+                    "error_details": current.get("error_details", []),
+                }
             if not create_if_missing:
                 return {
                     "ok": False,
@@ -299,9 +346,9 @@ class SaveManager:
                     "error_details": current.get("error_details", []),
                 }
             created = self.create_save(
-                campaign=campaign,
+                campaign=campaign_path,
                 label=label,
-                starter_save=starter_save,
+                starter_save=starter_path,
                 activate=True,
             )
             current = {"ok": created["ok"], "save": created["save"], "errors": created.get("errors", [])}
@@ -627,6 +674,10 @@ class SaveManager:
             if bool(record.get("archived")):
                 raise SaveManagerError(f"save is archived: {record.get('id') or relative_path}")
             if refresh:
+                path_errors = registry_record_path_errors(self.root, [record], "save")
+                if path_errors:
+                    raise SaveManagerError("; ".join(path_errors))
+            if refresh:
                 record = self.refresh_save_record(record)
                 registry["saves"] = replace_record(registry.get("saves", []), record)
                 self.write_registry(registry)
@@ -843,6 +894,44 @@ def normalize_registry(registry: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def current_save_authority(*, refresh: bool) -> dict[str, Any]:
+    return {
+        "record_source": "workspace_registry",
+        "summary_source": "data/game.sqlite" if refresh else "registry_cache",
+        "summary_authoritative": bool(refresh),
+        "fact_authority": "data/game.sqlite",
+    }
+
+
+def registry_record_path_errors(root: Path, records: list[dict[str, Any]], record_kind: str) -> list[str]:
+    errors: list[str] = []
+    for record in records:
+        record_id = str(record.get("id") or "<unknown>")
+        for field, required in registry_path_fields(record_kind):
+            try:
+                validate_registry_record_relative(root, record.get(field), f"{record_kind}.{field}", required=required)
+            except SaveManagerError as exc:
+                errors.append(f"{record_kind} registry record {record_id} {field}: {exc}")
+    return errors
+
+
+def registry_path_fields(record_kind: str) -> tuple[tuple[str, bool], ...]:
+    if record_kind == "campaign":
+        return (("path", True), ("starter_save_path", False))
+    if record_kind == "save":
+        return (("path", True), ("campaign_path", False))
+    return (("path", True),)
+
+
+def validate_registry_record_relative(root: Path, value: Any, label: str, *, required: bool) -> str | None:
+    relative = normalize_required_relative(value, label) if required else normalize_optional_relative(value, label)
+    if relative is None:
+        return None
+    candidate = (root / relative).resolve()
+    ensure_under_root(root, candidate, label)
+    return relative
+
+
 @contextmanager
 def registry_lock(path: Path, *, timeout: float = 10.0) -> Iterator[None]:
     deadline = time.monotonic() + timeout
@@ -868,9 +957,17 @@ def resolve_registry_path(root: Path, registry_path: str | Path | None) -> Path:
     if registry_path is None:
         candidate = root / DEFAULT_REGISTRY_RELATIVE
     else:
-        candidate = Path(registry_path).expanduser()
-        if not candidate.is_absolute():
-            candidate = root / candidate
+        raw = str(registry_path).strip()
+        if not raw:
+            raise SaveManagerError("registry_path is required")
+        if "\\" in raw:
+            raise SaveManagerError("registry_path must not contain backslashes")
+        candidate = Path(raw).expanduser()
+        if candidate.is_absolute():
+            raise SaveManagerError("registry_path must be relative to the workspace root")
+        if candidate == Path("."):
+            raise SaveManagerError("registry_path must be a file path")
+        candidate = root / candidate
     candidate = candidate.resolve()
     ensure_under_root(root, candidate, "registry_path")
     return candidate
@@ -889,6 +986,8 @@ def normalize_required_relative(value: Any, label: str) -> str:
     raw = str(value).strip()
     if not raw:
         raise SaveManagerError(f"{label} is required")
+    if "\\" in raw:
+        raise SaveManagerError(f"{label} must not contain backslashes")
     path = Path(raw)
     if path.is_absolute():
         raise SaveManagerError(f"{label} must be relative to the workspace root")

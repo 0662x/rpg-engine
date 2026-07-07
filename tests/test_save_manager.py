@@ -243,6 +243,121 @@ class SaveManagerTests(unittest.TestCase):
             )
             self.assertFalse(manager.pending_action_path().exists())
 
+    def test_registry_refresh_and_pending_state_do_not_override_sqlite_facts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            campaign_dir = root / "campaigns" / "official"
+            shutil.copytree(OFFICIAL_EXAMPLE, campaign_dir)
+            manager = SaveManager(root, default_campaign="campaigns/official")
+            started = manager.start_or_continue(campaign="campaigns/official")
+            save_path = root / started["save"]["path"]
+            before = authoritative_save_snapshot(save_path)
+
+            registry = manager.read_registry()
+            save_record = dict(registry["saves"][0])
+            save_record.update(
+                {
+                    "current_turn_id": "turn:registry-only",
+                    "current_location_id": "loc:registry-only",
+                    "current_game_day": "999",
+                    "current_time_block": "第 999 天",
+                    "summary": "registry-only summary",
+                }
+            )
+            registry["saves"] = [save_record]
+            manager.write_registry(registry)
+            manager.write_pending_action(
+                {
+                    "save_id": started["save"]["id"],
+                    "session_id": "session:pending-only",
+                    "delta": {"turn_id": "turn:pending-only"},
+                    "turn_proposal": {"delta": {"turn_id": "turn:pending-only"}},
+                }
+            )
+
+            stale_registry = manager.current_save(refresh=False)
+            refreshed = manager.current_save(refresh=True)
+
+            self.assertEqual(stale_registry["save"]["current_turn_id"], "turn:registry-only")
+            self.assertEqual(stale_registry["current_save_authority"]["summary_source"], "registry_cache")
+            self.assertFalse(stale_registry["current_save_authority"]["summary_authoritative"])
+            self.assertEqual(refreshed["current_save_authority"]["summary_source"], "data/game.sqlite")
+            self.assertTrue(refreshed["current_save_authority"]["summary_authoritative"])
+            self.assertEqual(refreshed["save"]["current_turn_id"], before["current_turn_id"])
+            self.assertEqual(refreshed["save"]["current_location_id"], before["current_location_id"])
+            self.assertEqual(authoritative_save_snapshot(save_path), before)
+            pending = manager.read_pending_action()
+            self.assertIsNotNone(pending)
+            self.assertEqual(pending["delta"]["turn_id"], "turn:pending-only")
+
+    def test_start_or_continue_rejects_explicit_bad_paths_even_with_active_save(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            campaign_dir = root / "campaigns" / "official"
+            shutil.copytree(OFFICIAL_EXAMPLE, campaign_dir)
+            manager = SaveManager(root, default_campaign="campaigns/official")
+            started = manager.start_or_continue(campaign="campaigns/official")
+            save_path = root / started["save"]["path"]
+            before_registry = (root / ".aigm" / "save-registry.json").read_text(encoding="utf-8")
+            before_save = authoritative_save_snapshot(save_path)
+
+            for kwargs, message in [
+                ({"campaign": "../outside"}, "must not contain"),
+                ({"campaign": "campaigns\\official"}, "must not contain backslashes"),
+                ({"starter_save": "/tmp/starter"}, "must be relative"),
+                ({"starter_save": "starters\\bad"}, "must not contain backslashes"),
+            ]:
+                with self.subTest(kwargs=kwargs):
+                    with self.assertRaisesRegex(SaveManagerError, message):
+                        manager.start_or_continue(**kwargs)
+                    self.assertEqual((root / ".aigm" / "save-registry.json").read_text(encoding="utf-8"), before_registry)
+                    self.assertEqual(authoritative_save_snapshot(save_path), before_save)
+                    self.assertFalse(manager.pending_action_path().exists())
+
+    def test_start_or_continue_rejects_invalid_active_save_path_without_creating_save(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            campaign_dir = root / "campaigns" / "official"
+            shutil.copytree(OFFICIAL_EXAMPLE, campaign_dir)
+            manager = SaveManager(root, default_campaign="campaigns/official")
+            manager.start_or_continue(campaign="campaigns/official")
+
+            registry = manager.read_registry()
+            registry["saves"][0]["path"] = "/tmp/outside"
+            manager.write_registry(registry)
+            before_registry = manager.registry_path.read_text(encoding="utf-8")
+
+            result = manager.start_or_continue()
+
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["mode"], "blocked")
+            self.assertIn("must be relative", "\n".join(result["errors"]))
+            self.assertEqual(manager.registry_path.read_text(encoding="utf-8"), before_registry)
+            self.assertEqual(len(manager.read_registry()["saves"]), 1)
+            self.assertFalse(manager.pending_action_path().exists())
+
+    def test_switch_save_rejects_invalid_registry_path_without_writing_registry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            campaign_dir = root / "campaigns" / "official"
+            shutil.copytree(OFFICIAL_EXAMPLE, campaign_dir)
+            manager = SaveManager(root, default_campaign="campaigns/official")
+            first = manager.create_save(campaign="campaigns/official")
+            second = manager.create_save(campaign="campaigns/official", activate=False)
+
+            registry = manager.read_registry()
+            for record in registry["saves"]:
+                if record["id"] == second["save"]["id"]:
+                    record["path"] = "../outside"
+            manager.write_registry(registry)
+            before_registry = manager.registry_path.read_text(encoding="utf-8")
+
+            with self.assertRaisesRegex(SaveManagerError, "must not contain"):
+                manager.switch_save(second["save"]["id"])
+
+            self.assertEqual(manager.registry_path.read_text(encoding="utf-8"), before_registry)
+            self.assertEqual(manager.current_save(refresh=False)["active_save_id"], first["save"]["id"])
+
     def test_player_turn_pending_action_payload_binds_confirmation_identity_and_unaccepted_proposal(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

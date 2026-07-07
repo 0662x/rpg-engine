@@ -337,6 +337,8 @@ Platform sidecar 对齐：
 - `platform confirm` 转发到 `player_confirm`。
 - platform binding 会校验 actor identity，避免同一平台会话中的另一位 actor 确认当前玩家的 pending action。
 - sidecar 不接收 external candidate、internal candidate、delta、proposal 或 commit approval。
+- sidecar audit 只记录脱敏 request/result evidence、surface category、status 和 identity hash；
+  audit 写入失败不能改变 gate、prewarm、pending/confirm 或事实提交结果。
 
 ## Future Coordinator Boundary
 

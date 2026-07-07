@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 import json
+import re
 import sqlite3
+import sys
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -42,6 +46,11 @@ from .platform_prewarm import (
 from .save_manager import SaveManager
 from .runtime import GMRuntime
 
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - non-POSIX fallback keeps in-process lock behavior
+    fcntl = None
+
 
 DEFAULT_PLATFORM_SESSION_TTL_SECONDS = 1800
 DEFAULT_PLATFORM_PLAYER_PENDING_WAIT_MS = 200
@@ -60,6 +69,7 @@ class PlatformSidecarConfig:
     player_intent_fallback_backend: str = "off"
     active_ttl_seconds: int = DEFAULT_PLATFORM_SESSION_TTL_SECONDS
     preflight_pending_wait_ms: int = DEFAULT_PLATFORM_PLAYER_PENDING_WAIT_MS
+    audit_log: Path | None = None
 
     @classmethod
     def from_prewarm_config(
@@ -69,6 +79,7 @@ class PlatformSidecarConfig:
         player_intent_ai: str = "consensus",
         active_ttl_seconds: int = DEFAULT_PLATFORM_SESSION_TTL_SECONDS,
         preflight_pending_wait_ms: int = DEFAULT_PLATFORM_PLAYER_PENDING_WAIT_MS,
+        audit_log: str | Path | None = None,
     ) -> "PlatformSidecarConfig":
         return cls(
             prewarm=prewarm,
@@ -82,6 +93,7 @@ class PlatformSidecarConfig:
             player_intent_fallback_backend=prewarm.intent_fallback_backend,
             active_ttl_seconds=active_ttl_seconds,
             preflight_pending_wait_ms=preflight_pending_wait_ms,
+            audit_log=Path(audit_log).expanduser() if audit_log is not None else None,
         )
 
 
@@ -206,6 +218,9 @@ class PlatformSidecar:
             worker_count=self.config.prewarm.worker_count,
         )
         self.metrics = PlatformSidecarMetrics()
+        self.audit_log = resolve_platform_audit_log_path(self.root, self.config.audit_log)
+        self._entry_lock = threading.Lock()
+        self._start_message_reservations: set[tuple[str, str, str]] = set()
 
     def start(self) -> None:
         self.dispatcher.start()
@@ -214,10 +229,29 @@ class PlatformSidecar:
         self.dispatcher.stop()
 
     def handle_message_event(self, event: PlatformMessage | dict[str, Any]) -> PlatformPrewarmResult:
-        self.expire_stale_bindings()
+        self.expire_stale_bindings(audit=False)
         message = ensure_platform_message(event)
+        started = time.monotonic()
         self.metrics.record_message_event()
-        return self.prewarm_service.handle_message(message)
+        try:
+            result = self.prewarm_service.handle_message(message)
+        except Exception as exc:
+            self._write_platform_audit_record(
+                "PlatformSidecar.handle_message_event",
+                message,
+                platform_exception_result(exc),
+                duration_ms=elapsed_ms(started),
+                surface_category="platform prewarm",
+            )
+            raise
+        self._write_platform_audit_record(
+            "PlatformSidecar.handle_message_event",
+            message,
+            result.to_dict(),
+            duration_ms=elapsed_ms(started),
+            surface_category="platform prewarm",
+        )
+        return result
 
     def drain_prewarm(self, *, limit: int | None = None) -> list[PlatformPrewarmWorkerResult]:
         worker = self.dispatcher.worker
@@ -232,52 +266,128 @@ class PlatformSidecar:
         starter_save: str | None = None,
         label: str | None = None,
     ) -> PlatformActionResult:
-        self.expire_stale_bindings()
+        self.expire_stale_bindings(audit=False)
         message = ensure_platform_message(event)
         started = time.monotonic()
+        gate = platform_start_gate(message)
+        start_key = platform_start_reservation_key(message)
+        start_placeholder = False
+        if gate.allow:
+            with self._entry_lock, platform_entry_file_lock(self.root):
+                gate, start_placeholder = self._reserve_platform_start_message(message, gate, start_key=start_key)
+        if not gate.allow:
+            result = platform_gate_rejection(gate)
+            duration_ms = elapsed_ms(started)
+            self.metrics.record_player_result(result, duration_ms=duration_ms, kind="start")
+            action_result = PlatformActionResult(
+                result=result,
+                prewarm=platform_gate_prewarm_result(gate),
+                binding=None,
+                metrics=self.metrics_snapshot(audit=False),
+            )
+            self._write_platform_audit_record(
+                "PlatformSidecar.start_or_continue_from_message",
+                message,
+                action_result.to_dict(),
+                duration_ms=duration_ms,
+            )
+            return action_result
         manager = SaveManager(self.root)
-        result = manager.start_or_continue(
-            campaign=campaign,
-            user_text=message.text or "开始游戏",
-            create_if_missing=create_if_missing,
-            starter_save=starter_save,
-            label=label,
-        )
+        try:
+            result = manager.start_or_continue(
+                campaign=campaign,
+                user_text=message.text or "开始游戏",
+                create_if_missing=create_if_missing,
+                starter_save=starter_save,
+                label=label,
+            )
+        except Exception as exc:
+            self._write_platform_audit_record(
+                "PlatformSidecar.start_or_continue_from_message",
+                message,
+                platform_exception_result(exc),
+                duration_ms=elapsed_ms(started),
+            )
+            with self._entry_lock:
+                self._start_message_reservations.discard(start_key)
+            if start_placeholder:
+                with platform_entry_file_lock(self.root):
+                    self._clear_platform_start_reservation(message)
+            raise
         duration_ms = elapsed_ms(started)
         self.metrics.record_player_result(result, duration_ms=duration_ms, kind="start")
         binding = self.activate_from_result(message, result)
-        return PlatformActionResult(
+        with self._entry_lock:
+            self._start_message_reservations.discard(start_key)
+        if binding is None and start_placeholder:
+            with platform_entry_file_lock(self.root):
+                self._clear_platform_start_reservation(message)
+        action_result = PlatformActionResult(
             result=result,
             binding=binding_to_public_dict(binding),
-            metrics=self.metrics_snapshot(),
+            metrics=self.metrics_snapshot(audit=False),
         )
+        self._write_platform_audit_record(
+            "PlatformSidecar.start_or_continue_from_message",
+            message,
+            action_result.to_dict(),
+            duration_ms=duration_ms,
+        )
+        return action_result
 
     def player_act_from_message(self, event: PlatformMessage | dict[str, Any]) -> PlatformActionResult:
-        self.expire_stale_bindings()
+        self.expire_stale_bindings(audit=False)
         message = ensure_platform_message(event)
         started = time.monotonic()
-        gate, binding = self.gate_player_entry(message, kind="act")
+        manager: SaveManager | None = None
+        pending_conflict = ""
+        with self._entry_lock, platform_entry_file_lock(self.root):
+            gate, binding = self.gate_player_entry(message, kind="act")
+            if gate.allow and binding is not None:
+                manager = SaveManager(self.root)
+                pending_conflict = platform_pending_conflict(manager, binding, message)
+            if gate.allow and binding is not None and not pending_conflict:
+                binding = self._reserve_platform_message(binding, message, kind="act")
         if not gate.allow or binding is None:
             result = platform_gate_rejection(gate)
-            self.metrics.record_player_result(result, duration_ms=elapsed_ms(started), kind="act")
-            return PlatformActionResult(
+            duration_ms = elapsed_ms(started)
+            self.metrics.record_player_result(result, duration_ms=duration_ms, kind="act")
+            action_result = PlatformActionResult(
                 result=result,
                 prewarm=platform_gate_prewarm_result(gate),
                 binding=binding_to_public_dict(binding),
-                metrics=self.metrics_snapshot(),
+                metrics=self.metrics_snapshot(audit=False),
             )
-        manager = SaveManager(self.root)
-        pending_conflict = platform_pending_conflict(manager, binding, message)
+            self._write_platform_audit_record(
+                "PlatformSidecar.player_act_from_message",
+                message,
+                action_result.to_dict(),
+                duration_ms=duration_ms,
+            )
+            return action_result
         if pending_conflict:
             result = platform_gate_rejection(gate_with_reason(gate, pending_conflict))
-            self.metrics.record_player_result(result, duration_ms=elapsed_ms(started), kind="act")
-            return PlatformActionResult(
+            duration_ms = elapsed_ms(started)
+            self.metrics.record_player_result(result, duration_ms=duration_ms, kind="act")
+            action_result = PlatformActionResult(
                 result=result,
                 prewarm=platform_gate_prewarm_result(gate_with_reason(gate, pending_conflict)),
                 binding=binding_to_public_dict(binding),
-                metrics=self.metrics_snapshot(),
+                metrics=self.metrics_snapshot(audit=False),
             )
-        prewarm = self.prewarm_service.handle_message(message)
+            self._write_platform_audit_record(
+                "PlatformSidecar.player_act_from_message",
+                message,
+                action_result.to_dict(),
+                duration_ms=duration_ms,
+            )
+            return action_result
+        try:
+            prewarm = self.prewarm_service.handle_message(message)
+        except Exception:
+            prewarm = platform_advisory_prewarm_error(message, binding)
+        if manager is None:
+            manager = SaveManager(self.root)
         try:
             result = manager.player_turn(
                 user_text=message.text,
@@ -302,26 +412,44 @@ class PlatformSidecar:
         duration_ms = elapsed_ms(started)
         self.metrics.record_player_result(result, duration_ms=duration_ms, kind="act")
         binding = self.activate_from_result(message, result, last_action_message_id=message.message_id)
-        return PlatformActionResult(
+        action_result = PlatformActionResult(
             result=result,
             prewarm=prewarm.to_dict(),
             binding=binding_to_public_dict(binding),
-            metrics=self.metrics_snapshot(),
+            metrics=self.metrics_snapshot(audit=False),
         )
+        self._write_platform_audit_record(
+            "PlatformSidecar.player_act_from_message",
+            message,
+            action_result.to_dict(),
+            duration_ms=duration_ms,
+        )
+        return action_result
 
     def player_confirm_from_message(self, event: PlatformMessage | dict[str, Any], *, session_id: str) -> PlatformActionResult:
-        self.expire_stale_bindings()
+        self.expire_stale_bindings(audit=False)
         message = ensure_platform_message(event)
         started = time.monotonic()
-        gate, binding = self.gate_player_entry(message, kind="confirm")
+        with self._entry_lock, platform_entry_file_lock(self.root):
+            gate, binding = self.gate_player_entry(message, kind="confirm")
+            if gate.allow and binding is not None:
+                binding = self._reserve_platform_message(binding, message, kind="confirm")
         if not gate.allow or binding is None:
             result = platform_gate_rejection(gate)
-            self.metrics.record_player_result(result, duration_ms=elapsed_ms(started), kind="confirm")
-            return PlatformActionResult(
+            duration_ms = elapsed_ms(started)
+            self.metrics.record_player_result(result, duration_ms=duration_ms, kind="confirm")
+            action_result = PlatformActionResult(
                 result=result,
                 binding=binding_to_public_dict(binding),
-                metrics=self.metrics_snapshot(),
+                metrics=self.metrics_snapshot(audit=False),
             )
+            self._write_platform_audit_record(
+                "PlatformSidecar.player_confirm_from_message",
+                message,
+                action_result.to_dict(),
+                duration_ms=duration_ms,
+            )
+            return action_result
         manager = SaveManager(self.root)
         try:
             result = manager.player_confirm(
@@ -336,11 +464,18 @@ class PlatformSidecar:
         duration_ms = elapsed_ms(started)
         self.metrics.record_player_result(result, duration_ms=duration_ms, kind="confirm")
         binding = self.activate_from_result(message, result, last_confirm_message_id=message.message_id)
-        return PlatformActionResult(
+        action_result = PlatformActionResult(
             result=result,
             binding=binding_to_public_dict(binding),
-            metrics=self.metrics_snapshot(),
+            metrics=self.metrics_snapshot(audit=False),
         )
+        self._write_platform_audit_record(
+            "PlatformSidecar.player_confirm_from_message",
+            message,
+            action_result.to_dict(),
+            duration_ms=duration_ms,
+        )
+        return action_result
 
     def gate_player_entry(
         self,
@@ -353,10 +488,105 @@ class PlatformSidecar:
             binding = self.binding_store.get(platform=message.platform, session_key=message.session_key)
         return platform_entry_gate(binding, message, kind=kind), binding
 
+    def _reserve_platform_start_message(
+        self,
+        message: PlatformMessage,
+        gate: PlatformEntryGateResult,
+        *,
+        start_key: tuple[str, str, str],
+    ) -> tuple[PlatformEntryGateResult, bool]:
+        existing = self.binding_store.get(platform=message.platform, session_key=message.session_key)
+        if existing is not None and clean(existing.last_message_id) == clean(message.message_id):
+            return gate_with_reason(gate, "duplicate_start_message"), False
+        if existing is not None and not existing.active_save and clean(existing.last_message_id):
+            return gate_with_reason(gate, "start_in_progress"), False
+        if start_key in self._start_message_reservations:
+            return gate_with_reason(gate, "duplicate_start_message"), False
+        self._start_message_reservations.add(start_key)
+        if existing is None:
+            self.binding_store.upsert(
+                GameSessionBinding(
+                    platform=clean(message.platform),
+                    session_key_hash=hash_identity(message.session_key),
+                    active_save="",
+                    state=INACTIVE,
+                    active_until="",
+                    user_id_hash=hash_identity(message.actor_id) if clean(message.actor_id) else "",
+                    last_message_id=clean(message.message_id),
+                    updated_at=utc_now_compat(),
+                )
+            )
+            return gate, True
+        self.binding_store.upsert(
+            GameSessionBinding(
+                platform=existing.platform,
+                session_key_hash=existing.session_key_hash,
+                active_save=existing.active_save,
+                state=existing.state,
+                active_until=existing.active_until,
+                user_id_hash=existing.user_id_hash,
+                last_message_id=clean(message.message_id),
+                last_action_message_id=existing.last_action_message_id,
+                last_confirm_message_id=existing.last_confirm_message_id,
+                clarification_id=existing.clarification_id,
+                updated_at=utc_now_compat(),
+            )
+        )
+        return gate, False
+
+    def _clear_platform_start_reservation(self, message: PlatformMessage) -> None:
+        session_hash = hash_identity(message.session_key)
+        message_id = clean(message.message_id)
+        state = self.binding_store.read_state()
+        bindings = []
+        for item in state.get("bindings", []):
+            if not isinstance(item, dict):
+                continue
+            if (
+                clean(item.get("platform")) == clean(message.platform)
+                and clean(item.get("session_key_hash")) == session_hash
+                and not clean(item.get("active_save"))
+                and clean(item.get("last_message_id")) == message_id
+            ):
+                continue
+            bindings.append(item)
+        state["bindings"] = bindings
+        self.binding_store.write_state(state)
+
+    def _reserve_platform_message(
+        self,
+        binding: GameSessionBinding,
+        message: PlatformMessage,
+        *,
+        kind: str,
+    ) -> GameSessionBinding:
+        reserved = GameSessionBinding(
+            platform=binding.platform,
+            session_key_hash=binding.session_key_hash,
+            active_save=binding.active_save,
+            state=binding.state,
+            active_until=binding.active_until,
+            user_id_hash=binding.user_id_hash,
+            last_message_id=message.message_id,
+            last_action_message_id=message.message_id if kind == "act" else binding.last_action_message_id,
+            last_confirm_message_id=message.message_id if kind == "confirm" else binding.last_confirm_message_id,
+            clarification_id=binding.clarification_id,
+            updated_at=utc_now_compat(),
+        )
+        self.binding_store.upsert(reserved)
+        return reserved
+
     def deactivate_from_message(self, event: PlatformMessage | dict[str, Any]) -> dict[str, Any] | None:
+        started = time.monotonic()
         message = ensure_platform_message(event)
         existing = self.binding_store.get(platform=message.platform, session_key=message.session_key)
         if existing is None:
+            self._write_platform_audit_record(
+                "PlatformSidecar.deactivate_from_message",
+                message,
+                {"ok": False, "status": "not_found"},
+                duration_ms=elapsed_ms(started),
+            )
             return None
         inactive = GameSessionBinding(
             platform=existing.platform,
@@ -365,14 +595,21 @@ class PlatformSidecar:
             state=INACTIVE,
             active_until="",
             user_id_hash=existing.user_id_hash,
-                last_message_id=existing.last_message_id,
-                last_action_message_id=existing.last_action_message_id,
-                last_confirm_message_id=existing.last_confirm_message_id,
-                clarification_id=existing.clarification_id,
-                updated_at=utc_now_compat(),
-            )
+            last_message_id=existing.last_message_id,
+            last_action_message_id=existing.last_action_message_id,
+            last_confirm_message_id=existing.last_confirm_message_id,
+            clarification_id=existing.clarification_id,
+            updated_at=utc_now_compat(),
+        )
         self.binding_store.upsert(inactive)
-        return binding_to_public_dict(inactive)
+        result = binding_to_public_dict(inactive)
+        self._write_platform_audit_record(
+            "PlatformSidecar.deactivate_from_message",
+            message,
+            {"ok": True, "binding": result},
+            duration_ms=elapsed_ms(started),
+        )
+        return result
 
     def activate_from_result(
         self,
@@ -409,7 +646,8 @@ class PlatformSidecar:
             clarification_id=clarification_id,
         )
 
-    def expire_stale_bindings(self, *, now: datetime | None = None) -> int:
+    def expire_stale_bindings(self, *, now: datetime | None = None, audit: bool = True) -> int:
+        started = time.monotonic()
         expired = 0
         for binding in self.binding_store.list_bindings():
             if binding.state == ACTIVE_GAME and is_expired(binding.active_until, now=now):
@@ -429,14 +667,22 @@ class PlatformSidecar:
                     )
                 )
                 expired += 1
+        if audit:
+            self._write_platform_audit_record(
+                "PlatformSidecar.expire_stale_bindings",
+                None,
+                {"ok": True, "expired": expired},
+                duration_ms=elapsed_ms(started),
+            )
         return expired
 
-    def metrics_snapshot(self) -> dict[str, Any]:
+    def metrics_snapshot(self, *, audit: bool = True) -> dict[str, Any]:
+        started = time.monotonic()
         bindings = self.binding_store.list_bindings()
         binding_counts: dict[str, int] = {}
         for binding in bindings:
             binding_counts[binding.state] = binding_counts.get(binding.state, 0) + 1
-        return {
+        snapshot = {
             "sidecar": self.metrics.snapshot(),
             "prewarm": self.prewarm_metrics.snapshot(queue_depth=self.prewarm_service.queue.qsize()),
             "bindings": {
@@ -455,12 +701,346 @@ class PlatformSidecar:
                 "preflight_pending_wait_ms": self.config.preflight_pending_wait_ms,
             },
         }
+        if audit:
+            self._write_platform_audit_record(
+                "PlatformSidecar.metrics_snapshot",
+                None,
+                {"ok": True, "metrics": snapshot},
+                duration_ms=elapsed_ms(started),
+            )
+        return snapshot
+
+    def _write_platform_audit_record(
+        self,
+        operation: str,
+        message: PlatformMessage | None,
+        result: dict[str, Any],
+        *,
+        duration_ms: int,
+        surface_category: str = "platform sidecar",
+    ) -> None:
+        path = self.audit_log
+        if path is None:
+            return
+        record = {
+            "created_at": utc_now_compat(),
+            "operation": operation,
+            "surface_category": surface_category,
+            "duration_ms": duration_ms,
+            "status": platform_audit_status(result),
+            "identity": platform_audit_identity(message),
+            "request": platform_audit_request_summary(message),
+            "result": platform_audit_result_summary(result, message=message),
+        }
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+        except Exception as exc:  # pragma: no cover - audit must never break platform calls
+            print(f"aigm-kernel platform audit write failed: {exc}", file=sys.stderr)
 
 
 def ensure_platform_message(event: PlatformMessage | dict[str, Any]) -> PlatformMessage:
     if isinstance(event, PlatformMessage):
         return event
     return platform_message_from_event(event)
+
+
+def resolve_platform_audit_log_path(root: Path, audit_log: str | Path | None) -> Path | None:
+    if audit_log is None:
+        return None
+    path = Path(audit_log).expanduser()
+    if not path.is_absolute():
+        path = root / path
+    return path.resolve()
+
+
+def platform_audit_identity(message: PlatformMessage | None) -> dict[str, Any]:
+    if message is None:
+        return {}
+    identity: dict[str, Any] = {
+        "platform": clean(message.platform),
+        "message_id": clean(message.message_id),
+    }
+    if clean(message.session_key):
+        identity["session_key_hash"] = f"sha256:{hash_identity(message.session_key)}"
+    if clean(message.actor_id):
+        identity["actor_id_hash"] = f"sha256:{hash_identity(message.actor_id)}"
+    return {key: value for key, value in identity.items() if value}
+
+
+def platform_audit_request_summary(message: PlatformMessage | None) -> dict[str, Any]:
+    if message is None:
+        return {}
+    summary = dict(platform_audit_identity(message))
+    summary.update(
+        {
+            "chat_type": clean(message.chat_type),
+            "message_type": clean(message.message_type),
+            "text_hash": hash_text(message.text),
+            "text_preview": sanitize_platform_audit_text(message.text, max_text=180),
+            "is_approval": bool(message.is_approval),
+        }
+    )
+    return {key: value for key, value in summary.items() if value not in {"", None}}
+
+
+def platform_audit_result_summary(result: dict[str, Any], *, message: PlatformMessage | None = None) -> dict[str, Any]:
+    summary: dict[str, Any] = {}
+    sensitive_terms = platform_audit_sensitive_terms(message)
+    for key in (
+        "ok",
+        "status",
+        "action",
+        "ready_to_confirm",
+        "session_id",
+        "saved",
+        "allow_platform",
+        "enqueued",
+        "dropped",
+        "reason",
+        "message_id",
+        "active_save",
+        "queue_depth",
+        "decision",
+        "expired",
+        "binding",
+        "metrics",
+        "errors",
+        "warnings",
+        "platform_gate",
+        "platform_prewarm",
+        "platform_binding",
+    ):
+        if key in result:
+            summary[key] = sanitize_platform_audit_value(result[key], sensitive_terms=sensitive_terms)
+    redacted = count_redacted_platform_payloads(result)
+    if redacted:
+        summary["redacted_sensitive_field_count"] = redacted
+    return summary
+
+
+def platform_audit_status(result: dict[str, Any]) -> str:
+    status = clean(result.get("status"))
+    if status == "platform_rejected":
+        return "rejected"
+    if result.get("ok") is False or result.get("errors"):
+        return "error"
+    if result.get("ok") is True:
+        return "ok"
+    if result.get("dropped"):
+        return "dropped"
+    prewarm = result.get("platform_prewarm") if isinstance(result.get("platform_prewarm"), dict) else None
+    if prewarm and prewarm.get("dropped"):
+        return "dropped"
+    return "ok"
+
+
+def platform_exception_result(exc: Exception) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "status": "platform_error",
+        "errors": [str(exc) or exc.__class__.__name__],
+    }
+
+
+def platform_advisory_prewarm_error(message: PlatformMessage, binding: GameSessionBinding) -> PlatformPrewarmResult:
+    return PlatformPrewarmResult(
+        allow_platform=True,
+        enqueued=False,
+        dropped=True,
+        reason="platform_prewarm_error",
+        message_id=clean(message.message_id),
+        active_save=binding.active_save,
+        queue_depth=0,
+        decision={
+            "allow": True,
+            "reason": "platform_prewarm_error",
+            "kind": "act_advisory_prewarm",
+        },
+    )
+
+
+PLATFORM_AUDIT_SUMMARIZED_KEYS = {
+    "delta",
+    "delta_draft",
+    "turn_proposal",
+    "proposal",
+    "validation_report",
+    "projection_report",
+    "state_audit",
+    "check_errors",
+    "external_intent_candidate",
+    "internal_intent_candidate",
+}
+PLATFORM_AUDIT_REDACTED_KEYS = {
+    "private_reasoning",
+    "private_reasonings",
+    "hidden_fact",
+    "hidden_facts",
+    "gm_note",
+    "gm_notes",
+    "secret",
+    "secrets",
+}
+
+
+def sanitize_platform_audit_value(
+    value: Any,
+    *,
+    max_text: int = 600,
+    depth: int = 0,
+    sensitive_terms: tuple[str, ...] = (),
+) -> Any:
+    if depth > 6:
+        return "<max-depth>"
+    if value is None or isinstance(value, bool | int | float):
+        return value
+    if isinstance(value, str):
+        return sanitize_platform_audit_text(value, max_text=max_text, sensitive_terms=sensitive_terms)
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        sanitized: dict[str, Any] = {}
+        redacted = 0
+        for key, item in value.items():
+            normalized_key = str(key)
+            audit_key = normalize_platform_audit_key(normalized_key)
+            if audit_key == "session_key":
+                sanitized[normalized_key] = f"sha256:{hash_identity(str(item or ''))}" if str(item or "").strip() else ""
+            elif audit_key in {"actor_id", "user_id", "sender_id", "from_user_id"}:
+                sanitized[f"{normalized_key}_hash"] = (
+                    f"sha256:{hash_identity(str(item or ''))}" if str(item or "").strip() else ""
+                )
+            elif audit_key in PLATFORM_AUDIT_SUMMARIZED_KEYS or audit_key in PLATFORM_AUDIT_REDACTED_KEYS:
+                redacted += 1
+            else:
+                sanitized[normalized_key] = sanitize_platform_audit_value(
+                    item,
+                    max_text=max_text,
+                    depth=depth + 1,
+                    sensitive_terms=sensitive_terms,
+                )
+        if redacted:
+            sanitized["redacted_sensitive_field_count"] = redacted
+        return sanitized
+    if isinstance(value, (list, tuple)):
+        items = [
+            sanitize_platform_audit_value(
+                item,
+                max_text=max_text,
+                depth=depth + 1,
+                sensitive_terms=sensitive_terms,
+            )
+            for item in value[:30]
+        ]
+        if len(value) > 30:
+            items.append(f"<truncated {len(value) - 30} items>")
+        return items
+    return sanitize_platform_audit_text(str(value), max_text=max_text, sensitive_terms=sensitive_terms)
+
+
+def sanitize_platform_audit_text(value: str, *, max_text: int, sensitive_terms: tuple[str, ...] = ()) -> str:
+    text = str(value or "")
+    if audit_text_has_sensitive_marker(text):
+        return "<redacted sensitive audit text>"
+    for term in sorted((term for term in sensitive_terms if term), key=len, reverse=True):
+        text = text.replace(term, "<redacted>")
+    if len(text) <= max_text:
+        return text
+    return text[:max_text] + f"... <truncated {len(text) - max_text} chars>"
+
+
+def audit_text_has_sensitive_marker(text: str) -> bool:
+    normalized = normalize_platform_audit_key(text)
+    return any(marker in normalized for marker in PLATFORM_AUDIT_REDACTED_KEYS)
+
+
+def platform_audit_sensitive_terms(message: PlatformMessage | None) -> tuple[str, ...]:
+    if message is None:
+        return ()
+    terms = {
+        clean(message.session_key),
+        clean(message.actor_id),
+    }
+    return tuple(term for term in terms if term)
+
+
+def count_redacted_platform_payloads(value: Any, *, depth: int = 0) -> int:
+    if depth > 6:
+        return 0
+    if isinstance(value, dict):
+        total = 0
+        for key, item in value.items():
+            audit_key = normalize_platform_audit_key(str(key))
+            if audit_key in PLATFORM_AUDIT_SUMMARIZED_KEYS or audit_key in PLATFORM_AUDIT_REDACTED_KEYS:
+                total += 1
+            else:
+                total += count_redacted_platform_payloads(item, depth=depth + 1)
+        return total
+    if isinstance(value, (list, tuple)):
+        return sum(count_redacted_platform_payloads(item, depth=depth + 1) for item in value[:30])
+    return 0
+
+
+def normalize_platform_audit_key(value: str) -> str:
+    with_word_boundaries = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", value.strip())
+    return re.sub(r"[^0-9A-Za-z]+", "_", with_word_boundaries).strip("_").lower()
+
+
+def platform_start_reservation_key(message: PlatformMessage) -> tuple[str, str, str]:
+    return (
+        clean(message.platform),
+        hash_identity(message.session_key) if clean(message.session_key) else "",
+        clean(message.message_id),
+    )
+
+
+@contextmanager
+def platform_entry_file_lock(root: Path) -> Any:
+    lock_path = root / ".aigm" / "platform-sidecar-entry.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+", encoding="utf-8") as handle:
+        if fcntl is not None:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if fcntl is not None:
+                fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+def platform_start_gate(message: PlatformMessage) -> PlatformEntryGateResult:
+    platform = clean(message.platform)
+    session_key = clean(message.session_key)
+    message_id = clean(message.message_id)
+    session_hash = hash_identity(session_key) if session_key else ""
+
+    def decision(allow: bool, reason: str) -> PlatformEntryGateResult:
+        return PlatformEntryGateResult(
+            allow=allow,
+            reason=reason,
+            kind="start",
+            platform=platform,
+            session_key_hash=session_hash,
+            message_id=message_id,
+        )
+
+    if not platform:
+        return decision(False, "missing_platform")
+    if not session_key:
+        return decision(False, "missing_session_key")
+    if not message_id:
+        return decision(False, "missing_message_id")
+    if message.actor_is_bot or message.actor_is_self:
+        return decision(False, "actor_not_allowed")
+    if not clean(message.actor_id):
+        return decision(False, "missing_actor_id")
+    if clean(message.message_type) not in SUPPORTED_MESSAGE_TYPES:
+        return decision(False, "unsupported_message_type")
+    if clean(message.chat_type) not in SUPPORTED_CHAT_TYPES:
+        return decision(False, "unsupported_chat")
+    return decision(True, "allowed")
 
 
 def platform_entry_gate(
@@ -653,6 +1233,8 @@ def platform_gate_message(reason: str) -> str:
         "actor_mismatch": "这个平台会话已绑定到另一位玩家，当前消息不会推进游戏。\n",
         "command": "这条消息被识别为平台命令，不会推进游戏。\n",
         "empty_text": "没有可处理的玩家文本。\n",
+        "duplicate_start_message": "这条开始/继续消息已经处理过，已忽略重复请求。\n",
+        "start_in_progress": "这个平台会话正在开始或继续游戏，请稍后再试。\n",
         "duplicate_action_message": "这条平台消息已经处理过，已忽略重复行动。\n",
         "duplicate_confirm_message": "这条确认消息已经处理过，已忽略重复确认。\n",
         PENDING_APPROVAL: "正在等待你确认上一个行动，请先确认或重新开始。\n",

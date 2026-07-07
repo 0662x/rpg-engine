@@ -1,6 +1,10 @@
+---
+baseline_commit: a3187b5d4870fa6e5e0671331193e679d2c87c44
+---
+
 # Story 1.4: Save Fact Authority and Runtime State Boundary
 
-Status: ready-for-dev
+Status: done
 
 ## 用户故事
 
@@ -18,25 +22,37 @@ Status: ready-for-dev
 
 ## 任务 / 子任务
 
-- [ ] 建立 Save fact authority 合同证据。 (AC: 1, 2)
-  - [ ] 复用现有 `docs/save-and-campaign-packages.md`、`docs/data-models.md` 与 `inspect_save_package()` 语义；不要新增并行事实 registry 或新权威状态表。
-  - [ ] 若当前 `save inspect`/`inspect_save_package()` 输出缺少稳定可测的角色说明，优先补一个小而明确的 contract/role 字段，列明 `data/game.sqlite`、SQLite `events`、`data/events.jsonl`、snapshots、cards、memory、registry、pending、preflight cache、archive 的职责。
-  - [ ] 如果只需要测试和文档即可满足合同，不要扩大公共 API。
-- [ ] 防止派生产物覆盖 SQLite facts。 (AC: 1, 2, 4)
-  - [ ] 添加或强化测试：手动篡改 `data/events.jsonl`、`snapshots/current.json`、cards/search/projection_state/outbox，使其与 SQLite 不一致；断言 `save validate` 报告不一致，`save inspect` 的 current turn/location/time/entity counts 仍来自 SQLite。
-  - [ ] 覆盖 registry 中陈旧或恶意的 save summary/current_turn metadata：`current_save(refresh=True)` 可以刷新 registry 摘要，但 registry 自身不能覆盖 Save SQLite facts。
-  - [ ] 覆盖 pending action / pending clarification：pending state 不能被 query、inspect、validate 或 archive manifest 当成已经发生的事实。
-- [ ] 强化路径边界与无副作用失败。 (AC: 3)
-  - [ ] 覆盖 `SaveManager` 的 registry path、campaign/save/starter path、`save_path` 参数和 pending path helper：绝对路径、`..`、root escape 必须拒绝。
-  - [ ] 覆盖 MCP/CLI save/campaign path 参数：被拒绝时不写 registry、不创建 save、不写 pending、不修改 SQLite。
-  - [ ] 覆盖 archive import 成员路径：绝对路径、`..`、反斜杠、未列入 manifest、checksum/size mismatch 必须失败，且目标目录保持未替换或可恢复。
-- [ ] 保持 maintenance/admin 写入不冒充玩家事实提交。 (AC: 2, 5)
-  - [ ] 若触碰 `save_patch.py`，保留当前限制：patch 是 maintenance 操作，可以修正允许字段，但不能推进 `current_turn_id` 或注入 story progression 字段。
-  - [ ] 若触碰 projection repair，保留 `ProjectionService` 的 evidence/health 语义：projection/outbox 修复不能改变已提交事实含义。
-  - [ ] 若触碰 save init/export/import，保留 manifest、checksum、size、路径安全和 temp target 语义。
-- [ ] 同步公开文档或 surface taxonomy，仅在公共合同实际改变时执行。 (AC: 1, 5)
-  - [ ] 如果新增/修改 `save inspect` 字段，更新 `docs/save-and-campaign-packages.md`、`docs/data-models.md` 和 CLI/MCP 相关文档。
-  - [ ] 如果新增 public/semi-public surface，更新 `rpg_engine/surface_inventory.py` 并补 `tests/test_surface_inventory.py`。
+- [x] 建立 Save fact authority 合同证据。 (AC: 1, 2)
+  - [x] 复用现有 `docs/save-and-campaign-packages.md`、`docs/data-models.md` 与 `inspect_save_package()` 语义；不要新增并行事实 registry 或新权威状态表。
+  - [x] 若当前 `save inspect`/`inspect_save_package()` 输出缺少稳定可测的角色说明，优先补一个小而明确的 contract/role 字段，列明 `data/game.sqlite`、SQLite `events`、`data/events.jsonl`、snapshots、cards、memory、registry、pending、preflight cache、archive 的职责。
+  - [x] 如果只需要测试和文档即可满足合同，不要扩大公共 API。
+- [x] 防止派生产物覆盖 SQLite facts。 (AC: 1, 2, 4)
+  - [x] 添加或强化测试：手动篡改 `data/events.jsonl`、`snapshots/current.json`、cards/search/projection_state/outbox，使其与 SQLite 不一致；断言 `save validate` 报告不一致，`save inspect` 的 current turn/location/time/entity counts 仍来自 SQLite。
+  - [x] 覆盖 registry 中陈旧或恶意的 save summary/current_turn metadata：`current_save(refresh=True)` 可以刷新 registry 摘要，但 registry 自身不能覆盖 Save SQLite facts。
+  - [x] 覆盖 pending action / pending clarification：pending state 不能被 query、inspect、validate 或 archive manifest 当成已经发生的事实。
+- [x] 强化路径边界与无副作用失败。 (AC: 3)
+  - [x] 覆盖 `SaveManager` 的 registry path、campaign/save/starter path、`save_path` 参数和 pending path helper：绝对路径、`..`、root escape 必须拒绝。
+  - [x] 覆盖 MCP/CLI save/campaign path 参数：被拒绝时不写 registry、不创建 save、不写 pending、不修改 SQLite。
+  - [x] 覆盖 archive import 成员路径：绝对路径、`..`、反斜杠、未列入 manifest、checksum/size mismatch 必须失败，且目标目录保持未替换或可恢复。
+- [x] 保持 maintenance/admin 写入不冒充玩家事实提交。 (AC: 2, 5)
+  - [x] 若触碰 `save_patch.py`，保留当前限制：patch 是 maintenance 操作，可以修正允许字段，但不能推进 `current_turn_id` 或注入 story progression 字段。
+  - [x] 若触碰 projection repair，保留 `ProjectionService` 的 evidence/health 语义：projection/outbox 修复不能改变已提交事实含义。
+  - [x] 若触碰 save init/export/import，保留 manifest、checksum、size、路径安全和 temp target 语义。
+- [x] 同步公开文档或 surface taxonomy，仅在公共合同实际改变时执行。 (AC: 1, 5)
+  - [x] 如果新增/修改 `save inspect` 字段，更新 `docs/save-and-campaign-packages.md`、`docs/data-models.md` 和 CLI/MCP 相关文档。
+  - [x] 如果新增 public/semi-public surface，更新 `rpg_engine/surface_inventory.py` 并补 `tests/test_surface_inventory.py`。
+
+### Review Findings
+
+- [x] [Review][Patch] Active save path parameters can bypass rejection and still write registry [rpg_engine/save_manager.py:288]
+- [x] [Review][Patch] Malicious registry record paths are refreshed by mutating the registry [rpg_engine/save_manager.py:67]
+- [x] [Review][Patch] Archive import accepts manifests missing core Save files and can replace target [rpg_engine/save_archive.py:115]
+- [x] [Review][Patch] Explicit blank registry_path resolves to workspace root [rpg_engine/save_manager.py:871]
+- [x] [Review][Patch] `current_save(refresh=False)` should label cached registry summary fields as non-authoritative [rpg_engine/save_manager.py:166]
+- [x] [Review][Patch] Invalid active save registry path can make `start_or_continue()` create and write a new save [rpg_engine/save_manager.py:318]
+- [x] [Review][Patch] `switch_save()` can activate and write malicious registry save paths [rpg_engine/save_manager.py:204]
+- [x] [Review][Patch] Registry refresh path validation misses root escapes and secondary registry path fields [rpg_engine/save_manager.py:67]
+- [x] [Review][Patch] Archive import validates missing required core files after processing payload members [rpg_engine/save_archive.py:123]
 
 ## 开发说明
 
@@ -175,20 +191,58 @@ Story 1.4 应优先增强现有 Save/validation/manager/projection/archive/patch
 
 ### Agent Model Used
 
-TBD
+Codex GPT-5
 
 ### Debug Log References
 
-- TBD
+- RED: `python3 -m pytest -q tests/test_v1_cli.py::V1CliTests::test_save_init_inspect_validate_export_import` failed on missing `authority_contract`.
+- GREEN: `python3 -m pytest -q tests/test_v1_cli.py::V1CliTests::test_save_init_inspect_validate_export_import` passed after adding inspect contract.
+- RED: path boundary tests failed on absolute `registry_path` and MCP backslash path acceptance.
+- GREEN: targeted path tests passed after tightening SaveManager and MCP path normalization.
+- Focused gate: `python3 -m pytest -q tests/test_v1_cli.py tests/test_package_save_condition_coverage.py tests/test_mcp_adapter.py tests/test_projection_service.py tests/test_save_patch.py tests/test_save_manager.py` passed.
+- Full regression: `python3 -m pytest -q` passed with 480 tests and 621 subtests.
+- Docs gate: `python3 scripts/check_markdown_links.py docs _bmad-output` passed.
+- Diff gate: `git diff --check` passed.
+- Review RED: active-save `start_or_continue` path parameters bypassed validation, malicious registry record refresh mutated registry, blank `registry_path` resolved to workspace root, and archive import accepted manifests missing core Save files.
+- Review GREEN: targeted tests for SaveManager, CLI, MCP, helper path validation, malicious registry records, and archive import missing core files passed.
+- Review full regression: `python3 -m pytest -q` passed with 484 tests and 627 subtests.
+- Review docs gate: `python3 scripts/check_markdown_links.py docs _bmad-output/implementation-artifacts/1-4-save-fact-authority-and-runtime-state-boundary.md` passed.
+- Review diff gate: `git diff --check` passed.
+- Re-review RED: `current_save(refresh=False)` lacked registry-cache authority metadata; invalid active save paths could make `start_or_continue()` create a new save; `switch_save()` and registry refresh still wrote with malicious/root-escaping registry paths; missing archive core files were checked after payload processing.
+- Re-review GREEN: targeted SaveManager, package condition coverage, V1 CLI archive, and low-level archive tests passed after patching.
+- Re-review full regression: `python3 -m pytest -q` passed with 488 tests and 627 subtests.
 
 ### Completion Notes List
 
-- TBD
+- Added `authority_contract` to `inspect_save_package()` so `save inspect` exposes machine-readable roles for SQLite facts/events, derived projections, workspace/pending entry state, advisory preflight cache, MCP audit evidence, and archive manifest evidence.
+- Strengthened drift tests proving tampered JSONL, snapshot, cards, search, projection_state, outbox, registry metadata, and pending state cannot override SQLite current facts.
+- Tightened SaveManager and MCP path normalization to reject backslashes and absolute registry paths, and added no-side-effect CLI/MCP/archive import tests.
+- Applied code-review fixes: `start_or_continue()` now validates explicit path parameters before active-save continuation; refresh rejects malicious stored registry paths without writing registry; archive import rejects manifests missing required core Save files; explicit blank or root registry paths are invalid.
+- Applied re-review fixes: non-refresh current-save output now marks registry cached summary as non-authoritative; invalid active save paths block continuation instead of creating a new save; save switch and refresh validate registry path fields including root escapes and secondary path fields before writing; archive import checks required core files before payload extraction.
+- Confirmed maintenance/admin flows remain distinct from player fact commits: projection repair, save export/import, and save patch do not advance `current_turn_id` or create pending player state.
+- Updated canonical Save/Campaign, data model, CLI, and MCP docs for the new inspect contract and path/archive boundaries.
 
 ### File List
 
-- TBD
+- `rpg_engine/save_validation.py`
+- `rpg_engine/save_manager.py`
+- `rpg_engine/mcp_adapter.py`
+- `rpg_engine/save_archive.py`
+- `tests/test_v1_cli.py`
+- `tests/test_package_save_condition_coverage.py`
+- `tests/test_mcp_adapter.py`
+- `tests/test_save_manager.py`
+- `tests/test_low_level_condition_coverage.py`
+- `docs/save-and-campaign-packages.md`
+- `docs/data-models.md`
+- `docs/cli-contracts.md`
+- `docs/mcp-contracts.md`
+- `_bmad-output/implementation-artifacts/1-4-save-fact-authority-and-runtime-state-boundary.md`
+- `_bmad-output/implementation-artifacts/sprint-status.yaml`
 
 ## Change Log
 
 - 2026-07-05: Created Story 1.4 from Epic 1 backlog, incorporating Save/Campaign authority docs, current Save/projection/archive implementation state, and previous player-safe boundary learnings; status set to ready-for-dev.
+- 2026-07-06: Implemented Save fact authority inspect contract, strengthened derived-state/path/archive boundary tests, tightened path normalization, and synchronized canonical docs.
+- 2026-07-06: Applied code-review patches for active-save path validation, malicious registry refresh no-write behavior, archive missing-core-file rejection, and blank registry path rejection; status set to done.
+- 2026-07-06: Applied re-review patches for current-save cache authority labeling, invalid active-save blocking, switch/refresh registry path validation, and archive core-file precheck ordering.

@@ -51,10 +51,10 @@ def code_for_message(message: str, default_code: str) -> str:
     lowered = message.lower()
     if "unsupported capability" in lowered:
         return "UNSUPPORTED_CAPABILITY"
+    if lowered.startswith(("projection_state", "fts_index", "outbox")):
+        return "PROJECTION_INCONSISTENT"
     if "events.jsonl" in lowered:
         return "EVENT_LOG_INCONSISTENT"
-    if "projection_state" in lowered or "fts_index" in lowered:
-        return "PROJECTION_INCONSISTENT"
     if "schema" in lowered or "migration" in lowered or "checksum" in lowered:
         return "SCHEMA_INCONSISTENT"
     if "missing" in lowered or "required" in lowered:
@@ -78,10 +78,10 @@ def suggestion_for_message(message: str) -> str:
     lowered = message.lower()
     if "unsupported capability" in lowered:
         return "Declare the capability in campaign.yaml and cover it with a smoke test, or choose a supported action."
+    if lowered.startswith(("projection_state", "fts_index", "outbox")):
+        return "Run the explicit projection repair/admin path, then validate again."
     if "events.jsonl" in lowered:
         return "Rebuild the event log from SQLite through a controlled repair path before sharing the save."
-    if "projection_state" in lowered or "fts_index" in lowered:
-        return "Run the explicit projection repair/admin path, then validate again."
     if "schema" in lowered or "migration" in lowered or "checksum" in lowered:
         return "Run migration status/apply on a backup, then validate again."
     if "missing" in lowered or "required" in lowered:

@@ -29,6 +29,14 @@ CORE_FILES = (
     "snapshots/current.md",
     "snapshots/current.json",
 )
+REQUIRED_IMPORT_CORE_FILES = (
+    "campaign.yaml",
+    "save.yaml",
+    "data/game.sqlite",
+    "data/events.jsonl",
+    "snapshots/current.md",
+    "snapshots/current.json",
+)
 DERIVED_DIRS = (
     "cards",
     "memory",
@@ -118,6 +126,7 @@ def import_save_archive(archive_path: str | Path, target_dir: str | Path, *, for
             extra = sorted(archive_file_names - {MANIFEST_NAME, *expected.keys()})
             if extra:
                 raise ValueError(f"archive contains unlisted file: {extra[0]}")
+            validate_required_import_core_files(expected)
             total_bytes = 0
             for path, item in expected.items():
                 if path not in names:
@@ -255,6 +264,12 @@ def parse_manifest_files(manifest: dict[str, Any]) -> list[ArchiveFile]:
             )
         )
     return files
+
+
+def validate_required_import_core_files(files: dict[str, ArchiveFile]) -> None:
+    for path in REQUIRED_IMPORT_CORE_FILES:
+        if path not in files:
+            raise ValueError(f"archive missing core file: {path}")
 
 
 def validate_archive_names(names: list[str]) -> None:

@@ -95,6 +95,57 @@ Required sequence:
     `_bmad/custom/<skill>.user.toml` when the target skill's `customize.toml`
     exposes the requested field.
 
+### Default BMAD Story Cycle Fast Path
+
+When the user asks to run the normal story lifecycle, start a next story, or
+uses a trigger such as `bmad-story-cycle-auto`, default to the following BMAD
+story cycle unless the user explicitly requests a different route:
+
+1. `[SS] Sprint Status` (`bmad-sprint-status`) only when story state is unclear.
+2. `[CS] Create Story` (`bmad-create-story:create`) to create the next backlog
+   story or the specified story.
+3. `[VS] Validate Story` (`bmad-create-story:validate`) as the default quality
+   gate before development.
+4. `[DS] Dev Story` (`bmad-dev-story`) to implement all story tasks and required
+   tests continuously until the story reaches `review`, unless a skill-defined
+   HALT condition is triggered.
+5. `[CR] Code Review` (`bmad-code-review`) after development.
+6. Apply every unambiguous `[Review][Patch]` finding when the user has already
+   authorized automatic patch handling for this cycle; do not modify
+   `[Review][Decision]` or `[Review][Defer]` items without the workflow's
+   required user input.
+7. Re-run `[CR] Code Review` once after patch fixes.
+8. If the second review is clean, or only dismiss/defer items remain, let the
+   review workflow mark the story `done` and sync `sprint-status.yaml`. If new
+   patch or decision-needed findings remain, stop and report the exact next
+   BMAD action.
+
+This fast path is an orchestration default, not permission to skip skill rules.
+For every skill in the chain, still read the selected `SKILL.md` completely,
+run the customization resolver, load required facts/config, follow step files in
+order, and preserve BMAD provenance in the final summary.
+
+Default automation preferences:
+
+- Treat story validation as default-on. If validation presents improvement
+  choices, recommend `all` for critical and unambiguous improvements, but wait
+  for the required user choice.
+- Treat code review as default-on even though `[CR]` is optional in the catalog.
+- Prefer `Apply every patch` for code-review patch findings when the user has
+  pre-authorized automatic patch handling. If not pre-authorized, halt at the
+  code-review prompt and ask once.
+- If the current tool or platform policy requires explicit authorization for
+  BMAD-directed subagents or parallel review layers, ask once at the start of
+  the cycle and reuse that authorization for the whole cycle. A recommended
+  explicit invocation is:
+  `bmad-story-cycle-auto with review subagents and apply every patch`.
+- Stop immediately for decision-needed findings, ambiguous acceptance criteria,
+  missing source documents, new dependencies, failing verification that cannot
+  be fixed in scope, P0 boundary changes without planning evidence, or any
+  skill-defined HALT condition.
+- Prefer a fresh context window for a full story cycle, but run in the current
+  context when the user explicitly asks to proceed immediately.
+
 Existing BMAD-style documents without recorded skill provenance are useful
 working artifacts, but future BMAD claims require the evidence above.
 

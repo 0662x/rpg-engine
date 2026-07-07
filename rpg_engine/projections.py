@@ -22,6 +22,36 @@ PROJECTION_VERSIONS = {
     "reports": 1,
     "package_lock": 1,
 }
+PROJECTION_STATE_SCHEMA_COLUMNS = (
+    "name",
+    "version",
+    "last_turn_id",
+    "status",
+    "updated_at",
+    "last_error",
+)
+STORED_PROJECTION_STATUSES = {"clean", "dirty", "failed", "refreshing", "stale"}
+OUTBOX_SCHEMA_COLUMNS = (
+    "id",
+    "topic",
+    "payload_json",
+    "status",
+    "attempts",
+    "created_at",
+    "processed_at",
+    "last_error",
+)
+OUTBOX_HEALTH_COLUMNS = (
+    "id",
+    "topic",
+    "status",
+    "attempts",
+    "created_at",
+    "processed_at",
+    "last_error",
+)
+OUTBOX_KNOWN_STATUSES = {"done", "failed", "pending"}
+OUTBOX_REPAIRABLE_STATUSES = {"failed", "pending"}
 
 
 @dataclass
@@ -43,6 +73,126 @@ def projection_tables_exist(conn: sqlite3.Connection) -> bool:
         ).fetchall()
     }
     return names == {"outbox", "projection_state"}
+
+
+def _inspect_outbox_health(conn: sqlite3.Connection) -> dict[str, Any]:
+    health: dict[str, Any] = {
+        "role": "projection_work_queue",
+        "authority": "evidence",
+        "status": "clean",
+        "ok": True,
+        "counts": {},
+        "non_done": [],
+        "errors": [],
+    }
+    if not _sqlite_table_exists(conn, "outbox"):
+        health["status"] = "missing"
+        health["ok"] = False
+        health["errors"] = ["outbox: missing"]
+        return health
+
+    columns = _sqlite_table_columns(conn, "outbox")
+    errors: list[str] = []
+    missing = sorted(set(OUTBOX_SCHEMA_COLUMNS) - columns)
+    if missing:
+        errors.append(f"outbox schema: missing columns {', '.join(missing)}")
+
+    try:
+        if "status" in columns:
+            health["counts"] = {
+                _outbox_status_key(row["status"]): int(row["count"])
+                for row in conn.execute(
+                    "select status, count(*) as count from outbox group by status order by status"
+                ).fetchall()
+            }
+        else:
+            total = int(conn.execute("select count(*) from outbox").fetchone()[0])
+            health["counts"] = {"<unknown>": total} if total else {}
+
+        select_list = ", ".join(_outbox_select_expression(column, columns) for column in OUTBOX_HEALTH_COLUMNS)
+        where_clause = "status is null or status != 'done'" if "status" in columns else "1=1"
+        order_by = ", ".join(column for column in ("created_at", "id") if column in columns) or "rowid"
+        health["non_done"] = [
+            {
+                "id": _outbox_id(row["id"]),
+                "topic": _none_or_str(row["topic"]),
+                "status": _none_or_str(row["status"]),
+                "attempts": _int_or_none(row["attempts"]),
+                "last_error": _none_or_str(row["last_error"]),
+                "created_at": _none_or_str(row["created_at"]),
+                "processed_at": _none_or_str(row["processed_at"]),
+            }
+            for row in conn.execute(
+                f"""
+                select {select_list}
+                from outbox
+                where {where_clause}
+                order by {order_by}
+                """
+            ).fetchall()
+        ]
+        for row in health["non_done"]:
+            if row.get("id") == "<missing>":
+                errors.append("outbox row: missing id")
+            status = row.get("status")
+            if status not in OUTBOX_KNOWN_STATUSES:
+                errors.append(f"outbox.{row.get('id')}: invalid status {status}")
+    except sqlite3.Error as exc:
+        errors.append(f"outbox schema: unreadable: {exc}")
+
+    health["errors"] = errors
+    if errors:
+        health["status"] = "malformed"
+    elif any(row.get("status") == "failed" for row in health["non_done"]):
+        health["status"] = "failed"
+    elif any(row.get("status") in OUTBOX_REPAIRABLE_STATUSES for row in health["non_done"]):
+        health["status"] = "pending"
+    else:
+        health["status"] = "clean"
+    health["ok"] = health["status"] == "clean"
+    return health
+
+
+def _outbox_issue_message(row: dict[str, Any]) -> str:
+    suffix = f" (last_error: {row['last_error']})" if row.get("last_error") else ""
+    return f"outbox.{row.get('id')}: status is {row.get('status')}{suffix}"
+
+
+def _sqlite_table_exists(conn: sqlite3.Connection, table: str) -> bool:
+    row = conn.execute("select 1 from sqlite_master where type='table' and name = ?", (table,)).fetchone()
+    return bool(row)
+
+
+def _sqlite_table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    return {str(row[1]) for row in conn.execute(f"pragma table_info({table})").fetchall()}
+
+
+def _outbox_select_expression(column: str, columns: set[str]) -> str:
+    if column in columns:
+        return column
+    if column == "id":
+        return "rowid as id"
+    return f"null as {column}"
+
+
+def _outbox_status_key(value: Any) -> str:
+    return "<null>" if value is None else str(value)
+
+
+def _outbox_id(value: Any) -> str:
+    text = "" if value is None else str(value).strip()
+    return text or "<missing>"
+
+
+def _int_or_none(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _none_or_str(value: Any) -> str | None:
+    return None if value is None else str(value)
 
 
 def ensure_projection_rows(conn: sqlite3.Connection, *, turn_id: str | None = None) -> None:

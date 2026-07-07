@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import sqlite3
 import sys
 import tempfile
 import types
@@ -28,6 +29,17 @@ from rpg_engine.save_service import init_v1_save
 
 ENGINE_ROOT = Path(__file__).resolve().parents[1]
 MINIMAL_FIXTURE = ENGINE_ROOT / "tests" / "fixtures" / "minimal_campaign"
+
+
+def sqlite_counts(save_dir: Path) -> dict[str, int]:
+    conn = sqlite3.connect(save_dir / "data" / "game.sqlite")
+    try:
+        return {
+            name: int(conn.execute(f"select count(*) from {name}").fetchone()[0])
+            for name in ("turns", "events", "entities", "clocks", "intent_preflight_cache")
+        }
+    finally:
+        conn.close()
 
 
 def install_fake_hermes(tmp: str | Path, output: str) -> str:
@@ -75,6 +87,25 @@ class MCPAdapterTests(unittest.TestCase):
         self.assertEqual(MCP_TOOL_NAMES, PLAYER_MCP_TOOL_NAMES + LOW_LEVEL_MCP_TOOL_NAMES)
         self.assertNotIn("repair", MCP_TOOL_NAMES)
         self.assertNotIn("plugin", MCP_TOOL_NAMES)
+        for forbidden in (
+            "package_install",
+            "package_upgrade",
+            "package_reconcile",
+            "migration_apply",
+            "projection_repair",
+            "file_read",
+            "file_write",
+            "model_proxy",
+        ):
+            self.assertNotIn(forbidden, MCP_TOOL_NAMES)
+
+    def test_mcp_contract_names_every_player_profile_forbidden_low_level_tool(self) -> None:
+        contract = (ENGINE_ROOT / "docs" / "mcp-contracts.md").read_text(encoding="utf-8")
+
+        self.assertIn("player profile 不能注册或调用", contract)
+        for tool in LOW_LEVEL_MCP_TOOL_NAMES:
+            self.assertIn(f"`{tool}`", contract)
+            self.assertIn(f"`{tool}`", contract.split("player profile 不能注册或调用", 1)[1].split("## 工具清单", 1)[0])
 
     def test_mcp_adapter_does_not_depend_on_cli_handlers(self) -> None:
         source = (ENGINE_ROOT / "rpg_engine" / "mcp_adapter.py").read_text(encoding="utf-8")
@@ -207,6 +238,7 @@ class MCPAdapterTests(unittest.TestCase):
                     root,
                     default_campaign="campaigns/minimal",
                     registry_active=True,
+                    mcp_profile="developer",
                 )
             )
 
@@ -238,7 +270,7 @@ class MCPAdapterTests(unittest.TestCase):
             )
 
             entry = adapter.start_or_continue(campaign="campaigns/minimal")
-            acted = adapter.player_act("休息到早上")
+            acted = adapter.player_turn("休息到早上")
             rejected = adapter.player_confirm()
             confirmed = adapter.player_confirm(session_id=acted["session_id"])
             current = adapter.save_current(refresh=True)
@@ -283,7 +315,7 @@ class MCPAdapterTests(unittest.TestCase):
             self.assertTrue(confirmed["saved"], confirmed)
             self.assertEqual(current["save"]["current_turn_id"], "turn:000001")
 
-    def test_mcp_player_act_clears_stale_pending_action_when_new_action_needs_clarification(self) -> None:
+    def test_mcp_developer_player_act_clears_stale_pending_action_when_new_action_needs_clarification(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             campaign_dir = root / "campaigns" / "minimal"
@@ -293,6 +325,7 @@ class MCPAdapterTests(unittest.TestCase):
                     root,
                     default_campaign="campaigns/minimal",
                     registry_active=True,
+                    mcp_profile="developer",
                 )
             )
 
@@ -306,7 +339,7 @@ class MCPAdapterTests(unittest.TestCase):
             self.assertFalse(confirmed["ok"], confirmed)
             self.assertIn("no pending player action", confirmed["errors"][0])
 
-    def test_player_profile_start_and_preview_ignore_empty_intent_override_defaults(self) -> None:
+    def test_mcp_developer_start_and_preview_ignore_empty_intent_override_defaults(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             campaign_dir = root / "campaigns" / "minimal"
@@ -316,6 +349,7 @@ class MCPAdapterTests(unittest.TestCase):
                     root,
                     default_campaign="campaigns/minimal",
                     registry_active=True,
+                    mcp_profile="developer",
                 )
             )
 
@@ -730,6 +764,7 @@ class MCPAdapterTests(unittest.TestCase):
                     intent_model="deepseek-v4-flash",
                     intent_api_key_env="AIGM_TEST_MISSING_KEY",
                     intent_fallback_backend="off",
+                    mcp_profile="developer",
                 )
             )
             entry = adapter.start_or_continue(campaign="campaigns/minimal")
@@ -911,6 +946,7 @@ class MCPAdapterTests(unittest.TestCase):
                     root,
                     default_campaign="campaigns/minimal",
                     default_save="saves/run",
+                    mcp_profile="developer",
                 )
             )
 
@@ -924,12 +960,155 @@ class MCPAdapterTests(unittest.TestCase):
             self.assertEqual([record["tool"] for record in records], ["query", "campaign_validate"])
             self.assertEqual(records[0]["status"], "ok")
             self.assertEqual(records[1]["status"], "error")
+            self.assertEqual(records[0]["surface_category"], "trusted low-level")
+            self.assertEqual(records[1]["surface_category"], "player-safe")
+            self.assertEqual(records[0]["identity"], {"profile": "developer", "tool": "query"})
             self.assertEqual(records[0]["request"]["kind"], "scene")
             self.assertIn("text_preview", records[0]["result"])
             self.assertNotIn("text", records[0]["result"])
             self.assertIn("must not contain", records[1]["result"]["errors"][0])
 
-    def test_mcp_player_profile_rejects_hidden_views_low_level_tools_and_ai_overrides(self) -> None:
+    def test_mcp_audit_scrubs_sensitive_free_text_errors_and_warnings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            adapter = AIGMMCPAdapter(
+                MCPAdapterConfig.from_values(
+                    root,
+                    mcp_profile="developer",
+                )
+            )
+
+            adapter.write_audit_record(
+                "player_turn",
+                {
+                    "platform": "qq",
+                    "session_key": "qq:raw-session",
+                    "actor_id": "actor:raw",
+                    "message_id": "qq:msg:1",
+                },
+                {
+                    "ok": False,
+                    "errors": ["failed qq:raw-session for actor:raw"],
+                    "warnings": ["Private-Reasoning: do not audit"],
+                    "text": "HiddenFacts: do not audit either",
+                },
+                duration_ms=1,
+            )
+
+            audit_path = root / "logs" / "aigm-mcp-audit.jsonl"
+            records = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines()]
+            audit_text = json.dumps(records, ensure_ascii=False)
+
+            self.assertEqual(records[0]["result"]["errors"], ["failed <redacted> for <redacted>"])
+            self.assertEqual(records[0]["result"]["warnings"], ["<redacted sensitive audit text>"])
+            self.assertEqual(records[0]["result"]["text_preview"], "<redacted sensitive audit text>")
+            self.assertNotIn("qq:raw-session", audit_text)
+            self.assertNotIn("actor:raw", audit_text)
+            self.assertNotIn("Private-Reasoning", audit_text)
+            self.assertNotIn("HiddenFacts", audit_text)
+            self.assertNotIn("do not audit", audit_text)
+
+    def test_mcp_audit_write_failure_does_not_change_tool_result(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            campaign_dir = root / "campaigns" / "minimal"
+            save_dir = root / "saves" / "run"
+            bad_audit_path = root / "logs"
+            shutil.copytree(MINIMAL_FIXTURE, campaign_dir)
+            init_v1_save(campaign_dir, save_dir)
+            bad_audit_path.mkdir()
+            adapter = AIGMMCPAdapter(
+                MCPAdapterConfig.from_values(
+                    root,
+                    default_campaign="campaigns/minimal",
+                    default_save="saves/run",
+                    mcp_profile="developer",
+                    audit_log=bad_audit_path,
+                )
+            )
+
+            result = adapter.query("scene")
+
+            self.assertIn("Start", result["text"])
+            self.assertNotIn("errors", result)
+
+    def test_mcp_player_profile_rejects_all_low_level_adapter_methods_without_state_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            campaign_dir = root / "campaigns" / "minimal"
+            save_dir = root / "saves" / "run"
+            shutil.copytree(MINIMAL_FIXTURE, campaign_dir)
+            init_v1_save(campaign_dir, save_dir)
+            before_counts = sqlite_counts(save_dir)
+            adapter = AIGMMCPAdapter(
+                MCPAdapterConfig.from_values(
+                    root,
+                    default_campaign="campaigns/minimal",
+                    default_save="saves/run",
+                )
+            )
+
+            results = {
+                "player_query": adapter.player_query("scene"),
+                "player_act": adapter.player_act("休息到早上"),
+                "start_turn": adapter.start_turn("查看周围"),
+                "intent_preflight": adapter.intent_preflight(
+                    "休息到早上",
+                    platform="qq",
+                    session_key="qq:raw-secret",
+                ),
+                "query": adapter.query("scene"),
+                "preview_from_text": adapter.preview_from_text("休息到早上"),
+                "preview_action": adapter.preview_action("rest", options={"until": "morning"}),
+                "validate_delta": adapter.validate_delta({"summary": "x"}),
+                "commit_turn": adapter.commit_turn(
+                    {"summary": "x"},
+                    turn_proposal={"proposal_id": "proposal:test", "delta": {"summary": "x"}},
+                    state_audit=False,
+                ),
+            }
+
+            for tool, result in results.items():
+                self.assertFalse(result.get("ok", False), result)
+                joined = "\n".join(result["errors"])
+                self.assertIn(tool, joined)
+                self.assertIn("profile/surface category mismatch", joined)
+                self.assertIn("profile=player", joined)
+                detail = result["error_details"][0]
+                self.assertEqual(detail["code"], "MCP_PROFILE_MISMATCH")
+                self.assertEqual(detail["tool"], tool)
+                self.assertEqual(detail["profile"], "player")
+                self.assertEqual(detail["surface_category"], "trusted low-level")
+                self.assertIn("developer", detail["required_profiles"])
+            self.assertEqual(sqlite_counts(save_dir), before_counts)
+            self.assertFalse((root / ".aigm" / "pending-player-action.json").exists())
+            self.assertFalse((root / ".aigm" / "pending-player-clarification.json").exists())
+            self.assertEqual(adapter.pending_clarifications, {})
+
+    def test_mcp_developer_profile_keeps_hidden_read_gate_separate_from_low_level_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            campaign_dir = root / "campaigns" / "minimal"
+            save_dir = root / "saves" / "run"
+            shutil.copytree(MINIMAL_FIXTURE, campaign_dir)
+            init_v1_save(campaign_dir, save_dir)
+            adapter = AIGMMCPAdapter(
+                MCPAdapterConfig.from_values(
+                    root,
+                    default_campaign="campaigns/minimal",
+                    default_save="saves/run",
+                    mcp_profile="developer",
+                )
+            )
+
+            player_view = adapter.query("scene")
+            hidden_view = adapter.query("scene", view="maintenance")
+
+            self.assertIn("Start", player_view["text"])
+            self.assertFalse(hidden_view["ok"], hidden_view)
+            self.assertIn("requires trusted_gm", "\n".join(hidden_view["errors"]))
+
+    def test_mcp_player_profile_permission_audit_is_sanitized_and_summarized(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             campaign_dir = root / "campaigns" / "minimal"
@@ -944,45 +1123,57 @@ class MCPAdapterTests(unittest.TestCase):
                 )
             )
 
-            hidden_query = adapter.query("scene", view="maintenance")
-            maintenance_start = adapter.start_turn("检查维护状态", mode="maintenance")
-            semantic_override = adapter.preview_from_text("查看周围", semantic_ai="hermes")
-            intent_override = adapter.preview_from_text(
+            preflight = adapter.intent_preflight(
                 "休息到早上",
+                platform="qq",
+                session_key="qq:raw-secret",
                 external_intent_candidate={
-                    "kind": "single",
-                    "mode": "action",
-                    "action": "rest",
-                    "slots": {"until": "morning"},
-                    "plan": [],
-                    "confidence": "high",
-                    "missing_slots": [],
-                    "needs_confirmation": [],
-                    "safety_flags": [],
-                    "reason": "外部 AI 判断这是休息行动。",
+                    "Private-Reasoning": "do not audit this",
+                    "plan": ["raw external plan should not audit"],
                 },
             )
-            low_level_preview = adapter.preview_action("rest", options={"until": "morning"})
-            low_level_validate = adapter.validate_delta({"summary": "x"})
-            low_level_commit = adapter.commit_turn({"summary": "x"}, state_audit=False)
+            commit = adapter.commit_turn(
+                {"summary": "raw delta internals", "Hidden-Facts": ["secret"]},
+                turn_proposal={
+                    "proposal_id": "proposal:raw",
+                    "delta": {"summary": "raw proposal internals"},
+                    "private-reasoning": "do not audit proposal",
+                },
+            )
 
-            for result in (
-                hidden_query,
-                maintenance_start,
-                semantic_override,
-                intent_override,
-                low_level_preview,
-                low_level_validate,
-                low_level_commit,
-            ):
-                self.assertFalse(result.get("ok", False), result)
-            self.assertIn("requires trusted_gm", "\n".join(hidden_query["errors"]))
-            self.assertIn("mode='maintenance' requires", "\n".join(maintenance_start["errors"]))
-            self.assertIn("semantic AI overrides require", "\n".join(semantic_override["errors"]))
-            self.assertIn("intent AI overrides require", "\n".join(intent_override["errors"]))
-            self.assertIn("preview_action requires", "\n".join(low_level_preview["errors"]))
-            self.assertIn("validate_delta requires", "\n".join(low_level_validate["errors"]))
-            self.assertIn("commit_turn requires", "\n".join(low_level_commit["errors"]))
+            self.assertFalse(preflight["ok"], preflight)
+            self.assertFalse(commit["ok"], commit)
+            audit_path = root / "logs" / "aigm-mcp-audit.jsonl"
+            records = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines()]
+            audit_text = json.dumps(records, ensure_ascii=False)
+            self.assertEqual([record["tool"] for record in records], ["intent_preflight", "commit_turn"])
+            self.assertEqual(records[0]["surface_category"], "trusted low-level")
+            self.assertEqual(records[1]["surface_category"], "trusted low-level")
+            self.assertEqual(records[0]["identity"]["profile"], "player")
+            self.assertEqual(records[0]["identity"]["tool"], "intent_preflight")
+            self.assertEqual(records[0]["identity"]["platform"], "qq")
+            self.assertTrue(records[0]["identity"]["session_key_hash"].startswith("sha256:"))
+            self.assertNotIn("qq:raw-secret", audit_text)
+            self.assertNotIn("raw external plan", audit_text)
+            self.assertNotIn("raw delta internals", audit_text)
+            self.assertNotIn("raw proposal internals", audit_text)
+            self.assertNotIn("do not audit", audit_text)
+            self.assertNotIn("Private-Reasoning", audit_text)
+            self.assertNotIn("private-reasoning", audit_text)
+            self.assertNotIn("private_reasoning", audit_text)
+            self.assertNotIn("Hidden-Facts", audit_text)
+            self.assertNotIn("hidden_facts", audit_text)
+            self.assertTrue(records[0]["request"]["session_key"].startswith("sha256:"))
+            self.assertTrue(records[0]["request"]["external_intent_candidate"]["redacted"])
+            self.assertEqual(records[0]["request"]["external_intent_candidate"]["type"], "object")
+            self.assertEqual(records[0]["request"]["external_intent_candidate"]["key_count"], 2)
+            self.assertEqual(records[1]["request"]["delta"]["key_count"], 2)
+            self.assertEqual(records[1]["request"]["turn_proposal"]["key_count"], 3)
+            self.assertEqual(records[0]["status"], "error")
+            self.assertEqual(records[1]["status"], "error")
+            self.assertEqual(records[0]["result"]["ok"], False)
+            self.assertIn("errors", records[0]["result"])
+            self.assertNotIn("error_details", records[0]["result"])
 
     def test_mcp_adapter_rejects_absolute_and_escaping_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -990,14 +1181,39 @@ class MCPAdapterTests(unittest.TestCase):
 
             absolute = adapter.campaign_validate("/tmp/other")
             escaping = adapter.campaign_validate("../other")
+            backslash = adapter.campaign_validate("bad\\path")
             missing_default = adapter.save_inspect()
 
             self.assertFalse(absolute["ok"])
             self.assertIn("must be relative", "\n".join(absolute["errors"]))
             self.assertFalse(escaping["ok"])
             self.assertIn("must not contain", "\n".join(escaping["errors"]))
+            self.assertFalse(backslash["ok"])
+            self.assertIn("must not contain backslashes", "\n".join(backslash["errors"]))
             self.assertFalse(missing_default["ok"])
             self.assertIn("save is required", "\n".join(missing_default["errors"]))
+
+    def test_mcp_start_or_continue_rejects_bad_paths_with_active_save_without_registry_write(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            campaign_dir = root / "campaigns" / "minimal"
+            save_dir = root / "saves" / "run"
+            shutil.copytree(MINIMAL_FIXTURE, campaign_dir)
+            init_v1_save(campaign_dir, save_dir)
+            adapter = AIGMMCPAdapter(MCPAdapterConfig.from_values(root, default_campaign="campaigns/minimal"))
+            adapter.save_create(campaign="campaigns/minimal", label="Run", starter_save="saves/run")
+            registry_path = root / ".aigm" / "save-registry.json"
+            before_registry = registry_path.read_text(encoding="utf-8")
+
+            escaping = adapter.start_or_continue(campaign="../outside")
+            backslash = adapter.start_or_continue(campaign="campaigns\\minimal")
+
+            self.assertFalse(escaping["ok"])
+            self.assertIn("must not contain", "\n".join(escaping["errors"]))
+            self.assertFalse(backslash["ok"])
+            self.assertIn("must not contain backslashes", "\n".join(backslash["errors"]))
+            self.assertEqual(registry_path.read_text(encoding="utf-8"), before_registry)
+            self.assertFalse((root / ".aigm" / "pending-player-action.json").exists())
 
     def test_mcp_client_config_uses_relative_defaults_under_root(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1012,10 +1228,15 @@ class MCPAdapterTests(unittest.TestCase):
             text = json.dumps(data, sort_keys=True)
 
             self.assertEqual(data["mcpServers"]["aigm-kernel"]["command"], "python3")
+            self.assertNotIn("--mcp-profile", data["mcpServers"]["aigm-kernel"]["args"])
             self.assertIn("--default-campaign", data["mcpServers"]["aigm-kernel"]["args"])
             self.assertIn("saves/run", text)
             self.assertIn("--default-starter-save", data["mcpServers"]["aigm-kernel"]["args"])
             self.assertIn("--registry-active", data["mcpServers"]["aigm-kernel"]["args"])
+
+            developer = build_client_config(tmp, mcp_profile=DEVELOPER_PROFILE)
+            self.assertIn("--mcp-profile", developer["mcpServers"]["aigm-kernel"]["args"])
+            self.assertIn(DEVELOPER_PROFILE, developer["mcpServers"]["aigm-kernel"]["args"])
 
 
 if __name__ == "__main__":

@@ -180,6 +180,9 @@ save/
 | `cards/` | 玩家可读实体卡片投影。 |
 | `memory/` | 长期记忆投影或报告。 |
 
+`projection_state` 和 `outbox` 在 SQLite 内，但职责是投影健康和投影工作队列证据；
+它们不能改变 turns、events、entities、clocks 或 meta 的事实含义。
+
 Save Package 不是 Campaign Package 的完整内嵌副本。它可以复制内容文件，也可以通过
 `source_campaign_path` 只读引用兼容来源包。剧情推进必须走结构化玩家回合链，不能手工改
 SQLite 或把作者内容覆盖当成玩家事实。
@@ -213,7 +216,20 @@ python3 -m rpg_engine save inspect ./saves/my-run
 python3 -m rpg_engine save validate ./saves/my-run
 ```
 
-`inspect_v1_save()` 和 `inspect_save_package()` 会返回当前摘要、文件状态、计数、meta 和错误。
+`inspect_v1_save()` 和 `inspect_save_package()` 会返回当前摘要、文件状态、计数、meta、错误、
+`authority_contract` 和 `projection_health`。`authority_contract` 是稳定的机器可读职责表，用来声明
+`data/game.sqlite` 是当前事实权威、SQLite `events` 是权威审计记录，而 JSONL、snapshots、
+cards、search、memory、registry、pending state、preflight cache、MCP audit log 和 archive
+manifest 只能作为 derived、entry、advisory 或 evidence state。
+
+`projection_health` 是稳定的机器可读 health/evidence 字段，不是事实来源。它包含：
+
+- `role=projection_health` 和 `authority=evidence`。
+- required projection 名称、stored status、effective status、version、expected version、`last_turn_id`、
+  是否对齐 `current_turn_id`、`last_error`、`updated_at` 和 artifact paths。
+- outbox `ok`/`status`、schema 或 availability `errors`、status counts，以及所有非 `done` outbox row 的
+  id、topic、status、attempts、last error 和时间戳。
+
 通过标准包括：
 
 - 核心文件存在。
@@ -222,13 +238,15 @@ python3 -m rpg_engine save validate ./saves/my-run
 - migration checksum 匹配。
 - current turn、location、day 和 time meta 一致。
 - `projection_state` 中 required projections 为 clean，版本足够且指向当前 turn。
-- outbox 没有未完成投影任务。
+- outbox 表存在且 schema 可读；没有未完成投影任务；pending/failed row 必须带足够定位信息和 last error。
 - `events.jsonl` 与 SQLite `events` 双向一致。
 - `snapshots/current.json` 与 SQLite meta 一致。
 - `cards/` 覆盖所有非归档、玩家可读实体。
 - FTS 只索引非归档且非 hidden 的实体。
 
-这意味着 Save Package 的健康状态既包括 SQLite，也包括投影是否跟上当前 turn。
+这意味着 Save Package 的健康状态既包括 SQLite，也包括投影是否跟上当前 turn。当投影 artifact
+与 SQLite 不一致时，inspect/validate 必须报告 drift、dirty、failed 或 stale，不能把 artifact
+反向解释为新的事实。
 
 ## 投影状态
 
@@ -297,7 +315,9 @@ python3 -m rpg_engine save import ./my-run.aigmsave ./saves/imported-run --yes
 - `cards/**`
 - `memory/**`
 
-导入会校验 manifest、文件清单、路径安全、单文件大小、总大小和 SHA256。目标目录非空时默认拒绝；
+导入会校验 manifest、文件清单、核心 Save 文件存在性、路径安全、单文件大小、总大小和 SHA256。
+缺少 `campaign.yaml`、`save.yaml`、`data/game.sqlite`、`data/events.jsonl`、`snapshots/current.md`
+或 `snapshots/current.json` 的归档必须在 payload member 解包前拒绝。目标目录非空时默认拒绝；
 显式 force 属于维护语义。
 
 `.aigmsave` 默认是完整存档归档，可能包含 hidden / GM-only 信息。玩家视角脱敏导出不是当前 V1
@@ -341,7 +361,7 @@ Save record 记录：
 - `last_played_at`
 
 Registry 写入使用 lock 文件和 atomic write。所有 registry、campaign、save、starter 路径必须是
-workspace root 相对路径，不能是绝对路径，不能包含 `..`，也不能 resolve 后逃逸 root。
+workspace root 相对路径，不能是绝对路径，不能包含 `..` 或反斜杠，也不能 resolve 后逃逸 root。
 
 Registry 不拥有游戏事实。切换 active save 只改变玩家入口选择，不修改 Save Package 中的事实。
 
@@ -407,6 +427,10 @@ python3 -m rpg_engine player new <root> --campaign <campaign>
 python3 -m rpg_engine player switch <root> <save-id>
 python3 -m rpg_engine player duplicate <root> <save-id>
 ```
+
+`player current` / MCP `save_current` 如果不带 refresh，可以返回 registry cached summary；输出中的
+`current_save_authority` 必须把这类摘要标为非权威。带 refresh 时，summary 来自 Save SQLite
+inspection，但仍不能让 registry 覆盖 Save facts。
 
 Package 级 CLI：
 

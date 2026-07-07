@@ -312,9 +312,12 @@ def add_v1_parsers(subparsers: argparse._SubParsersAction, registered_actions: l
     save_patch_parser.add_argument("--no-backup", action="store_true", help="skip pre-patch backup")
     add_format_option(save_patch_parser)
 
-    play_parser = subparsers.add_parser("play", help="V1 runtime play commands")
+    play_parser = subparsers.add_parser("play", help="developer/trusted low-level runtime commands")
     play_sub = play_parser.add_subparsers(dest="play_type", required=True)
-    play_preflight_parser = play_sub.add_parser("preflight", help="precompute an advisory internal intent review")
+    play_preflight_parser = play_sub.add_parser(
+        "preflight",
+        help="developer/trusted low-level advisory intent preflight",
+    )
     play_preflight_parser.add_argument("campaign_dir")
     add_user_text_source_args(play_preflight_parser, required=True)
     add_play_intent_options(play_preflight_parser)
@@ -330,7 +333,10 @@ def add_v1_parsers(subparsers: argparse._SubParsersAction, registered_actions: l
     play_preflight_parser.add_argument("--ttl-seconds", type=int, default=300)
     add_format_option(play_preflight_parser)
 
-    play_start_parser = play_sub.add_parser("start-turn", help="build context and classify one player turn")
+    play_start_parser = play_sub.add_parser(
+        "start-turn",
+        help="developer/trusted low-level turn classification",
+    )
     play_start_parser.add_argument("campaign_dir")
     add_user_text_source_args(play_start_parser, required=True)
     play_start_parser.add_argument("--mode", default="auto", choices=["auto", "query", "action", "maintenance"])
@@ -342,7 +348,10 @@ def add_v1_parsers(subparsers: argparse._SubParsersAction, registered_actions: l
     add_preflight_consume_options(play_start_parser)
     add_format_option(play_start_parser)
 
-    play_query_parser = play_sub.add_parser("query", help="run a non-mutating V1 query")
+    play_query_parser = play_sub.add_parser(
+        "query",
+        help="developer/trusted low-level read-only runtime query",
+    )
     play_query_parser.add_argument("campaign_dir")
     play_query_parser.add_argument("kind", choices=["scene", "entity", "context"])
     play_query_parser.add_argument("query_text", nargs="?")
@@ -350,7 +359,10 @@ def add_v1_parsers(subparsers: argparse._SubParsersAction, registered_actions: l
     play_query_parser.add_argument("--budget", type=int)
     add_format_option(play_query_parser)
 
-    play_act_parser = play_sub.add_parser("act", help="interpret a natural-language player action")
+    play_act_parser = play_sub.add_parser(
+        "act",
+        help="developer/trusted low-level natural-language action preview",
+    )
     play_act_parser.add_argument("campaign_dir")
     play_act_parser.add_argument("user_text", nargs="?")
     add_user_text_external_source_args(play_act_parser)
@@ -360,7 +372,10 @@ def add_v1_parsers(subparsers: argparse._SubParsersAction, registered_actions: l
     add_preflight_consume_options(play_act_parser)
     add_format_option(play_act_parser)
 
-    play_preview_parser = play_sub.add_parser("preview", help="preview a V1 action without saving")
+    play_preview_parser = play_sub.add_parser(
+        "preview",
+        help="developer/trusted low-level action preview without saving",
+    )
     play_preview_parser.add_argument("campaign_dir")
     play_preview_parser.add_argument("action", choices=registered_actions)
     play_preview_parser.add_argument("--view", default="player", choices=["player", "gm", "debug"])
@@ -368,13 +383,19 @@ def add_v1_parsers(subparsers: argparse._SubParsersAction, registered_actions: l
     add_play_preview_options(play_preview_parser)
     add_format_option(play_preview_parser)
 
-    play_validate_parser = play_sub.add_parser("validate-delta", help="validate one turn delta through GMRuntime")
+    play_validate_parser = play_sub.add_parser(
+        "validate-delta",
+        help="developer/trusted low-level delta validation through GMRuntime",
+    )
     play_validate_parser.add_argument("campaign_dir")
     play_validate_parser.add_argument("delta_json")
     add_play_delta_validation_options(play_validate_parser, registered_actions)
     add_format_option(play_validate_parser)
 
-    play_commit_parser = play_sub.add_parser("commit", help="commit one validated TurnProposal delta")
+    play_commit_parser = play_sub.add_parser(
+        "commit",
+        help="developer/trusted low-level commit of approved TurnProposal delta",
+    )
     play_commit_parser.add_argument("campaign_dir")
     play_commit_parser.add_argument("delta_json")
     play_commit_parser.add_argument("--proposal-json", help="TurnProposal JSON produced by preview and approved for commit")
@@ -412,14 +433,20 @@ def add_v1_parsers(subparsers: argparse._SubParsersAction, registered_actions: l
     )
     add_format_option(play_commit_parser)
 
-    play_health_parser = play_sub.add_parser("health", help="run a read-only runtime health check")
+    play_health_parser = play_sub.add_parser(
+        "health",
+        help="developer/trusted low-level read-only runtime health check",
+    )
     play_health_parser.add_argument("campaign_dir")
     add_format_option(play_health_parser)
-    play_ux_metrics_parser = play_sub.add_parser("ux-metrics", help="render UX-oriented runtime metrics")
+    play_ux_metrics_parser = play_sub.add_parser(
+        "ux-metrics",
+        help="developer/trusted low-level read-only runtime UX metrics",
+    )
     play_ux_metrics_parser.add_argument("campaign_dir")
     add_format_option(play_ux_metrics_parser)
 
-    mcp_parser = subparsers.add_parser("mcp", help="V1 MCP adapter commands")
+    mcp_parser = subparsers.add_parser("mcp", help="MCP adapter host/profile commands")
     mcp_sub = mcp_parser.add_subparsers(dest="mcp_type", required=True)
     mcp_serve_parser = mcp_sub.add_parser("serve", help="serve the V1 MCP adapter over stdio")
     mcp_serve_parser.add_argument("--root", required=True, help="root containing allowed campaign/save directories")
@@ -466,7 +493,7 @@ def add_v1_parsers(subparsers: argparse._SubParsersAction, registered_actions: l
     mcp_config_parser.add_argument("--command", dest="client_command", default="aigm", help="command used by the AI client")
     mcp_config_parser.add_argument("--server-name", default="aigm-kernel", help="MCP server name in client config")
 
-    player_parser = subparsers.add_parser("player", help="player-facing save registry and entry commands")
+    player_parser = subparsers.add_parser("player", help="player-safe save registry and turn commands")
     player_sub = player_parser.add_subparsers(dest="player_type", required=True)
 
     player_inspect_parser = player_sub.add_parser("inspect", help="inspect a player workspace registry")

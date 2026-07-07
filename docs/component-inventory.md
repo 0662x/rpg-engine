@@ -102,7 +102,7 @@
 
 | 组件 | 文件 | 当前责任 |
 | --- | --- | --- |
-| Platform Sidecar | `rpg_engine/platform_sidecar.py` | 平台入口门禁、冲突处理、指标 |
+| Platform Sidecar | `rpg_engine/platform_sidecar.py` | 平台入口门禁、冲突处理、指标、脱敏审计证据 |
 | Platform Prewarm | `rpg_engine/platform_prewarm.py` | 异步预热队列、worker、service |
 | MCP Transcript | `rpg_engine/mcp_transcript.py` | MCP 转录/审计材料 |
 | Capabilities | `rpg_engine/capabilities.py` | 能力声明 |
