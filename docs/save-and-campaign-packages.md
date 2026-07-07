@@ -130,6 +130,10 @@ V1 普通作者包不执行代码。新作者模板不应依赖 Python 插件、
 - Save Package 可以通过 `save.yaml.source_campaign_path` 声明只读来源 Campaign root；
   这类 trusted source root 只用于读取已声明来源包内部内容。
 - 绝对 content 路径仍应拒绝。
+- `campaign.yaml.content.*` key 必须是已注册 content type root，或当前明确允许的 auxiliary
+  author content，例如 `random_tables`、`palettes`。`characters`、`items`、`locations`
+  等 allowed entity `type` 不等于独立 package content root；这些记录应放在 `entities`
+  content type 下。
 
 ## Campaign Validation
 

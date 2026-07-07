@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import shutil
 import tempfile
 import unittest
@@ -7,8 +8,13 @@ from pathlib import Path
 
 import yaml
 
-from rpg_engine.campaign_validation import validate_campaign_package, run_campaign_smoke_tests
+from rpg_engine.campaign_validation import OPTIONAL_CONTENT_KEYS, validate_campaign_package, run_campaign_smoke_tests
 from rpg_engine.campaign import load_campaign
+from rpg_engine.content_types import get_default_registry
+from rpg_engine.content_sync import sync_campaign_content
+from rpg_engine.content_validation import validate_content_sources
+from rpg_engine.db import connect, init_database
+from rpg_engine.ai.schema_validation import validate_with_jsonschema
 from rpg_engine.palette import palette_files
 
 
@@ -94,6 +100,26 @@ class CampaignValidationTests(unittest.TestCase):
             self.assertIn("visibility: unsupported value public", joined)
             self.assertIn("weight: must be positive number", joined)
 
+    def test_rejects_missing_or_non_file_random_table_paths_without_traceback(self) -> None:
+        cases = [
+            ("missing", "content/missing-random-tables.yaml", "campaign.yaml.content.random_tables: missing file"),
+            ("directory", "content/random-table-dir", "campaign.yaml.content.random_tables: not a file"),
+        ]
+        for name, relative, expected in cases:
+            with self.subTest(case=name), tempfile.TemporaryDirectory() as tmp:
+                campaign = copy_fixture(tmp)
+                manifest_path = campaign / "campaign.yaml"
+                manifest = load_yaml(manifest_path)
+                manifest["content"]["random_tables"] = [relative]
+                write_yaml(manifest_path, manifest)
+                if name == "directory":
+                    (campaign / relative).mkdir()
+
+                result = validate_campaign_package(campaign)
+
+                self.assertFalse(result.ok)
+                self.assertIn(expected, "\n".join(result.errors))
+
     def test_rejects_absolute_content_paths_and_code_extensions(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             campaign = copy_fixture(tmp)
@@ -111,6 +137,202 @@ class CampaignValidationTests(unittest.TestCase):
             self.assertIn("must use relative package path", joined)
             self.assertIn("plugins/: V1 campaign packages must not include plugins", joined)
             self.assertIn("author_rules.py: V1 campaign packages must not include Python code", joined)
+
+    def test_rejects_content_paths_with_parent_segments_even_when_they_stay_in_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = copy_fixture(tmp)
+            manifest_path = campaign / "campaign.yaml"
+            manifest = load_yaml(manifest_path)
+            manifest["content"]["entities"] = ["content/../content/entities.yaml"]
+            write_yaml(manifest_path, manifest)
+
+            result = validate_campaign_package(campaign)
+
+            self.assertFalse(result.ok)
+            self.assertIn(
+                "campaign.yaml.content.entities: path escapes campaign root content/../content/entities.yaml",
+                result.errors,
+            )
+
+    def test_rejects_unknown_content_key_from_unregistered_entity_type(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = copy_fixture(tmp)
+            manifest_path = campaign / "campaign.yaml"
+            manifest = load_yaml(manifest_path)
+            manifest["content"]["characters"] = "content/characters.yaml"
+            write_yaml(manifest_path, manifest)
+            (campaign / "content" / "characters.yaml").write_text("characters: []\n", encoding="utf-8")
+
+            result = validate_campaign_package(campaign)
+
+            self.assertFalse(result.ok)
+            self.assertIn("campaign.yaml.content.characters: unsupported V1 content key", result.errors)
+
+    def test_campaign_schema_rejects_unregistered_content_roots(self) -> None:
+        manifest = load_yaml(MINIMAL_FIXTURE / "campaign.yaml")
+        manifest["content"]["characters"] = "content/characters.yaml"
+
+        for schema_path in [
+            ENGINE_ROOT / "schemas" / "campaign.schema.json",
+            ENGINE_ROOT / "rpg_engine" / "resources" / "schemas" / "campaign.schema.json",
+        ]:
+            with self.subTest(schema=str(schema_path)):
+                schema = json.loads(schema_path.read_text(encoding="utf-8"))
+                content_schema = {
+                    "$schema": schema["$schema"],
+                    "$defs": schema["$defs"],
+                    **schema["properties"]["content"],
+                }
+                errors = validate_with_jsonschema(content_schema, manifest["content"])
+                self.assertIn("$.characters: unknown field", errors)
+
+    def test_campaign_schema_content_keys_match_registry_contract(self) -> None:
+        expected = {
+            *(spec.campaign_key for spec in get_default_registry().seed_specs() if spec.campaign_key),
+            *OPTIONAL_CONTENT_KEYS,
+        }
+
+        for schema_path in [
+            ENGINE_ROOT / "schemas" / "campaign.schema.json",
+            ENGINE_ROOT / "rpg_engine" / "resources" / "schemas" / "campaign.schema.json",
+        ]:
+            with self.subTest(schema=str(schema_path)):
+                schema = json.loads(schema_path.read_text(encoding="utf-8"))
+                content = schema["properties"]["content"]
+                self.assertEqual(set(content["properties"]), expected)
+
+    def test_campaign_palette_empty_list_uses_runtime_auto_discovery_for_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = copy_fixture(tmp)
+            manifest_path = campaign / "campaign.yaml"
+            manifest = load_yaml(manifest_path)
+            manifest["content"]["palettes"] = []
+            write_yaml(manifest_path, manifest)
+            palette_dir = campaign / "content" / "palettes"
+            palette_dir.mkdir()
+            (palette_dir / "bad.yaml").write_text("unexpected: []\n", encoding="utf-8")
+
+            result = validate_campaign_package(campaign)
+
+            self.assertFalse(result.ok)
+            self.assertIn("content/palettes/bad.yaml.unexpected: unsupported palette key", result.errors)
+
+    def test_content_sync_rejects_missing_registered_yaml_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign_path = copy_fixture(tmp)
+            (campaign_path / "content" / "world_settings.yaml").write_text("rules: []\n", encoding="utf-8")
+            campaign = load_campaign(campaign_path)
+            init_database(campaign, force=True)
+            spec = get_default_registry().get("world_setting")
+
+            with connect(campaign) as conn:
+                validation = validate_content_sources(campaign, conn, [spec])
+                self.assertFalse(validation.ok)
+                self.assertIn("content/world_settings.yaml.world_settings: required", validation.errors)
+                with self.assertRaisesRegex(ValueError, "content/world_settings.yaml.world_settings: required"):
+                    sync_campaign_content(campaign, conn, type_names=["world_setting"])
+
+    def test_content_source_validation_allows_same_source_clock_refs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign_path = copy_fixture(tmp)
+            campaign = load_campaign(campaign_path)
+            init_database(campaign, force=True)
+            clocks_path = campaign_path / "content" / "clocks.yaml"
+            clocks = load_yaml(clocks_path)
+            clocks["clocks"].append(
+                {
+                    "id": "clock:source-test",
+                    "name": "Source Test Clock",
+                    "segments_total": 4,
+                    "segments_filled": 0,
+                    "trigger_when_full": "The source test clock completes.",
+                }
+            )
+            write_yaml(clocks_path, clocks)
+            settings_path = campaign_path / "content" / "world_settings.yaml"
+            settings = load_yaml(settings_path)
+            settings["world_settings"].append(
+                {
+                    "id": "world:source-test",
+                    "name": "Source Test Setting",
+                    "category": "truth",
+                    "summary": "This setting links to a same-source clock.",
+                    "linked_clocks": ["clock:source-test"],
+                }
+            )
+            write_yaml(settings_path, settings)
+            registry = get_default_registry()
+
+            with connect(campaign) as conn:
+                validation = validate_content_sources(
+                    campaign,
+                    conn,
+                    [registry.get("clock"), registry.get("world_setting")],
+                )
+
+            self.assertTrue(validation.ok, validation.errors)
+
+    def test_content_source_validation_rejects_relationship_details_endpoint_refs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign_path = copy_fixture(tmp)
+            manifest_path = campaign_path / "campaign.yaml"
+            manifest = load_yaml(manifest_path)
+            manifest["content"]["relationships"] = ["content/relationships.yaml"]
+            write_yaml(manifest_path, manifest)
+            (campaign_path / "content" / "relationships.yaml").write_text(
+                """
+relationships:
+  - id: rel:bad-details-ref
+    name: Bad Details Ref
+    visibility: known
+    summary: Details endpoint must resolve.
+    source_id: loc:start
+    target_id: loc:start
+    details:
+      source_id: loc:missing
+      target_id: loc:start
+""".lstrip(),
+                encoding="utf-8",
+            )
+            campaign = load_campaign(campaign_path)
+            init_database(campaign, force=True)
+            spec = get_default_registry().get("relationship")
+
+            with connect(campaign) as conn:
+                validation = validate_content_sources(campaign, conn, [spec])
+                self.assertFalse(validation.ok)
+                self.assertIn("relationship[0].details.source_id: must match source_id loc:start", validation.errors)
+                self.assertIn("relationship[0].details.source_id: missing entity loc:missing", validation.errors)
+                with self.assertRaisesRegex(ValueError, "relationship\\[0\\].details.source_id: missing entity loc:missing"):
+                    sync_campaign_content(campaign, conn, type_names=["relationship"], allow_unsafe=True)
+
+    def test_campaign_validation_allows_world_setting_linked_entities_same_source_settings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = copy_fixture(tmp)
+            settings_path = campaign / "content" / "world_settings.yaml"
+            settings = load_yaml(settings_path)
+            settings["world_settings"].extend(
+                [
+                    {
+                        "id": "world:linked-a",
+                        "name": "Linked A",
+                        "category": "truth",
+                        "summary": "Links to another same-source world setting.",
+                        "linked_entities": ["world:linked-b"],
+                    },
+                    {
+                        "id": "world:linked-b",
+                        "name": "Linked B",
+                        "category": "truth",
+                        "summary": "Target world setting.",
+                    },
+                ]
+            )
+            write_yaml(settings_path, settings)
+
+            result = validate_campaign_package(campaign)
+
+            self.assertTrue(result.ok, result.errors)
 
     def test_reports_runtime_artifacts_without_rejecting_author_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

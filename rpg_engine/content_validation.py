@@ -54,6 +54,9 @@ def validate_content_delta(
     conn: sqlite3.Connection,
     *,
     registry: ContentRegistry | None = None,
+    extra_created_entity_ids: set[str] | None = None,
+    extra_created_rule_ids: set[str] | None = None,
+    extra_created_clock_ids: set[str] | None = None,
 ) -> ContentValidationResult:
     if not isinstance(delta, dict):
         return ContentValidationResult(["$: must be object"])
@@ -90,7 +93,15 @@ def validate_content_delta(
             if spec.validate_record:
                 errors.extend(f"{path}.{error}" for error in spec.validate_record(record))
 
-    validate_references(delta, conn, created, errors)
+    validate_references(
+        delta,
+        conn,
+        created,
+        errors,
+        extra_created_entity_ids=extra_created_entity_ids,
+        extra_created_rule_ids=extra_created_rule_ids,
+        extra_created_clock_ids=extra_created_clock_ids,
+    )
     warnings = high_impact_warnings(delta, conn)
     return ContentValidationResult(dedupe(errors), dedupe(warnings))
 
@@ -108,32 +119,107 @@ def validate_content_sources(
         "description": "validate registered campaign content before sync",
     }
     errors: list[str] = []
+    extra_created_entity_ids: set[str] = set()
+    extra_created_rule_ids: set[str] = set()
+    extra_created_clock_ids: set[str] = set()
+    records_by_type: dict[str, list[dict[str, Any]]] = {}
     for spec in specs:
         if not spec.campaign_key or not spec.yaml_key:
             continue
         collected: list[dict[str, Any]] = []
         for path in campaign.content_files(spec.campaign_key):
             data = load_yaml_file(path)
-            records = data.get(spec.yaml_key, [])
             relative = campaign.display_path(path)
-            if not isinstance(records, list):
-                errors.append(f"{relative}.{spec.yaml_key}: must be array")
+            records, shape_errors = content_source_records(data, spec, relative)
+            if shape_errors:
+                errors.extend(shape_errors)
                 continue
             for index, record in enumerate(records):
-                if not isinstance(record, dict):
-                    errors.append(f"{relative}.{spec.yaml_key}[{index}]: must be object")
-                    continue
                 if spec.validate_record and not spec.delta_key:
                     errors.extend(
                         f"{relative}.{spec.yaml_key}[{index}].{error}"
                         for error in spec.validate_record(record)
                     )
                 collected.append(record)
+        records_by_type[spec.name] = collected
+        collect_extra_created_ref_ids(
+            spec,
+            collected,
+            entity_ids=extra_created_entity_ids,
+            rule_ids=extra_created_rule_ids,
+            clock_ids=extra_created_clock_ids,
+        )
         if spec.delta_key:
             pseudo_delta[spec.delta_key] = collected
-    delta_result = validate_content_delta(pseudo_delta, conn, registry=registry)
+    delta_result = validate_content_delta(
+        pseudo_delta,
+        conn,
+        registry=registry,
+        extra_created_entity_ids=extra_created_entity_ids,
+        extra_created_rule_ids=extra_created_rule_ids,
+        extra_created_clock_ids=extra_created_clock_ids,
+    )
     errors.extend(delta_result.errors)
+    if "relationship" in records_by_type:
+        errors.extend(
+            validate_relationship_refs(
+                records_by_type["relationship"],
+                conn,
+                content_record_ids(registry.get("entity"), records_by_type.get("entity", [])),
+                prefix="relationship",
+            )
+        )
     return ContentValidationResult(dedupe(errors))
+
+
+def collect_extra_created_ref_ids(
+    spec: ContentTypeSpec,
+    records: list[dict[str, Any]],
+    *,
+    entity_ids: set[str],
+    rule_ids: set[str],
+    clock_ids: set[str],
+) -> None:
+    ids = {content_record_id(spec, record) for record in records}
+    ids.discard("")
+    if spec.name != "route":
+        entity_ids.update(ids)
+    if spec.name == "rule":
+        rule_ids.update(ids)
+    if spec.name == "clock":
+        clock_ids.update(ids)
+
+
+def content_record_id(spec: ContentTypeSpec, record: dict[str, Any]) -> str:
+    if spec.record_id:
+        return str(spec.record_id(record) or "")
+    return str(record.get("id") or "")
+
+
+def content_record_ids(spec: ContentTypeSpec, records: list[dict[str, Any]]) -> set[str]:
+    ids = {content_record_id(spec, record) for record in records}
+    ids.discard("")
+    return ids
+
+
+def content_source_records(data: Any, spec: ContentTypeSpec, relative: str) -> tuple[list[dict[str, Any]], list[str]]:
+    if not isinstance(data, dict):
+        return [], [f"{relative}: must be object"]
+    if not spec.yaml_key:
+        return [], []
+    if spec.yaml_key not in data:
+        return [], [f"{relative}.{spec.yaml_key}: required"]
+    raw_records = data[spec.yaml_key]
+    if not isinstance(raw_records, list):
+        return [], [f"{relative}.{spec.yaml_key}: must be array"]
+    records: list[dict[str, Any]] = []
+    errors: list[str] = []
+    for index, record in enumerate(raw_records):
+        if not isinstance(record, dict):
+            errors.append(f"{relative}.{spec.yaml_key}[{index}]: must be object")
+            continue
+        records.append(record)
+    return records, errors
 
 
 def validate_metadata(delta: dict[str, Any], errors: list[str]) -> None:
@@ -191,10 +277,21 @@ def validate_references(
     conn: sqlite3.Connection,
     created: dict[str, dict[str, Any]],
     errors: list[str],
+    *,
+    extra_created_entity_ids: set[str] | None = None,
+    extra_created_rule_ids: set[str] | None = None,
+    extra_created_clock_ids: set[str] | None = None,
 ) -> None:
-    created_rule_ids = ids_for_key(delta, "upsert_rules")
+    created_rule_ids = ids_for_key(delta, "upsert_rules") | set(extra_created_rule_ids or set())
     created_world_ids = ids_for_key(delta, "upsert_world_settings")
-    created_entity_ids = ids_for_key(delta, "upsert_entities") | created_rule_ids | created_world_ids
+    created_clock_ids = set(extra_created_clock_ids or set())
+    created_entity_ids = (
+        ids_for_key(delta, "upsert_entities")
+        | created_rule_ids
+        | created_world_ids
+        | created_clock_ids
+        | set(extra_created_entity_ids or set())
+    )
 
     for index, entity in enumerate(records_for_key(delta, "upsert_entities")):
         if not isinstance(entity, dict):
@@ -240,11 +337,48 @@ def validate_references(
             if str(target) not in created_rule_ids and not table_entity_exists(conn, "rules", str(target)):
                 errors.append(f"{path}.linked_rules: missing rule {target}")
         for target in setting.get("linked_clocks", []) if isinstance(setting.get("linked_clocks", []), list) else []:
-            if not table_entity_exists(conn, "clocks", str(target)):
+            if str(target) not in created_clock_ids and not table_entity_exists(conn, "clocks", str(target)):
                 errors.append(f"{path}.linked_clocks: missing clock {target}")
         for target in setting.get("linked_entities", []) if isinstance(setting.get("linked_entities", []), list) else []:
             if not entity_exists(conn, str(target), created_entity_ids):
                 errors.append(f"{path}.linked_entities: missing entity {target}")
+
+
+def validate_relationship_refs(
+    relationships: list[dict[str, Any]],
+    conn: sqlite3.Connection,
+    created_entity_ids: set[str],
+    *,
+    prefix: str,
+) -> list[str]:
+    errors: list[str] = []
+    for index, relationship in enumerate(relationships):
+        for field in ("source_id", "target_id"):
+            top_level_target = relationship.get(field)
+            details = relationship.get("details")
+            details_target = details.get(field) if isinstance(details, dict) else None
+            if top_level_target and details_target and str(top_level_target) != str(details_target):
+                errors.append(f"{prefix}[{index}].details.{field}: must match {field} {top_level_target}")
+            for path, target in relationship_endpoint_values(index, field, top_level_target, details_target, prefix=prefix):
+                if target and str(target) not in created_entity_ids and not entity_exists(conn, str(target), set()):
+                    errors.append(f"{path}: missing entity {target}")
+    return errors
+
+
+def relationship_endpoint_values(
+    index: int,
+    field: str,
+    top_level_target: Any,
+    details_target: Any,
+    *,
+    prefix: str,
+) -> tuple[tuple[str, Any], ...]:
+    values: list[tuple[str, Any]] = []
+    if top_level_target:
+        values.append((f"{prefix}[{index}].{field}", top_level_target))
+    if details_target:
+        values.append((f"{prefix}[{index}].details.{field}", details_target))
+    return tuple(values)
 
 
 def records_for_key(delta: dict[str, Any], key: str) -> list[Any]:

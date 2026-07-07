@@ -13,7 +13,7 @@ from .campaign import Campaign, load_campaign, validate_campaign_config
 from .capabilities import V1_CAPABILITY_SET
 from .content_types import get_default_registry
 from .db import connect, init_database
-from .packages.service import load_package_source, validate_package_source
+from .packages.service import PACKAGE_AUXILIARY_CONTENT_KEYS, load_package_source, validate_package_source
 from .palette import KIND_KEYS, PALETTE_DISCOVERY_MODES, PALETTE_INTENTS
 from .projection_service import ProjectionService
 from .runtime import GMRuntime
@@ -31,7 +31,7 @@ REQUIRED_V1_FILES = (
     "tests/smoke.yaml",
 )
 REQUIRED_CONTENT_KEYS = ("entities", "rules", "clocks")
-OPTIONAL_CONTENT_KEYS = ("routes", "world_settings", "random_tables", "relationships", "palettes")
+OPTIONAL_CONTENT_KEYS = tuple(sorted(PACKAGE_AUXILIARY_CONTENT_KEYS))
 SMOKE_TYPES = {"start_turn", "query", "preview", "validate_delta", "random_table"}
 RUNTIME_ARTIFACT_FILES = (
     "save.yaml",
@@ -172,7 +172,11 @@ def validate_campaign_package(campaign_dir: str | Path) -> CampaignValidationRes
         validate_content_references(source.records_by_type, data if isinstance(data, dict) else {}, errors)
         validate_palettes(root, data if isinstance(data, dict) else {}, source.records_by_type, errors, warnings)
     except Exception as exc:
-        errors.append(f"content: failed to load registered content: {exc}")
+        message = str(exc)
+        if message == "package palette directory escapes package root: content/palettes":
+            errors.append("content/palettes: path escapes campaign root")
+        else:
+            errors.append(f"content: failed to load registered content: {message}")
 
     return CampaignValidationResult(
         campaign_id=str(data.get("id", "")) if isinstance(data, dict) else "",
@@ -376,6 +380,9 @@ def validate_content_paths(root: Path, data: dict[str, Any], errors: list[str]) 
             if path.is_absolute():
                 errors.append(f"campaign.yaml.content.{key}: must use relative package path, got {value}")
                 continue
+            if ".." in path.parts:
+                errors.append(f"campaign.yaml.content.{key}: path escapes campaign root {value}")
+                continue
             full_path = root / path
             try:
                 full_path.resolve().relative_to(root.resolve())
@@ -403,6 +410,8 @@ def validate_random_tables(root: Path, data: dict[str, Any], errors: list[str]) 
         return
     seen: set[str] = set()
     for path in content_paths(root, content["random_tables"], errors, "random_tables"):
+        if not path.is_file():
+            continue
         try:
             document = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         except yaml.YAMLError as exc:
@@ -498,7 +507,10 @@ def validate_palettes(
 def palette_paths(root: Path, data: dict[str, Any], errors: list[str]) -> list[Path]:
     content = data.get("content", {})
     if isinstance(content, dict) and "palettes" in content:
-        return content_paths(root, content["palettes"], errors, "palettes")
+        raw = content["palettes"]
+        paths = content_paths(root, raw, errors, "palettes")
+        if paths or not (isinstance(raw, list) and not raw):
+            return paths
     palette_dir = root / "content" / "palettes"
     if not palette_dir.exists():
         return []
@@ -682,6 +694,9 @@ def validate_content_references(
     location_ids = {str(record.get("id")) for record in entities if record.get("type") == "location" and record.get("id")}
     clock_ids = {str(record.get("id")) for record in records_by_type.get("clock", []) if record.get("id")}
     rule_ids = {str(record.get("id")) for record in records_by_type.get("rule", []) if record.get("id")}
+    relationship_ids = {str(record.get("id")) for record in records_by_type.get("relationship", []) if record.get("id")}
+    world_setting_ids = {str(record.get("id")) for record in records_by_type.get("world_setting", []) if record.get("id")}
+    entity_backed_ids = entity_ids | rule_ids | clock_ids | relationship_ids | world_setting_ids
     for index, entity in enumerate(entities):
         path = f"entity[{index}]"
         visibility = str(entity.get("visibility", "known"))
@@ -712,7 +727,7 @@ def validate_content_references(
         for field, targets in [
             ("linked_rules", rule_ids),
             ("linked_clocks", clock_ids),
-            ("linked_entities", entity_ids),
+            ("linked_entities", entity_backed_ids),
         ]:
             value = setting.get(field, [])
             if not isinstance(value, list):
@@ -822,6 +837,9 @@ def content_paths(root: Path, raw: Any, errors: list[str], key: str) -> list[Pat
         path = Path(value)
         if path.is_absolute():
             errors.append(f"campaign.yaml.content.{key}: must use relative package path, got {value}")
+            continue
+        if ".." in path.parts:
+            errors.append(f"campaign.yaml.content.{key}: path escapes campaign root {value}")
             continue
         candidate = root / path
         try:

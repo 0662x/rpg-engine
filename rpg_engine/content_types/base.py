@@ -39,6 +39,15 @@ class MergePolicy:
             return "mergeable"
         return "conflict-only"
 
+    def contract_metadata(self) -> dict[str, tuple[str, ...]]:
+        return {
+            "author_owned": tuple(sorted(self.author_owned)),
+            "runtime_owned": tuple(sorted(self.runtime_owned)),
+            "mergeable": tuple(sorted(self.mergeable)),
+            "conflict_only": tuple(sorted(self.conflict_only)),
+            "default_ownership": ("conflict-only",),
+        }
+
 
 @dataclass(frozen=True)
 class ContentTypeSpec:
@@ -69,3 +78,22 @@ class ContentTypeSpec:
     @property
     def seed_handler(self) -> Callable[[ContentRuntime, dict[str, Any]], None] | None:
         return self.seed or self.upsert
+
+    def contract_metadata(self) -> dict[str, Any]:
+        merge_policy = self.merge_policy or MergePolicy()
+        return {
+            "name": self.name,
+            "campaign_key": self.campaign_key,
+            "yaml_key": self.yaml_key,
+            "delta_key": self.delta_key,
+            "entity_type": self.entity_type,
+            "table": self.table,
+            "count_key": self.result_key,
+            "payload_key": self.event_payload_key,
+            "sync_safe": self.sync_safe,
+            "has_seed": self.seed_handler is not None,
+            "has_delta_upsert": self.delta_key is not None and self.upsert is not None,
+            "has_record_validation": self.validate_record is not None,
+            "has_database_validation": self.validate_database is not None,
+            "merge_policy": merge_policy.contract_metadata(),
+        }

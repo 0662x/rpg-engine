@@ -76,6 +76,7 @@
     "content": {
       "type": "object",
       "required": ["entities", "rules", "clocks"],
+      "additionalProperties": false,
       "properties": {
         "entities": {
           "$ref": "#/$defs/path_or_paths"

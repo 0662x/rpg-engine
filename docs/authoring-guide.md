@@ -79,11 +79,7 @@ Campaign Package，而不是把 warning 当成可发布内容。
 小型 Campaign 可以从以下内容文件开始：
 
 ```text
-content/locations.yaml
-content/characters.yaml
-content/items.yaml
-content/projects.yaml
-content/references.yaml
+content/entities.yaml
 content/relationships.yaml
 content/rules.yaml
 content/clocks.yaml
@@ -92,8 +88,12 @@ content/world_settings.yaml
 content/random_tables.yaml
 ```
 
-每个 YAML 文件都应该易读、易 review、易 diff。如果单个文件膨胀到数百行，按地区、
-阵营或类型拆分。
+每个 YAML 文件都应该易读、易 review、易 diff。如果单个文件膨胀到数百行，可以按地区、
+阵营或类型拆分为多个文件，但 `campaign.yaml.content.*` root key 仍必须使用已注册 key，
+例如 `entities`、`relationships`、`rules`、`clocks`、`routes`、`world_settings`，
+或当前明确允许的 auxiliary keys `random_tables`、`palettes`。文件名可以叫
+`content/characters.yaml`，但 manifest 中仍应挂在 `content.entities` 下，而不是新增
+未注册的 `content.characters` root。
 
 ## 基础记录示例
 

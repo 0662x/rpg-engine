@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from rpg_engine.content_types import ContentTypeSpec, MergePolicy
+from rpg_engine.content_types import get_default_registry
 from rpg_engine.packages.merge import (
     dry_run_package_upgrade,
     merge_package_record,
@@ -121,6 +122,45 @@ class PackageMergeTests(unittest.TestCase):
         self.assertEqual(result.merged["aliases"], ["current"])
         self.assertEqual(record_mutating_diffs(result), ())
         self.assertEqual(record_effective_action(result), "unchanged")
+
+    def test_default_entity_merge_policy_protects_runtime_fields(self) -> None:
+        spec = get_default_registry().get("entity")
+        result = merge_package_record(
+            spec,
+            current={
+                "id": "loc:start",
+                "type": "location",
+                "name": "Start",
+                "summary": "Current summary",
+                "visibility": "known",
+                "status": "active",
+                "location_id": "loc:runtime",
+                "aliases": ["current"],
+                "details": {"runtime": True},
+            },
+            incoming={
+                "id": "loc:start",
+                "type": "location",
+                "name": "Package Start",
+                "summary": "Package summary",
+                "visibility": "hinted",
+                "status": "archived",
+                "location_id": "loc:package",
+                "aliases": ["package"],
+                "details": {"package": True},
+            },
+        )
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.merged["name"], "Package Start")
+        self.assertEqual(result.merged["summary"], "Package summary")
+        self.assertEqual(result.merged["visibility"], "hinted")
+        self.assertEqual(result.merged["status"], "active")
+        self.assertEqual(result.merged["location_id"], "loc:runtime")
+        self.assertEqual(result.merged["aliases"], ["current", "package"])
+        self.assertEqual(result.merged["details"], {"runtime": True})
+        conflicts = {conflict.field for conflict in result.conflicts}
+        self.assertEqual(conflicts, {"details"})
 
 
 if __name__ == "__main__":

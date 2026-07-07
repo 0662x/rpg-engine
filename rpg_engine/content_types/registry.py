@@ -101,12 +101,18 @@ def render_content_type_list(registry: ContentRegistry | None = None) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _format_contract_values(values: tuple[str, ...]) -> str:
+    return ", ".join(f"`{value}`" for value in values)
+
+
 def render_content_type_detail(name: str, registry: ContentRegistry | None = None) -> tuple[str, bool]:
     registry = registry or get_default_registry()
     try:
         spec = registry.get(name)
     except KeyError:
         return f"FAILED\n- unknown content type: {name}\n", False
+    metadata = spec.contract_metadata()
+    merge_policy = metadata["merge_policy"]
     presentation_spec = None
     if spec.entity_type:
         from ..card_registry import get_default_card_registry
@@ -131,6 +137,18 @@ def render_content_type_detail(name: str, registry: ContentRegistry | None = Non
         f"| Has Delta Upsert | {'yes' if spec.upsert and spec.delta_key else 'no'} |",
         f"| Has Record Preflight | {'yes' if spec.validate_record else 'no'} |",
         f"| Has Database Check | {'yes' if spec.validate_database else 'no'} |",
+        f"| Record Validation | {'yes' if metadata['has_record_validation'] else 'no'} |",
+        f"| Database Validation | {'yes' if metadata['has_database_validation'] else 'no'} |",
+        "",
+        "## Merge Policy",
+        "",
+        "| Field Group | Fields |",
+        "|-------------|--------|",
+        f"| Author Owned | {_format_contract_values(merge_policy['author_owned'])} |",
+        f"| Runtime Owned | {_format_contract_values(merge_policy['runtime_owned'])} |",
+        f"| Mergeable | {_format_contract_values(merge_policy['mergeable'])} |",
+        f"| Conflict Only | {_format_contract_values(merge_policy['conflict_only'])} |",
+        f"| Unlisted Fields | `{merge_policy['default_ownership'][0]}` |",
         "",
         "## Presentation",
         "",

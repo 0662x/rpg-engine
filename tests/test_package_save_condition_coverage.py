@@ -85,13 +85,28 @@ def result_object(payload: dict[str, object]) -> SimpleNamespace:
 
 
 class PackageServiceConditionCoverageTests(unittest.TestCase):
+    def test_load_package_source_rejects_non_object_manifest_content(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_yaml(
+                root / "package.yaml",
+                {
+                    "id": "pkg",
+                    "version": "1",
+                    "content": "not-an-object",
+                },
+            )
+
+            with self.assertRaisesRegex(ValueError, "manifest.content must be object"):
+                load_package_source(root)
+
     def test_package_source_validation_combines_manifest_record_and_migration_errors(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             write_yaml(
                 root / "package.yaml",
                 {
-                    "content": "not-an-object",
+                    "content": {},
                     "content_schema_version": "",
                     "migrations": [
                         "migrations/missing-id.yaml",
@@ -150,7 +165,6 @@ class PackageServiceConditionCoverageTests(unittest.TestCase):
             self.assertFalse(validation.ok)
             self.assertIn("manifest.package_version or manifest.version is required", validation.errors)
             self.assertIn("manifest.content_schema_version must be non-empty string", validation.errors)
-            self.assertIn("manifest.content must be object", validation.errors)
             self.assertIn("package has no registered content records", validation.warnings)
             self.assertIn("migrations[0].id: required", rendered)
             self.assertIn("migrations[1].operations[0].from: required", rendered)
@@ -164,6 +178,10 @@ class PackageServiceConditionCoverageTests(unittest.TestCase):
                 migration_entry_path(root, "/tmp/migration.yaml")
             with self.assertRaisesRegex(ValueError, "escapes package root"):
                 migration_entry_path(root, "../outside-migration.yaml")
+            with self.assertRaisesRegex(ValueError, "escapes package root"):
+                migration_entry_path(root, "migrations/../migrations/one.yaml")
+            with self.assertRaisesRegex(ValueError, "must be relative"):
+                migration_entry_path(root, "~missing-user/migration.yaml")
 
     def test_package_source_rejects_migration_paths_that_escape_package_root(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -237,6 +255,14 @@ class PackageServiceConditionCoverageTests(unittest.TestCase):
                     "field": "type",
                     "reason": "explicit policy break",
                 },
+                {
+                    "type": "update_conflict_field",
+                    "content_type": "entity",
+                    "record_id": "item:strict",
+                    "field": "type",
+                    "value": "material",
+                    "reason": "explicit value constrains package content",
+                },
                 {"type": "update_conflict_field", "content_type": "route", "record_id": "route:test", "field": "id"},
                 {"type": "rename_alias", "entity_id": "item:test", "from": "old", "to": "new"},
             ),
@@ -275,15 +301,33 @@ class PackageServiceConditionCoverageTests(unittest.TestCase):
                     conflicts=(conflict_type, conflict_details),
                 ),
                 PackageRecordMerge(record_id="item:skip", action="update", merged=None, conflicts=(conflict_type,)),
+                PackageRecordMerge(
+                    record_id="item:strict",
+                    action="update",
+                    merged={"id": "item:strict", "type": "item"},
+                    conflicts=(
+                        PackageFieldDiff(
+                            field="type",
+                            ownership="conflict-only",
+                            action="conflict",
+                            current="item",
+                            incoming="equipment",
+                            merged="item",
+                            message="requires migration",
+                        ),
+                    ),
+                ),
             ),
         )
 
         authorized = apply_migration_authorizations(source, "entity", dry_run)
         authorized_record = authorized.records[0]
+        constrained_record = authorized.records[2]
         self.assertEqual(authorized_record.merged["type"], "equipment")
         self.assertEqual([item.field for item in authorized_record.conflicts], ["details"])
-        self.assertEqual(conflict_field_authorizations(source, "entity"), {("item:test", "type")})
-        self.assertEqual(conflict_field_authorizations(source, "clock"), set())
+        self.assertEqual(constrained_record.conflicts[0].message, "explicit migration value mismatch")
+        self.assertEqual(set(conflict_field_authorizations(source, "entity")), {("item:test", "type"), ("item:strict", "type")})
+        self.assertEqual(conflict_field_authorizations(source, "clock"), {})
 
         diff = PackageDiffResult(
             package_id="pkg",
@@ -408,7 +452,7 @@ class PackageServiceConditionCoverageTests(unittest.TestCase):
                 self.assertEqual(changed, ["item:coin"])
                 self.assertIsNone(conn.execute("select 1 from aliases where alias='old coin'").fetchone())
                 self.assertIsNotNone(conn.execute("select 1 from aliases where alias='fresh coin'").fetchone())
-                self.assertEqual(json.loads(conn.execute("select details_json from entities where id='item:coin'").fetchone()[0]), {"value": 2})
+                self.assertEqual(json.loads(conn.execute("select details_json from entities where id='item:coin'").fetchone()[0]), {"value": 1})
 
                 self.assertEqual(
                     apply_package_migration_operation(
@@ -420,7 +464,7 @@ class PackageServiceConditionCoverageTests(unittest.TestCase):
                     ),
                     ["item:coin"],
                 )
-                self.assertEqual(conn.execute("select type from entities where id='item:coin'").fetchone()[0], "equipment")
+                self.assertEqual(conn.execute("select type from entities where id='item:coin'").fetchone()[0], "item")
                 self.assertEqual(
                     apply_package_migration_operation(
                         conn,

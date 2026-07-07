@@ -8,7 +8,7 @@ from .campaign import Campaign, load_yaml_file
 from .content_types import ContentRuntime, ContentTypeSpec, get_default_registry
 from .db import utc_now
 from .save import next_turn_id
-from .content_validation import validate_content_sources
+from .content_validation import content_source_records, validate_content_sources
 from .unit_of_work import UnitOfWork
 
 
@@ -68,7 +68,10 @@ def sync_campaign_content(
             for path in campaign.content_files(spec.campaign_key):
                 file_records[spec.name].append(campaign.display_path(path))
                 data = load_yaml_file(path)
-                for record in data.get(spec.yaml_key, []):
+                records, shape_errors = content_source_records(data, spec, campaign.display_path(path))
+                if shape_errors:
+                    raise ValueError("Invalid campaign content:\n" + "\n".join(f"- {error}" for error in shape_errors))
+                for record in records:
                     handler(runtime, record)
                     counts[spec.result_key] += 1
                     payload_records[spec.event_payload_key].append(spec.record_id(record))

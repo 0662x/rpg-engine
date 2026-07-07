@@ -191,7 +191,7 @@ def package_file_checksums(source: Any) -> list[PackageFileChecksum]:
     checksums: list[PackageFileChecksum] = []
     seen: set[str] = set()
     for path in sorted(paths, key=lambda item: str(item)):
-        key = str(path.resolve())
+        key = relative_to_root(source.root, path)
         if key in seen:
             continue
         seen.add(key)
@@ -208,9 +208,12 @@ def package_file_checksums(source: Any) -> list[PackageFileChecksum]:
 
 def relative_to_root(root: Path, path: Path) -> str:
     try:
-        return str(path.resolve().relative_to(root.resolve()))
+        return str(path.relative_to(root))
     except ValueError:
-        return str(path)
+        try:
+            return str(path.resolve().relative_to(root.resolve()))
+        except ValueError:
+            return str(path)
 
 
 def validate_lock_for_source(lock: PackageLock | None, source: Any, *, require_lock: bool) -> tuple[list[str], list[str]]:

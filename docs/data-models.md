@@ -335,21 +335,33 @@ Turn delta 是 `save_turn_delta()` 和 commit services 消费的已校验写入 
 
 ## Content Type Registry
 
-Content registry 映射 campaign YAML、delta keys、runtime tables 和 merge policy。
+Content registry 映射 campaign YAML、delta keys、runtime tables、validation rule 和 merge policy。
 
 当前 default registry：
 
-| 名称 | Campaign key | YAML key | Delta key | Entity type | Table | Sync safe |
-| --- | --- | --- | --- | --- | --- | --- |
-| `entity` | `entities` | `entities` | `upsert_entities` |  | `entities` | no |
-| `rule` | `rules` | `rules` | `upsert_rules` | `rule` | `rules` | no |
-| `clock` | `clocks` | `clocks` |  | `clock` | `clocks` | no |
-| `route` | `routes` | `routes` | `upsert_routes` |  | `routes` | no |
-| `relationship` | `relationships` | `relationships` |  | `relationship` | `entities` | no |
-| `world_setting` | `world_settings` | `world_settings` | `upsert_world_settings` | `world_setting` | `world_settings` | yes |
+| 名称 | Campaign key | YAML key | Delta key | Entity type | Table | Sync safe | Validation | Merge policy |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `entity` | `entities` | `entities` | `upsert_entities` |  | `entities` | no | record | author-owned name/summary/visibility; runtime-owned status/location/owner/typed side data; aliases merge; id/type/details conflict-only |
+| `rule` | `rules` | `rules` | `upsert_rules` | `rule` | `rules` | no | record | author-owned statement/scope/priority/examples/exceptions; aliases merge; id conflict-only |
+| `clock` | `clocks` | `clocks` |  | `clock` | `clocks` | no | record | author-owned clock definition; runtime-owned filled segments and last tick; aliases merge; id conflict-only |
+| `route` | `routes` | `routes` | `upsert_routes` |  | `routes` | no | record | author-owned endpoints/travel requirements; runtime-owned verification turn; id conflict-only |
+| `relationship` | `relationships` | `relationships` |  | `relationship` | `entities` | no | record | author-owned endpoints/summary/state/stance; runtime-owned trust/status; aliases merge; id/details conflict-only |
+| `world_setting` | `world_settings` | `world_settings` | `upsert_world_settings` | `world_setting` | `world_settings` | yes | record + database | author-owned setting content; linked lists merge; id/status conflict-only |
 
 Delta schema 允许的 entity `type` 多于 registry 当前作为一等 content type seed 的类型。
-不要把每个允许的 entity type 都当成已注册 package content type。
+不要把每个允许的 entity type 都当成已注册 package content type。例如 `character`、`item`
+和 `location` 是 `entities` content type 中的 entity records，不是 `campaign.yaml.content`
+下的独立 `characters`、`items` 或 `locations` roots。
+
+Package validation、diff、install 和 upgrade 必须使用 registry seed specs 检查 registered
+content roots。`random_tables` 和 `palettes` 是当前合法 auxiliary author content，但不会被伪装成
+registry content records。未知 `campaign.yaml.content.*` key、绝对路径或 package root escape
+必须拒绝，不能在 package workflow 中静默忽略。
+
+`python3 -m rpg_engine content inspect-type <name>` 会从 `ContentTypeSpec` 输出 lifecycle、
+record/database validation、merge policy ownership buckets 和 presentation contract。该输出是
+检查 schema drift 的运维入口；不要维护第二份手写 content type 真值表。未列入 merge policy
+bucket 的字段默认按 `conflict-only` 处理，需要 migration 或显式维护决策。
 
 ## TurnProposal
 
