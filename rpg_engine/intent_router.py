@@ -14,7 +14,9 @@ from .ai_intent.normalization import normalize_intent_candidate
 from .ai_intent.router import AIIntentRouter
 from .ai_intent.types import ClarificationChoice, ClarificationQuestion, IntentCandidate, RouteOutcome
 from .campaign import Campaign
+from .db import entity_subtype_visibility_sql
 from .ux import PlanStep, RepairOption, UxStatus
+from .visibility import ensure_visibility_sql_functions, entity_visibility_sql, normalized_text_sql
 
 
 QUERY_KEYWORDS = [
@@ -1611,13 +1613,18 @@ def first_visible_entity_in_text(
     *,
     preferred_types: tuple[str, ...] = (),
 ) -> sqlite3.Row | None:
+    ensure_visibility_sql_functions(conn)
+    visibility_clause = entity_visibility_sql("player", "e")
+    subtype_visibility_clause = entity_subtype_visibility_sql("player", "e", "c")
     rows = conn.execute(
-        """
-        select id, type, name, summary, location_id
-        from entities
-        where status = 'active'
-          and visibility in ('known', 'hinted')
-        order by length(name) desc, id
+        f"""
+        select e.id, e.type, e.name, e.summary, e.location_id
+        from entities e
+        left join clocks c on c.entity_id = e.id
+        where {normalized_text_sql("e.status")} = 'active'
+          {visibility_clause}
+          {subtype_visibility_clause}
+        order by length(e.name) desc, e.id
         """
     ).fetchall()
     haystack = text.lower()

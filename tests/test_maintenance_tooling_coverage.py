@@ -1592,6 +1592,7 @@ class ActionResolverCombinationCoverageTests(unittest.TestCase):
                 mark_social_no_change_when_low_impact(trade_delta, "交易盐", "赠送")
                 attached = {"events": [{"payload": {}}]}
                 attach_palette_to_social_delta(
+                    conn,
                     attached,
                     {"status": "available", "entry": {"id": "palette:test", "_kind": "faction", "name": "传闻"}},
                 )

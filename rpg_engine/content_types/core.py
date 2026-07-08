@@ -43,8 +43,17 @@ def validate_entity_record(record: dict[str, Any]) -> list[str]:
         errors.append("character: must be object")
     if "location" in record and not isinstance(record.get("location"), dict):
         errors.append("location: must be object")
-    if "crop_plot" in record and not isinstance(record.get("crop_plot"), dict):
-        errors.append("crop_plot: must be object")
+    if "crop_plot" in record:
+        crop_plot = record.get("crop_plot")
+        if not isinstance(crop_plot, dict):
+            errors.append("crop_plot: must be object")
+        else:
+            if "plot_no" not in crop_plot or isinstance(crop_plot.get("plot_no"), bool) or not isinstance(crop_plot.get("plot_no"), int):
+                errors.append("crop_plot.plot_no: required integer")
+            if not isinstance(crop_plot.get("crop_entity_id"), str) or not str(crop_plot.get("crop_entity_id", "")).strip():
+                errors.append("crop_plot.crop_entity_id: required non-empty string")
+    elif entity_type == "crop_plot":
+        errors.append("crop_plot: required")
     return [*errors, *_validate_aliases(record)]
 
 

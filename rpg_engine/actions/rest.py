@@ -16,6 +16,7 @@ from ..preview import (
     summarize_crop_plots,
     suggested_rest_clock_ticks,
 )
+from ..redaction import redact_hidden_entity_refs
 from .base import (
     ActionOptionSpec,
     ActionResolverSpec,
@@ -89,10 +90,10 @@ def resolve_rest(
 
     return ResolutionResult(
         status="ready",
-        facts_used=tuple(dict.fromkeys(str(item) for item in facts if item)),
+        facts_used=tuple(redact_hidden_entity_refs(conn, tuple(dict.fromkeys(str(item) for item in facts if item)), drop_empty=False)),
         rules_applied=tuple(rules),
-        warnings=tuple(warnings),
-        proposed_delta=proposed_delta,
+        warnings=tuple(redact_hidden_entity_refs(conn, tuple(warnings), drop_empty=False)),
+        proposed_delta=redact_hidden_entity_refs(conn, proposed_delta, drop_empty=False),
         narrative_constraints=(
             "Use rest_turn.md for the response.",
             "Do not introduce night interruptions, dreams, attacks or weather changes unless they are saved in delta.",
@@ -114,11 +115,12 @@ def validate_rest_delta(
     current_day = parse_game_day(meta.get("current_game_day"))
     target_day = current_day + 1 if rest_target["overnight"] and current_day else current_day
     target_time = rest_target["time_block"]
-    current_location_id = meta.get("current_location_id")
+    current = current_location_row(conn, meta)
+    current_location_id = current["id"] if current else None
     errors: list[str] = []
     warnings: list[str] = []
     if not current_location_id:
-        errors.append("current_location_id is missing")
+        errors.append("current_location_id is missing or unreadable")
     if delta.get("intent") != "rest":
         warnings.append("delta intent is not rest")
     if delta.get("location_after") and str(delta["location_after"]) != str(current_location_id):

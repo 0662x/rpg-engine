@@ -7,8 +7,11 @@ from typing import Any
 from ..campaign import Campaign
 from ..db import get_meta, resolve_entity
 from ..palette import find_palette_candidate, palette_candidate_payload
+from ..preview import current_location_label
+from ..redaction import redact_hidden_entity_refs
 from ..render import parse_json
 from ..ux import RepairOption
+from ..visibility import can_read_hidden, normalize_visibility_view
 from .base import (
     ActionOptionSpec,
     ActionResolverSpec,
@@ -31,21 +34,30 @@ def allows_unknown_lead(options: Any) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "y", "未知线索", "unknown"}
 
 
+def action_request_view(context_data: dict[str, Any] | None) -> str:
+    return normalize_visibility_view(str((context_data or {}).get("view") or "player"))
+
+
+def redact_explore_value(conn: sqlite3.Connection, value: Any, *, should_redact: bool) -> Any:
+    return redact_hidden_entity_refs(conn, value, drop_empty=False) if should_redact else value
+
+
 def preview_explore(
     campaign: Campaign,
     conn: sqlite3.Connection,
     context_data: dict[str, Any],
     options: Any,
 ) -> str:
-    del context_data
+    request_view = action_request_view(context_data)
+    should_redact = not can_read_hidden(request_view)
     palette_id = option_value(options, "palette_id")
     if palette_id:
-        return render_palette_explore_preview(campaign, conn, options, str(palette_id))
+        return render_palette_explore_preview(campaign, conn, options, str(palette_id), should_redact=should_redact)
     target_query = explore_target_query(options)
     approach = option_value(options, "approach")
     user_text = option_value(options, "user_text") or target_query or "探索"
     meta = get_meta(conn)
-    current_location = str(meta.get("current_location_id", "unknown"))
+    current_location = current_location_label(conn, meta)
     lines = [
         "## 探索行动预演",
         "",
@@ -53,7 +65,7 @@ def preview_explore(
         "| 项目 | 值 |",
         "|------|----|",
         f"| 原始行动 | {user_text} |",
-        f"| 当前地点 | `{current_location}` |",
+        f"| 当前地点 | {current_location} |",
         f"| 探索目标 | {target_query or '未明确'} |",
         f"| 方法 | {approach or '未明确'} |",
     ]
@@ -68,9 +80,10 @@ def preview_explore(
                 "缺少探索目标，不能生成保存草案。",
             ]
         )
-        return "\n".join(lines)
+        text = "\n".join(lines)
+        return str(redact_hidden_entity_refs(conn, text)) if should_redact else text
 
-    entity = resolve_entity(conn, str(target_query), view="player")
+    entity = resolve_entity(conn, str(target_query), view=request_view)
     lines.extend(["", "### 已知目标"])
     if entity:
         details = parse_json(entity["details_json"], {})
@@ -123,7 +136,8 @@ def preview_explore(
                 "```",
             ]
         )
-    return "\n".join(lines)
+    text = "\n".join(lines)
+    return str(redact_hidden_entity_refs(conn, text)) if should_redact else text
 
 
 def validate_explore_request(
@@ -132,7 +146,7 @@ def validate_explore_request(
     context_data: dict[str, Any],
     options: Any,
 ) -> ActionValidationResult:
-    del context_data
+    request_view = action_request_view(context_data)
     palette_id = option_value(options, "palette_id")
     if palette_id:
         candidate = find_palette_candidate(
@@ -146,7 +160,7 @@ def validate_explore_request(
     target_query = explore_target_query(options)
     if not target_query:
         return ActionValidationResult(missing_required=("target",))
-    target = resolve_entity(conn, target_query, view="player")
+    target = resolve_entity(conn, target_query, view=request_view)
     if not target and not allows_unknown_lead(options):
         return ActionValidationResult(errors=(f"target not found: {target_query}",))
     return ActionValidationResult()
@@ -158,10 +172,11 @@ def resolve_explore(
     context_data: dict[str, Any],
     options: Any,
 ) -> ResolutionResult:
-    del context_data
+    request_view = action_request_view(context_data)
+    should_redact = not can_read_hidden(request_view)
     palette_id = option_value(options, "palette_id")
     if palette_id:
-        return resolve_palette_explore(campaign, conn, options, str(palette_id))
+        return resolve_palette_explore(campaign, conn, options, str(palette_id), should_redact=should_redact)
     target_query = explore_target_query(options)
     if not target_query:
         return ResolutionResult(
@@ -179,18 +194,29 @@ def resolve_explore(
                 ),
             ),
         )
-    entity = resolve_entity(conn, target_query, view="player")
+    entity = resolve_entity(conn, target_query, view=request_view)
     if not entity and not allows_unknown_lead(options):
+        safe_target_query = (
+            str(redact_hidden_entity_refs(conn, str(target_query), drop_empty=False))
+            if should_redact
+            else str(target_query)
+        )
+        approach = option_value(options, "approach")
+        safe_approach = redact_hidden_entity_refs(conn, approach, drop_empty=False) if should_redact else approach
         return ResolutionResult(
             status="blocked",
-            confirmations=(f"target not found: {target_query}",),
-            player_message=f"我没找到“{target_query}”对应的已知可见对象。可以改成已知对象，或明确把它当作未知线索探索。",
+            confirmations=(f"target not found: {safe_target_query}",),
+            player_message=f"我没找到“{safe_target_query}”对应的已知可见对象。可以改成已知对象，或明确把它当作未知线索探索。",
             repair_options=(
                 RepairOption(
                     id="mark_unknown_lead",
                     label="作为未知线索探索",
                     action="explore",
-                    options={"target": target_query, "approach": option_value(options, "approach"), "unknown_lead": True},
+                    options={
+                        "target": safe_target_query,
+                        "approach": safe_approach,
+                        "unknown_lead": True,
+                    },
                     effect="保存为 unknown_lead，不直接确认新事实",
                 ),
             ),
@@ -198,12 +224,16 @@ def resolve_explore(
     return ResolutionResult(
         status="ready",
         facts_used=(str(entity["id"]),) if entity else (),
-        proposed_delta=build_explore_delta(
-            target_query=str(target_query),
-            entity=entity,
-            approach=option_value(options, "approach"),
-            user_text=option_value(options, "user_text") or str(target_query),
-            unknown_lead=entity is None,
+        proposed_delta=redact_explore_value(
+            conn,
+            build_explore_delta(
+                target_query=str(target_query),
+                entity=entity,
+                approach=option_value(options, "approach"),
+                user_text=option_value(options, "user_text") or str(target_query),
+                unknown_lead=entity is None,
+            ),
+            should_redact=should_redact,
         ),
         player_message="探索预演已准备好；保存后只确认可观察线索，不泄漏 hidden 信息。",
         narrative_constraints=("Use scene_entry.md for exploration response.", "Do not reveal hidden facts unless delta records discovery."),
@@ -217,14 +247,14 @@ def validate_explore_delta(
     options: Any,
     delta: dict[str, Any],
 ) -> ActionValidationResult:
-    del context_data
+    request_view = action_request_view(context_data)
     palette_id = option_value(options, "palette_id")
     if palette_id:
         return validate_palette_explore_delta(campaign, conn, options, delta, str(palette_id))
     target_query = explore_target_query(options)
     if not target_query:
         return ActionValidationResult(missing_required=("target",))
-    target = resolve_entity(conn, target_query, view="player")
+    target = resolve_entity(conn, target_query, view=request_view)
     unknown_lead = allows_unknown_lead(options)
     if not target and not unknown_lead:
         return ActionValidationResult(errors=(f"target not found: {target_query}",))
@@ -258,6 +288,8 @@ def render_palette_explore_preview(
     conn: sqlite3.Connection,
     options: Any,
     palette_id: str,
+    *,
+    should_redact: bool = True,
 ) -> str:
     candidate = find_palette_candidate(campaign, conn, palette_id, location_query=option_value(options, "location"), intent="explore")
     target_query = explore_target_query(options)
@@ -275,7 +307,8 @@ def render_palette_explore_preview(
     ]
     if candidate is None:
         lines.extend(["### 错误", f"- palette not found: {palette_id}"])
-        return "\n".join(lines)
+        text = "\n".join(lines)
+        return str(redact_hidden_entity_refs(conn, text)) if should_redact else text
     entry = candidate["entry"]
     discovery = entry.get("discovery") if isinstance(entry.get("discovery"), dict) else {}
     lines.extend(
@@ -300,8 +333,9 @@ def render_palette_explore_preview(
     validation = validate_palette_explore_candidate(candidate, palette_id)
     if validation.errors:
         lines.extend(f"- {item}" for item in validation.errors)
-        return "\n".join(lines)
-    delta = build_palette_explore_delta(candidate, options)
+        text = "\n".join(lines)
+        return str(redact_hidden_entity_refs(conn, text)) if should_redact else text
+    delta = redact_explore_value(conn, build_palette_explore_delta(candidate, options), should_redact=should_redact)
     lines.extend(
         [
             "保存前必须由 GM 按实际线索、风险和耗时改写。",
@@ -311,7 +345,8 @@ def render_palette_explore_preview(
             "```",
         ]
     )
-    return "\n".join(lines)
+    text = "\n".join(lines)
+    return str(redact_hidden_entity_refs(conn, text)) if should_redact else text
 
 
 def validate_palette_explore_candidate(candidate: dict[str, Any] | None, palette_id: str) -> ActionValidationResult:
@@ -327,25 +362,34 @@ def resolve_palette_explore(
     conn: sqlite3.Connection,
     options: Any,
     palette_id: str,
+    *,
+    should_redact: bool = True,
 ) -> ResolutionResult:
     candidate = find_palette_candidate(campaign, conn, palette_id, location_query=option_value(options, "location"), intent="explore")
     validation = validate_palette_explore_candidate(candidate, palette_id)
     if validation.errors:
+        safe_errors = (
+            tuple(redact_hidden_entity_refs(conn, validation.errors, drop_empty=False))
+            if should_redact
+            else tuple(validation.errors)
+        )
         return ResolutionResult(
             status="blocked",
-            warnings=validation.errors,
-            player_message=validation.errors[0],
+            warnings=safe_errors,
+            player_message=safe_errors[0],
             narrative_constraints=("Do not invent facts from a locked or missing palette candidate.",),
         )
     if candidate is None:
-        return ResolutionResult(status="blocked", warnings=(f"palette not found: {palette_id}",))
-    entry = candidate["entry"]
+        safe_palette_id = str(redact_hidden_entity_refs(conn, palette_id, drop_empty=False)) if should_redact else palette_id
+        return ResolutionResult(status="blocked", warnings=(f"palette not found: {safe_palette_id}",))
+    entry = redact_explore_value(conn, candidate["entry"], should_redact=should_redact) or {}
+    display_name = str(entry.get("name") or palette_id)
     return ResolutionResult(
         status="ready",
-        facts_used=(palette_id,),
+        facts_used=(str(redact_hidden_entity_refs(conn, palette_id, drop_empty=False)) if should_redact else palette_id,),
         warnings=(f"候选状态为 {candidate['status']}；保存后仍只确认线索，不确认 hidden 真相。",),
-        proposed_delta=build_palette_explore_delta(candidate, options),
-        player_message=f"探索候选 {entry.get('name', palette_id)} 已准备好；保存后只记录可观察线索。",
+        proposed_delta=redact_explore_value(conn, build_palette_explore_delta(candidate, options), should_redact=should_redact),
+        player_message=f"探索候选 {display_name} 已准备好；保存后只记录可观察线索。",
         narrative_constraints=(
             "Use scene_entry.md for exploration response.",
             "Do not reveal hidden facts unless delta records discovery.",

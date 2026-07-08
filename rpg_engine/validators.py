@@ -3,6 +3,14 @@ from __future__ import annotations
 import sqlite3
 
 from .content_types import get_default_registry
+from .db import entity_subtype_visibility_sql
+from .visibility import (
+    ensure_visibility_sql_functions,
+    entity_not_archived_sql,
+    entity_visibility_sql,
+    normalize_visibility_label,
+    normalized_text_sql,
+)
 
 
 def run_checks(conn: sqlite3.Connection) -> list[str]:
@@ -14,14 +22,30 @@ def run_checks(conn: sqlite3.Connection) -> list[str]:
 
 
 def run_core_checks(conn: sqlite3.Connection) -> list[str]:
+    ensure_visibility_sql_functions(conn)
     errors: list[str] = []
     meta = {row["key"]: row["value"] for row in conn.execute("select key, value from meta")}
 
     current_location = meta.get("current_location_id")
     if current_location:
-        exists = conn.execute("select 1 from entities where id = ?", (current_location,)).fetchone()
-        if not exists:
-            errors.append(f"meta.current_location_id points to missing entity: {current_location}")
+        visibility_clause = entity_visibility_sql("player", "e")
+        subtype_clause = entity_subtype_visibility_sql("player", "e", "c")
+        row = conn.execute(
+            f"""
+            select e.type
+            from entities e
+            left join clocks c on c.entity_id = e.id
+            where e.id = ?
+              and {entity_not_archived_sql("e")}
+              {visibility_clause}
+              {subtype_clause}
+            """,
+            (current_location,),
+        ).fetchone()
+        if not row:
+            errors.append(f"meta.current_location_id points to missing or unreadable location: {current_location}")
+        elif normalize_visibility_label(str(row["type"])) != "location":
+            errors.append(f"meta.current_location_id points to non-location entity: {current_location}")
 
     current_turn = meta.get("current_turn_id")
     if current_turn:
@@ -63,10 +87,10 @@ def run_core_checks(conn: sqlite3.Connection) -> list[str]:
         errors.append(f"{row['id']} {row['name']} has negative quantity {row['quantity']}")
 
     owner_location_conflicts = conn.execute(
-        """
+        f"""
         select id, name, owner_id, location_id
         from entities
-        where status = 'active'
+        where {normalized_text_sql("status")} = 'active'
           and owner_id is not null
           and location_id is not null
         """

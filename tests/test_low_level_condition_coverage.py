@@ -188,7 +188,7 @@ class LowLevelConditionCoverageTests(unittest.TestCase):
                 all_errors = run_checks(conn)
 
         joined = "\n".join(core_errors)
-        self.assertIn("meta.current_location_id points to missing entity", joined)
+        self.assertIn("meta.current_location_id points to missing or unreadable location", joined)
         self.assertIn("meta.current_turn_id points to missing turn", joined)
         self.assertIn("missing location_id", joined)
         self.assertIn("missing owner_id", joined)

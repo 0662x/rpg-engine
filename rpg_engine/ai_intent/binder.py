@@ -8,7 +8,13 @@ from typing import Any
 from ..actions import ActionResolverRegistry, get_default_action_registry
 from ..actions.base import ActionResolverSpec
 from ..db import entity_subtype_visibility_sql
-from ..visibility import PLAYER_VIEW, entity_visibility_sql, normalize_visibility_view
+from ..visibility import (
+    PLAYER_VIEW,
+    ensure_visibility_sql_functions,
+    entity_not_archived_sql,
+    entity_visibility_sql,
+    normalize_visibility_view,
+)
 from .normalization import normalize_intent_candidate
 from .slot_contract import (
     ACTION_REQUIRED_SLOTS,
@@ -219,6 +225,7 @@ def find_entity_candidates(
     text = str(text or "").strip()
     if not text or not has_table(conn, "entities"):
         return []
+    ensure_visibility_sql_functions(conn)
     view = normalize_visibility_view(view)
     type_clause, type_params = type_filter_sql(allowed_types)
     visibility_clause = entity_visibility_sql(view, "e")
@@ -229,7 +236,7 @@ def find_entity_candidates(
         from entities e
         left join aliases a on a.entity_id = e.id
         left join clocks c on c.entity_id = e.id
-        where e.status != 'archived'
+        where {entity_not_archived_sql("e")}
           {visibility_clause}
           {subtype_visibility_clause}
           {type_clause}
@@ -255,7 +262,7 @@ def find_entity_candidates(
         from entities e
         left join aliases a on a.entity_id = e.id
         left join clocks c on c.entity_id = e.id
-        where e.status != 'archived'
+        where {entity_not_archived_sql("e")}
           {visibility_clause}
           {subtype_visibility_clause}
           {type_clause}

@@ -17,6 +17,7 @@ import yaml
 
 from rpg_engine.ai.defaults import DEFAULT_AI_MODEL, DEFAULT_AI_PROVIDER
 from rpg_engine.backup import list_backups
+from rpg_engine.db import connect, upsert_entity
 from rpg_engine.game_session import hash_identity
 from rpg_engine.runtime import GMRuntime
 from rpg_engine.save_manager import DEFAULT_PENDING_ACTION_TTL_SECONDS, SaveManager, SaveManagerError
@@ -329,6 +330,100 @@ class SaveManagerTests(unittest.TestCase):
             pending = manager.read_pending_action()
             self.assertIsNotNone(pending)
             self.assertEqual(pending["delta"]["turn_id"], "turn:pending-only")
+
+    def test_cached_save_list_and_current_save_redact_hidden_refs_without_refresh(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            campaign_dir = root / "campaigns" / "minimal"
+            shutil.copytree(MINIMAL_FIXTURE, campaign_dir)
+            manager = SaveManager(root, default_campaign="campaigns/minimal")
+            started = manager.start_or_continue(campaign="campaigns/minimal")
+            save_path = root / started["save"]["path"]
+            runtime = GMRuntime.from_path(save_path)
+            with connect(runtime.campaign) as conn:
+                upsert_entity(
+                    conn,
+                    {
+                        "id": "loc:hidden.route",
+                        "type": "location",
+                        "name": "Hidden Grove",
+                        "summary": "GM-only location.",
+                        "visibility": "hidden",
+                    },
+                )
+                conn.commit()
+
+            registry = manager.read_registry()
+            save_record = dict(registry["saves"][0])
+            save_record.update(
+                {
+                    "current_location_id": "loc:hidden.route",
+                    "current_location_name": "Hidden Grove",
+                    "summary": "At loc:hidden.route Hidden Grove.",
+                    "errors": ["bad loc:hidden.route"],
+                    "warnings": ["warn Hidden Grove"],
+                }
+            )
+            registry["saves"] = [save_record]
+            manager.write_registry(registry)
+
+            current = manager.current_save(refresh=False)
+            listed = manager.list_saves(refresh=False)
+            rendered = json.dumps({"current": current, "listed": listed}, ensure_ascii=False, sort_keys=True)
+
+            self.assertNotIn("loc:hidden.route", rendered)
+            self.assertNotIn("Hidden Grove", rendered)
+            self.assertIn("[hidden]", rendered)
+
+            registry = manager.read_registry()
+            missing_record = dict(registry["saves"][0])
+            missing_record.update(
+                {
+                    "path": "saves/missing",
+                    "current_location_id": "loc:hidden.route",
+                    "current_location_name": "Hidden Grove",
+                    "summary": "At loc:hidden.route Hidden Grove.",
+                    "errors": ["bad loc:hidden.route"],
+                    "warnings": ["warn Hidden Grove"],
+                }
+            )
+            registry["saves"] = [missing_record]
+            manager.write_registry(registry)
+
+            missing_current = manager.current_save(refresh=False)
+            missing_listed = manager.list_saves(refresh=False)
+            missing_rendered = json.dumps(
+                {"current": missing_current, "listed": missing_listed},
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+
+            self.assertNotIn("loc:hidden.route", missing_rendered)
+            self.assertNotIn("Hidden Grove", missing_rendered)
+            self.assertIn("[hidden]", missing_rendered)
+
+            registry = manager.read_registry()
+            bad_path_record = dict(registry["saves"][0])
+            bad_path_record.update(
+                {
+                    "path": "../outside",
+                    "current_location_id": "loc:hidden.route",
+                    "current_location_name": "Hidden Grove",
+                    "summary": "At loc:hidden.route Hidden Grove.",
+                    "errors": ["bad loc:hidden.route"],
+                    "warnings": ["warn Hidden Grove"],
+                }
+            )
+            registry["saves"] = [bad_path_record]
+            manager.write_registry(registry)
+
+            bad_path_listed = manager.list_saves(refresh=True)
+            bad_path_rendered = json.dumps(bad_path_listed, ensure_ascii=False, sort_keys=True)
+
+            self.assertFalse(bad_path_listed["ok"], bad_path_listed)
+            self.assertNotIn("loc:hidden.route", bad_path_rendered)
+            self.assertNotIn("Hidden Grove", bad_path_rendered)
+            self.assertIn("[hidden]", bad_path_rendered)
 
     def test_start_or_continue_rejects_explicit_bad_paths_even_with_active_save(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

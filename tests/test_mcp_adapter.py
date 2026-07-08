@@ -23,6 +23,7 @@ from rpg_engine.mcp_adapter import (
     mcp_tool_names_for_profile,
     serve_mcp,
 )
+from rpg_engine.db import connect, upsert_entity
 from rpg_engine.runtime import GMRuntime
 from rpg_engine.save_service import init_v1_save
 
@@ -255,6 +256,222 @@ class MCPAdapterTests(unittest.TestCase):
             self.assertTrue(current["ok"], current)
             self.assertIn("Start", query["text"])
             self.assertIn("Start", player_query["text"])
+
+    def test_player_save_inspect_and_health_redact_hidden_current_location_refs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            campaign_dir = root / "campaigns" / "minimal"
+            save_dir = root / "saves" / "run"
+            shutil.copytree(MINIMAL_FIXTURE, campaign_dir)
+            init_v1_save(campaign_dir, save_dir)
+            runtime = GMRuntime.from_path(save_dir)
+            with connect(runtime.campaign) as conn:
+                upsert_entity(
+                    conn,
+                    {
+                        "id": "loc:hidden.route",
+                        "type": "location",
+                        "name": "Hidden Grove",
+                        "summary": "GM-only location.",
+                        "visibility": "hidden",
+                    },
+                )
+                upsert_entity(
+                    conn,
+                    {
+                        "id": "loc:hidden.remote",
+                        "type": "location",
+                        "name": "Hidden Shrine",
+                        "summary": "GM-only remote location.",
+                        "visibility": "hidden",
+                    },
+                )
+                upsert_entity(
+                    conn,
+                    {
+                        "id": "loc:hidden.obelisk",
+                        "type": "location",
+                        "name": "Azure Obelisk",
+                        "summary": "GM-only proof location.",
+                        "visibility": "hidden",
+                    },
+                )
+                upsert_entity(
+                    conn,
+                    {
+                        "id": "loc:hidden.azure-only",
+                        "type": "location",
+                        "name": "Azure Hall",
+                        "summary": "GM-only azure place without the second token.",
+                        "visibility": "hidden",
+                    },
+                )
+                for index in range(6):
+                    upsert_entity(
+                        conn,
+                        {
+                            "id": f"loc:public-noise-{index}",
+                            "type": "location",
+                            "name": f"Public Azure Obelisk Noise {index}",
+                            "summary": "Visible public FTS noise for azure obelisk context recall.",
+                        },
+                    )
+                conn.execute(
+                    "insert into meta(key, value) values('current_location_id', ?) "
+                    "on conflict(key) do update set value=excluded.value",
+                    ("loc:hidden.route",),
+                )
+                conn.commit()
+
+            adapter = AIGMMCPAdapter(
+                MCPAdapterConfig.from_values(
+                    root,
+                    default_save="saves/run",
+                    mcp_profile=PLAYER_PROFILE,
+                )
+            )
+            inspect = adapter.save_inspect()
+            health = adapter.health()
+            rendered = json.dumps({"inspect": inspect, "health": health}, ensure_ascii=False, sort_keys=True)
+
+            self.assertNotIn("loc:hidden.route", rendered)
+            self.assertNotIn("Hidden Grove", rendered)
+            self.assertIn("[hidden]", rendered)
+
+            trusted = AIGMMCPAdapter(
+                MCPAdapterConfig.from_values(
+                    root,
+                    default_save="saves/run",
+                    mcp_profile="trusted_gm",
+                )
+            )
+            developer = AIGMMCPAdapter(
+                MCPAdapterConfig.from_values(
+                    root,
+                    default_save="saves/run",
+                    mcp_profile=DEVELOPER_PROFILE,
+                )
+            )
+            trusted_preview = trusted.preview_action("loc:hidden.route", view="gm")
+            denied_preview = developer.preview_action("loc:hidden.route", view="gm")
+
+            self.assertFalse(trusted_preview["ok"], trusted_preview)
+            self.assertIn("loc:hidden.route", json.dumps(trusted_preview, ensure_ascii=False, sort_keys=True))
+            self.assertFalse(denied_preview["ok"], denied_preview)
+            self.assertIn("requires trusted_gm", "\n".join(denied_preview["errors"]))
+            denied_start = developer.start_turn("维护 Hidden Grove", mode="maintenance")
+            trusted_start = trusted.start_turn("维护 Hidden Grove", mode="maintenance")
+            denied_query_context = developer.start_turn("查看 Hidden Grove", mode="query", submode="context", view="gm")
+            trusted_query_context = trusted.start_turn("查看 Hidden Shrine", mode="query", submode="context", view="gm")
+            player_query_context = adapter.start_turn("查看 Hidden Shrine", mode="query", submode="context")
+            trusted_runtime_context_query = trusted.query("context", query_text="Hidden Shrine", view="gm")
+            player_runtime_context_query = adapter.query("context", query_text="Hidden Shrine")
+            trusted_natural_context_query = trusted.query(
+                "context",
+                query_text="What did the azure obelisk prove?",
+                view="gm",
+            )
+            trusted_request_context_query = trusted.query(
+                "context",
+                query_text="Please show me the azure obelisk",
+                view="gm",
+            )
+            trusted_can_context_query = trusted.query(
+                "context",
+                query_text="Can you show me the azure obelisk",
+                view="gm",
+            )
+            player_natural_context_query = adapter.query("context", query_text="What did the azure obelisk prove?")
+            player_can_context_query = adapter.query("context", query_text="Can you show me the azure obelisk")
+
+            self.assertFalse(denied_start["ok"], denied_start)
+            self.assertIn("mode='maintenance' requires", "\n".join(denied_start["errors"]))
+            self.assertIn("loc:hidden.route", json.dumps(trusted_start, ensure_ascii=False, sort_keys=True))
+            self.assertFalse(denied_query_context["ok"], denied_query_context)
+            self.assertIn("view='gm' requires", "\n".join(denied_query_context["errors"]))
+            self.assertIn("loc:hidden.route", json.dumps(trusted_query_context, ensure_ascii=False, sort_keys=True))
+            self.assertIn(
+                "loc:hidden.remote",
+                {item["id"] for item in trusted_query_context["context"]["loaded_items"]},
+            )
+            self.assertIn("loc:hidden.remote", trusted_query_context["context"]["sections"]["relevant_entities"])
+            self.assertNotIn("loc:hidden.remote", json.dumps(player_query_context, ensure_ascii=False, sort_keys=True))
+            self.assertEqual(trusted_runtime_context_query["context"]["request"]["mode"], "query")
+            self.assertEqual(trusted_runtime_context_query["context"]["request"]["submode"], "context")
+            self.assertEqual(trusted_runtime_context_query["context"]["request"]["visibility_view"], "gm")
+            self.assertIn(
+                "loc:hidden.remote",
+                {item["id"] for item in trusted_runtime_context_query["context"]["loaded_items"]},
+            )
+            self.assertNotIn(
+                "loc:hidden.remote",
+                json.dumps(player_runtime_context_query, ensure_ascii=False, sort_keys=True),
+            )
+            self.assertIn(
+                "loc:hidden.obelisk",
+                {item["id"] for item in trusted_natural_context_query["context"]["loaded_items"]},
+            )
+            self.assertIn(
+                "loc:hidden.obelisk",
+                {item["id"] for item in trusted_request_context_query["context"]["loaded_items"]},
+            )
+            self.assertIn(
+                "loc:hidden.obelisk",
+                {item["id"] for item in trusted_can_context_query["context"]["loaded_items"]},
+            )
+            self.assertNotIn(
+                "loc:hidden.azure-only",
+                {item["id"] for item in trusted_natural_context_query["context"]["loaded_items"]},
+            )
+            self.assertNotIn(
+                "loc:hidden.obelisk",
+                json.dumps(player_natural_context_query, ensure_ascii=False, sort_keys=True),
+            )
+            self.assertNotIn(
+                "loc:hidden.obelisk",
+                json.dumps(player_can_context_query, ensure_ascii=False, sort_keys=True),
+            )
+
+    def test_registry_active_runtime_resolution_refreshes_and_blocks_unhealthy_active_save(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            campaign_dir = root / "campaigns" / "minimal"
+            shutil.copytree(MINIMAL_FIXTURE, campaign_dir)
+            adapter = AIGMMCPAdapter(
+                MCPAdapterConfig.from_values(
+                    root,
+                    default_campaign="campaigns/minimal",
+                    registry_active=True,
+                    mcp_profile=DEVELOPER_PROFILE,
+                )
+            )
+            created = adapter.save_create(campaign="campaigns/minimal", label="Run")
+            save_path = root / created["save"]["path"]
+            runtime = GMRuntime.from_path(save_path)
+            with connect(runtime.campaign) as conn:
+                upsert_entity(
+                    conn,
+                    {
+                        "id": "loc:hidden.route",
+                        "type": "location",
+                        "name": "Hidden Grove",
+                        "summary": "GM-only location.",
+                        "visibility": "hidden",
+                    },
+                )
+                conn.execute(
+                    "insert into meta(key, value) values('current_location_id', ?) "
+                    "on conflict(key) do update set value=excluded.value",
+                    ("loc:hidden.route",),
+                )
+                conn.commit()
+
+            result = adapter.query("scene")
+            rendered = json.dumps(result, ensure_ascii=False, sort_keys=True)
+
+            self.assertFalse(result["ok"], result)
+            self.assertIn("active save is not healthy", "\n".join(result["errors"]))
+            self.assertNotIn("loc:hidden.route", rendered)
 
     def test_mcp_player_workflow_hides_delta_and_confirms_pending_action(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

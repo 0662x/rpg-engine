@@ -7,8 +7,12 @@ from typing import Any
 from ..campaign import Campaign
 from ..db import get_meta, get_player_entity_id
 from ..palette import find_palette_candidate, palette_candidate_payload
+from ..redaction import redact_hidden_entity_refs
+from ..visibility import can_read_hidden, normalize_visibility_view
 from ..preview import (
     build_travel_delta,
+    current_location_label,
+    current_location_row,
     destination_threats,
     estimate_travel_minutes,
     find_route,
@@ -28,16 +32,32 @@ from .base import (
 )
 
 
+def action_request_view(context_data: dict[str, Any] | None) -> str:
+    return normalize_visibility_view(str((context_data or {}).get("view") or "player"))
+
+
+def should_redact_action(context_data: dict[str, Any] | None) -> bool:
+    return not can_read_hidden(action_request_view(context_data))
+
+
+def redact_travel_value(conn: sqlite3.Connection, value: Any, *, should_redact: bool) -> Any:
+    return redact_hidden_entity_refs(conn, value, drop_empty=False) if should_redact else value
+
+
+def render_travel_text(conn: sqlite3.Connection, text: str, *, should_redact: bool) -> str:
+    return str(redact_hidden_entity_refs(conn, text, drop_empty=False)) if should_redact else text
+
+
 def preview_travel(
     campaign: Campaign,
     conn: sqlite3.Connection,
     context_data: dict[str, Any],
     options: Any,
 ) -> str:
-    del context_data
+    should_redact = should_redact_action(context_data)
     palette_id = option_value(options, "palette_id")
     if palette_id:
-        return render_palette_travel_preview(campaign, conn, options, str(palette_id))
+        return render_palette_travel_preview(campaign, conn, options, str(palette_id), should_redact=should_redact)
     destination = option_value(options, "destination")
     if not destination:
         return ""
@@ -86,10 +106,10 @@ def resolve_travel(
     context_data: dict[str, Any],
     options: Any,
 ) -> ResolutionResult:
-    del context_data
+    should_redact = should_redact_action(context_data)
     palette_id = option_value(options, "palette_id")
     if palette_id:
-        return resolve_palette_travel(campaign, conn, options, str(palette_id))
+        return resolve_palette_travel(campaign, conn, options, str(palette_id), should_redact=should_redact)
     destination_query = option_value(options, "destination")
     if not destination_query:
         return ResolutionResult(
@@ -102,9 +122,10 @@ def resolve_travel(
     current = location_detail_row(conn, meta.get("current_location_id"))
     destination_entity = resolve_location(conn, str(destination_query))
     if not destination_entity:
+        safe_destination_query = redact_hidden_entity_refs(conn, str(destination_query), drop_empty=False)
         return ResolutionResult(
             status="needs_confirmation",
-            confirmations=(f"目的地未找到：{destination_query}",),
+            confirmations=(f"目的地未找到：{safe_destination_query}",),
             narrative_constraints=("Ask the player to clarify the destination before saving travel.",),
         )
     destination = location_detail_row(conn, destination_entity["id"])
@@ -165,10 +186,10 @@ def resolve_travel(
 
     return ResolutionResult(
         status="ready",
-        facts_used=tuple(dict.fromkeys(str(item) for item in facts if item)),
+        facts_used=tuple(redact_hidden_entity_refs(conn, tuple(dict.fromkeys(str(item) for item in facts if item)), drop_empty=False)),
         rules_applied=tuple(rules),
-        warnings=tuple(warnings),
-        proposed_delta=proposed_delta,
+        warnings=tuple(redact_hidden_entity_refs(conn, tuple(warnings), drop_empty=False)),
+        proposed_delta=redact_hidden_entity_refs(conn, proposed_delta, drop_empty=False),
         narrative_constraints=(
             "Use scene_entry.md after arrival.",
             "Do not reveal hidden destination threats unless they are visible or surfaced by an approved event.",
@@ -220,6 +241,8 @@ def render_palette_travel_preview(
     conn: sqlite3.Connection,
     options: Any,
     palette_id: str,
+    *,
+    should_redact: bool = True,
 ) -> str:
     candidate = find_palette_candidate(
         campaign,
@@ -235,13 +258,13 @@ def render_palette_travel_preview(
         "| 项目 | 值 |",
         "|------|----|",
         f"| 候选素材 | `{palette_id}` |",
-        f"| 当前地点 | `{get_meta(conn).get('current_location_id', 'unknown')}` |",
+            f"| 当前地点 | {current_location_label(conn, get_meta(conn))} |",
         f"| 旅行节奏 | {option_value(options, 'pace', 'normal')} |",
         "",
     ]
     if candidate is None:
         lines.extend(["### 错误", f"- palette not found: {palette_id}"])
-        return "\n".join(lines)
+        return render_travel_text(conn, "\n".join(lines), should_redact=should_redact)
     entry = candidate["entry"]
     discovery = entry.get("discovery") if isinstance(entry.get("discovery"), dict) else {}
     lines.extend(
@@ -266,8 +289,11 @@ def render_palette_travel_preview(
     validation = validate_palette_travel_candidate(candidate, palette_id)
     if validation.errors:
         lines.extend(f"- {item}" for item in validation.errors)
-        return "\n".join(lines)
-    delta = build_palette_travel_delta(conn, candidate, options)
+        return render_travel_text(conn, "\n".join(lines), should_redact=should_redact)
+    if not current_location_row(conn, get_meta(conn)):
+        lines.append("当前地点不可见，不能生成保存草案。")
+        return render_travel_text(conn, "\n".join(lines), should_redact=should_redact)
+    delta = build_palette_travel_delta(conn, candidate, options, should_redact=should_redact)
     lines.extend(
         [
             "保存后只记录找路线索；不会移动角色，也不会新增路线。",
@@ -277,7 +303,7 @@ def render_palette_travel_preview(
             "```",
         ]
     )
-    return "\n".join(lines)
+    return render_travel_text(conn, "\n".join(lines), should_redact=should_redact)
 
 
 def validate_palette_travel_candidate(candidate: dict[str, Any] | None, palette_id: str) -> ActionValidationResult:
@@ -296,6 +322,8 @@ def resolve_palette_travel(
     conn: sqlite3.Connection,
     options: Any,
     palette_id: str,
+    *,
+    should_redact: bool = True,
 ) -> ResolutionResult:
     candidate = find_palette_candidate(
         campaign,
@@ -306,21 +334,31 @@ def resolve_palette_travel(
     )
     validation = validate_palette_travel_candidate(candidate, palette_id)
     if validation.errors:
+        safe_errors = tuple(redact_travel_value(conn, validation.errors, should_redact=should_redact))
         return ResolutionResult(
             status="blocked",
-            warnings=validation.errors,
-            player_message=validation.errors[0],
+            warnings=safe_errors,
+            player_message=safe_errors[0],
             narrative_constraints=("Do not invent travel facts from an invalid palette candidate.",),
         )
     if candidate is None:
-        return ResolutionResult(status="blocked", warnings=(f"palette not found: {palette_id}",))
-    entry = candidate["entry"]
+        safe_palette_id = str(redact_travel_value(conn, palette_id, should_redact=should_redact))
+        return ResolutionResult(status="blocked", warnings=(f"palette not found: {safe_palette_id}",))
+    if not current_location_row(conn, get_meta(conn)):
+        return ResolutionResult(
+            status="needs_confirmation",
+            warnings=("当前地点未登记、不可见或不存在：不能保存旅行候选线索。",),
+            player_message="当前地点不可见，不能生成旅行候选保存草案。",
+            narrative_constraints=("Ask the player to resolve current location before saving travel leads.",),
+        )
+    entry = redact_travel_value(conn, candidate["entry"], should_redact=should_redact) or {}
+    display_name = str(entry.get("name") or palette_id)
     return ResolutionResult(
         status="ready",
-        facts_used=(palette_id,),
-        warnings=(f"候选状态为 {candidate['status']}；本回合只记录找路线索，不确认新地点或路线。",),
-        proposed_delta=build_palette_travel_delta(conn, candidate, options),
-        player_message=f"旅行候选 {entry.get('name', palette_id)} 已准备好；保存后只记录找路线索。",
+        facts_used=(str(redact_travel_value(conn, palette_id, should_redact=should_redact)),),
+        warnings=tuple(redact_travel_value(conn, (f"候选状态为 {candidate['status']}；本回合只记录找路线索，不确认新地点或路线。",), should_redact=should_redact)),
+        proposed_delta=build_palette_travel_delta(conn, candidate, options, should_redact=should_redact),
+        player_message=f"旅行候选 {display_name} 已准备好；保存后只记录找路线索。",
         narrative_constraints=(
             "Use scene_entry.md for travel lead response.",
             "Do not move the player to a palette location candidate in this step.",
@@ -329,12 +367,21 @@ def resolve_palette_travel(
     )
 
 
-def build_palette_travel_delta(conn: sqlite3.Connection, candidate: dict[str, Any], options: Any) -> dict[str, Any]:
+def build_palette_travel_delta(
+    conn: sqlite3.Connection,
+    candidate: dict[str, Any],
+    options: Any,
+    *,
+    should_redact: bool = True,
+) -> dict[str, Any]:
     meta = get_meta(conn)
-    current_location_id = meta.get("current_location_id")
-    entry = candidate["entry"]
+    current = current_location_row(conn, meta)
+    if not current:
+        raise ValueError("current location is not player-visible")
+    current_location_id = current["id"]
+    entry = redact_travel_value(conn, candidate["entry"], should_redact=should_redact) or {}
     payload = {
-        **palette_candidate_payload(candidate),
+        **redact_travel_value(conn, palette_candidate_payload(candidate), should_redact=should_redact),
         "from_location_id": current_location_id,
         "to_location_id": None,
         "target_kind": "palette_candidate",
@@ -344,7 +391,7 @@ def build_palette_travel_delta(conn: sqlite3.Connection, candidate: dict[str, An
         "pace": option_value(options, "pace", "normal"),
     }
     summary = f"发现旅行候选线索：{entry.get('name', entry.get('id'))}；需要确认路线后才能移动。"
-    return {
+    delta = {
         "user_text": option_value(options, "user_text") or option_value(options, "destination") or f"寻找 {entry.get('name', entry.get('id'))}",
         "intent": "travel",
         "changed": True,
@@ -365,6 +412,7 @@ def build_palette_travel_delta(conn: sqlite3.Connection, candidate: dict[str, An
         "upsert_entities": [],
         "tick_clocks": [],
     }
+    return redact_travel_value(conn, delta, should_redact=should_redact)
 
 
 def validate_palette_travel_delta(
@@ -387,8 +435,11 @@ def validate_palette_travel_delta(
     if delta.get("intent") != "travel":
         warnings.append("delta intent is not travel")
     meta = get_meta(conn)
-    current_location_id = meta.get("current_location_id")
-    if delta.get("location_after") and str(delta["location_after"]) != str(current_location_id):
+    current = current_location_row(conn, meta)
+    current_location_id = current["id"] if current else None
+    if not current_location_id:
+        errors.append("palette travel delta requires a visible current location")
+    elif delta.get("location_after") and str(delta["location_after"]) != str(current_location_id):
         errors.append(f"palette travel delta must keep location_after at current location {current_location_id}")
     payloads = [event.get("payload", {}) for event in delta.get("events", []) if isinstance(event, dict)]
     if not any(isinstance(payload, dict) and payload.get("palette_id") == palette_id for payload in payloads):

@@ -227,6 +227,28 @@ commit authorization model.
 
 活动实体不能同时设置 `location_id` 和 `owner_id`。
 
+### Entity Access Contract
+
+`rpg_engine/entity_access.py` 是当前 Entity Identity Access Contract 的命名实现。
+它不拥有写入权威，只提供 common identity 读取和 runtime delta reference validation：
+
+- `EntityRecord` 暴露稳定 common fields：`id`、`type`、`name`、`status`、`visibility`、
+  `location_id`、`owner_id`、`summary`、parsed `details`、`updated_turn_id` 和 `updated_at`。
+- `read_entity()` / `list_entities()` 默认排除 `status='archived'`，并按 caller view 应用
+  visibility filter。player view 不能读取 `visibility='hidden'` 的 entity；GM / maintenance view
+  必须显式选择。
+- Clock subtype 还必须检查 `clocks.visibility`。即使 `entities.visibility` 不是 hidden，
+  `clocks.visibility='hidden'` 的 clock 也不能通过 player view access contract 读取。
+- `validate_delta_entity_references()` 校验 runtime delta 中的 entity references；引用必须已存在，
+  或属于同一 delta 的 `upsert_entities[*].id`。这覆盖 `location_before`、`location_after`、
+  `meta.current_location_id`、entity `location_id` / `owner_id`、`character.species_id` 和
+  `location.parent_id`、`crop_plot.crop_entity_id`。
+- active entity 的 `location_id` / `owner_id` invariant 仍由 delta/content validation 执行；
+  validated mutation 不能让同一个 active entity 同时位于某地又归属某 owner。
+
+后续 Relationship / Progress access contract 应复用 `entities.id` 作为身份锚点，不新增并行
+identity system，也不要求调用方直接依赖 table-specific storage 细节来读取 common fields。
+
 ### Typed Side Tables
 
 Typed side tables 增加结构化字段，但不替代 entity row：

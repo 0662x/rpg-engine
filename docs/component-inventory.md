@@ -21,6 +21,7 @@
 | Save Validation | `rpg_engine/save_validation.py` | 存档结构与一致性校验 |
 | Save Patch | `rpg_engine/save_patch.py` | 存档补丁 |
 | Save Archive | `rpg_engine/save_archive.py` | 存档归档 |
+| Entity Access | `rpg_engine/entity_access.py` | Entity Identity Access Contract：common identity 读取、status/visibility filter、runtime delta entity reference validation |
 
 ## AI 意图链
 

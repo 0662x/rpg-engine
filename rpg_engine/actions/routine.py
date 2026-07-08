@@ -7,6 +7,8 @@ from typing import Any
 
 from ..campaign import Campaign
 from ..db import get_meta, resolve_entity
+from ..preview import current_location_row
+from ..redaction import redact_hidden_entity_refs
 from ..ux import RepairOption
 from .base import (
     ActionOptionSpec,
@@ -53,8 +55,9 @@ ROUTINE_TEMPLATES = (
 
 def preview_routine(campaign: Campaign, conn: sqlite3.Connection, context: dict[str, Any], options: Any) -> str:
     del campaign, context
-    delta = build_routine_delta(conn, options)
     template = routine_template(options)
+    current = current_location_row(conn, get_meta(conn))
+    can_generate_delta = bool(current or (template and not template.produces_delta))
     lines = [
         "## 日常维护行动预演",
         "",
@@ -73,12 +76,13 @@ def preview_routine(campaign: Campaign, conn: sqlite3.Connection, context: dict[
         "- 不自动推进剧情，不自动创建物品，不自动改变 NPC 态度。",
         "",
         "### Delta 草案",
-        "",
-        "```json",
-        json.dumps(delta, ensure_ascii=False, indent=2, sort_keys=True),
-        "```",
     ]
-    return "\n".join(lines)
+    if not can_generate_delta:
+        lines.append("当前地点不可见，不能生成保存草案。")
+    else:
+        delta = build_routine_delta(conn, options)
+        lines.extend(["", "```json", json.dumps(delta, ensure_ascii=False, indent=2, sort_keys=True), "```"])
+    return str(redact_hidden_entity_refs(conn, "\n".join(lines)))
 
 
 def resolve_routine(
@@ -91,7 +95,15 @@ def resolve_routine(
     validation = validate_routine_request(None, conn, {}, options)
     target = routine_target(conn, options)
     template = routine_template(options)
+    current = current_location_row(conn, get_meta(conn))
     facts = [str(target["id"])] if target else []
+    if template and template.produces_delta and not current:
+        return ResolutionResult(
+            status="needs_confirmation",
+            facts_used=tuple(facts),
+            confirmations=("当前地点未登记、不可见或不存在：不能保存日常行动。",),
+            narrative_constraints=("Ask the player to resolve current location before saving routine output.",),
+        )
     if not validation.ok:
         return ResolutionResult(
             status="needs_confirmation",
@@ -101,7 +113,7 @@ def resolve_routine(
         )
     return ResolutionResult(
         status="ready",
-        facts_used=tuple(facts),
+        facts_used=tuple(redact_hidden_entity_refs(conn, tuple(facts), drop_empty=False)),
         proposed_delta=build_routine_delta(conn, options),
         player_message=(
             f"已识别为{template.labels[0]}。这是低风险 routine，不会自动制造资源、推进关系或创建新事实。"
@@ -153,9 +165,12 @@ def validate_routine_delta(
     if delta.get("intent") != "routine":
         warnings.append("delta intent is not routine")
     meta = get_meta(conn)
-    current_location_id = meta.get("current_location_id")
+    current = current_location_row(conn, meta)
+    current_location_id = current["id"] if current else None
     if delta.get("location_after") and current_location_id and str(delta["location_after"]) != str(current_location_id):
         errors.append(f"location_after must remain {current_location_id} for routine; use travel for movement")
+    elif delta.get("location_after") and not current_location_id:
+        errors.append("location_after must remain at a visible current location for routine; use travel for movement")
     if not delta.get("events"):
         errors.append("routine delta must include an audit event")
     return ActionValidationResult(
@@ -167,18 +182,20 @@ def validate_routine_delta(
 
 def build_routine_delta(conn: sqlite3.Connection, options: Any) -> dict[str, Any]:
     meta = get_meta(conn)
+    current = current_location_row(conn, meta)
+    location_id = current["id"] if current else None
     target = routine_target(conn, options)
     template = routine_template(options)
     task = option_value(options, "task") or option_value(options, "user_text") or option_value(options, "target") or "日常维护"
     summary = f"日常行动：{task}。"
-    return {
+    delta = {
         "user_text": option_value(options, "user_text") or str(task),
         "intent": "routine",
         "changed": bool(template.produces_delta) if template else True,
         "game_time_before": meta.get("current_time_block"),
         "game_time_after": meta.get("current_time_block"),
-        "location_before": meta.get("current_location_id"),
-        "location_after": meta.get("current_location_id"),
+        "location_before": location_id,
+        "location_after": location_id,
         "summary": summary,
         "events": [
             {
@@ -201,6 +218,7 @@ def build_routine_delta(conn: sqlite3.Connection, options: Any) -> dict[str, Any
         "upsert_entities": [],
         "tick_clocks": [],
     }
+    return redact_hidden_entity_refs(conn, delta, drop_empty=False)
 
 
 def routine_target(conn: sqlite3.Connection, options: Any) -> sqlite3.Row | None:

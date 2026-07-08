@@ -42,8 +42,9 @@ from .intent_router import (
     turn_contract_for_intent,
     turn_contract_to_dict,
 )
+from .redaction import redact_hidden_entity_refs
 from .render import render_scene
-from .visibility import context_visibility_view
+from .visibility import can_read_hidden, context_visibility_view, normalize_visibility_view
 from .actions import get_default_action_registry
 from .ai.defaults import DEFAULT_AI_MODEL, DEFAULT_AI_PROVIDER, DEFAULT_INTENT_TIMEOUT_SECONDS, DEFAULT_SEMANTIC_TIMEOUT_SECONDS
 
@@ -114,6 +115,7 @@ class BuildState:
     must_save: bool = False
     requires_preview: bool = False
     required_template: str = "entity_query.md"
+    visibility_view: str | None = None
     entity_hits: list[EntityHit] = field(default_factory=list)
     ambiguous_hits: list[EntityHit] = field(default_factory=list)
     missing_required: list[str] = field(default_factory=list)
@@ -154,6 +156,7 @@ def build_context(
     max_events: int = 6,
     max_depth: int = 1,
     include_palettes: str = "auto",
+    view: str | None = None,
     debug: bool = False,
     semantic_ai: str = "off",
     semantic_model: str = DEFAULT_AI_MODEL,
@@ -223,6 +226,7 @@ def build_context(
         max_events=max_events_value,
         max_depth=max_depth_value,
         include_palettes=include_palettes,
+        visibility_view=normalize_visibility_view(view) if view is not None else None,
         debug=debug,
         semantic_ai=semantic_ai,
         semantic_model=semantic_model,
@@ -267,6 +271,10 @@ def default_context_pipeline() -> ContextPipeline:
         render_result=render_context_result,
         audit_result=write_context_audit_result,
     )
+
+
+def context_state_visibility_view(state: BuildState) -> str:
+    return getattr(state, "visibility_view", None) or context_visibility_view(state.mode)
 
 
 def run_registered_context_collectors(state: BuildState) -> None:
@@ -400,7 +408,22 @@ def render_context_result(state: BuildState) -> ContextBuildResult:
     confidence = "低" if state.missing_required or state.needs_user_confirmation or intent_blocked else "高"
     allow_proceed = not state.missing_required and not state.needs_user_confirmation and not intent_blocked
     clarification = state.intent.clarification.to_dict() if state.intent and state.intent.clarification else None
+    context_view = context_state_visibility_view(state)
+    should_redact = not can_read_hidden(context_view)
 
+    semantic_suggestion = state.semantic_suggestion
+    semantic_alias_gaps = state.semantic_alias_gaps
+    semantic_error = state.semantic_error
+    semantic_audit = state.semantic_audit
+    if should_redact:
+        semantic_suggestion = redact_hidden_entity_refs(state.conn, semantic_suggestion, drop_empty=False)
+        semantic_alias_gaps = redact_hidden_entity_refs(state.conn, semantic_alias_gaps, drop_empty=False)
+        semantic_error = (
+            str(redact_hidden_entity_refs(state.conn, semantic_error, drop_empty=False))
+            if semantic_error
+            else None
+        )
+        semantic_audit = redact_hidden_entity_refs(state.conn, semantic_audit, drop_empty=False)
     request = {
         "user_text": state.user_text,
         "mode": state.mode,
@@ -410,7 +433,7 @@ def render_context_result(state: BuildState) -> ContextBuildResult:
         "clarification": clarification,
         "turn_contract": turn_contract_to_dict(turn_contract_for_intent(state.intent)) if state.intent else None,
         "decision_trace": state.intent.decision_trace if state.intent else {},
-        "visibility_view": context_visibility_view(state.mode),
+        "visibility_view": context_view,
         "will_advance_time": state.will_advance_time,
         "must_save": state.must_save,
         "requires_preview": state.requires_preview,
@@ -421,10 +444,10 @@ def render_context_result(state: BuildState) -> ContextBuildResult:
             "provider": state.semantic_provider,
             "model": state.semantic_model,
             "status": semantic_status(state),
-            "suggestion": state.semantic_suggestion,
-            "alias_gaps": state.semantic_alias_gaps,
-            "error": state.semantic_error,
-            "audit": state.semantic_audit,
+            "suggestion": semantic_suggestion,
+            "alias_gaps": semantic_alias_gaps,
+            "error": semantic_error,
+            "audit": semantic_audit,
         },
         "intent_ai": {
             "enabled": state.intent_ai != "off",
@@ -489,8 +512,16 @@ def render_context_result(state: BuildState) -> ContextBuildResult:
         "sections": section_token_map,
         "trimmed": bool(omitted),
     }
+    if should_redact:
+        request = redact_hidden_entity_refs(state.conn, request, drop_empty=False)
+        completeness = redact_hidden_entity_refs(state.conn, completeness, drop_empty=False)
+        loaded_items = redact_hidden_entity_refs(state.conn, loaded_items, drop_empty=False)
+        omitted_items = redact_hidden_entity_refs(state.conn, omitted_items, drop_empty=False)
     section_texts = {section.key: section.content for section in selected}
     markdown = render_markdown(state, request, completeness, budget, selected, omitted, loaded_items, omitted_items)
+    if should_redact:
+        section_texts = redact_hidden_entity_refs(state.conn, section_texts, drop_empty=False)
+        markdown = str(redact_hidden_entity_refs(state.conn, markdown, drop_empty=False))
     return ContextBuildResult(
         request=request,
         budget=budget,
@@ -503,18 +534,19 @@ def render_context_result(state: BuildState) -> ContextBuildResult:
 
 
 def build_sections(state: BuildState) -> list[ContextSection]:
+    context_view = context_state_visibility_view(state)
     sections = [
         ContextSection(
             key="current_scene",
             title="Current Scene",
-            content=render_scene(state.conn, view=context_visibility_view(state.mode)),
+            content=render_scene(state.conn, view=context_view),
             priority=100,
             required=True,
         ),
         ContextSection(
             key="player_state",
             title="Player State",
-            content=render_player_state(state.conn),
+            content=render_player_state(state.conn, view=context_view),
             priority=100,
             required=True,
         ),
@@ -524,7 +556,7 @@ def build_sections(state: BuildState) -> list[ContextSection]:
             ContextSection(
                 key="relevant_entities",
                 title="Relevant Entities",
-                content=render_relevant_entities(state),
+                content=render_relevant_entities(state, view=context_view),
                 priority=90,
                 required=state.mode == "query" or bool(state.missing_required),
             )
@@ -598,10 +630,17 @@ def render_semantic_suggestion(state: BuildState) -> str:
         f"| 状态 | {semantic_status(state)} |",
     ]
     if state.semantic_error:
-        lines.append(f"| 错误 | {state.semantic_error} |")
+        error = (
+            state.semantic_error
+            if can_read_hidden(context_state_visibility_view(state))
+            else redact_hidden_entity_refs(state.conn, state.semantic_error, drop_empty=False)
+        )
+        lines.append(f"| 错误 | {error} |")
         return "\n".join(lines)
 
     suggestion = state.semantic_suggestion or {}
+    if not can_read_hidden(context_state_visibility_view(state)):
+        suggestion = redact_hidden_entity_refs(state.conn, suggestion, drop_empty=False)
     if not suggestion:
         lines.append("| 结果 | 无 |")
         return "\n".join(lines)
@@ -616,9 +655,12 @@ def render_semantic_suggestion(state: BuildState) -> str:
             f"| 备注 | {join_list(suggestion.get('notes', []))} |",
         ]
     )
-    if state.semantic_alias_gaps:
+    semantic_alias_gaps = state.semantic_alias_gaps
+    if not can_read_hidden(context_state_visibility_view(state)):
+        semantic_alias_gaps = redact_hidden_entity_refs(state.conn, semantic_alias_gaps, drop_empty=False)
+    if semantic_alias_gaps:
         lines.extend(["", "#### 别名缺口候选", "", "| 语义目标 | 状态 | 候选 | 建议 |", "|----------|------|------|------|"])
-        for gap in state.semantic_alias_gaps:
+        for gap in semantic_alias_gaps:
             candidates = gap.get("candidates") or []
             candidate_text = "；".join(f"`{item['id']}` {item['name']}" for item in candidates) if candidates else "无"
             lines.append(
@@ -643,7 +685,7 @@ def render_markdown(
         "## Request",
         "| 字段 | 值 |",
         "|------|----|",
-        f"| 玩家输入 | {state.user_text} |",
+        f"| 玩家输入 | {request['user_text']} |",
         f"| 模式 | `{request['mode']}:{request['submode']}` |",
         f"| 是否推进时间 | {'是' if request['will_advance_time'] else '否'} |",
         f"| 是否需要保存 | {'是' if request['must_save'] else '否'} |",

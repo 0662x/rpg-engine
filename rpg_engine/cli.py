@@ -1188,6 +1188,18 @@ def main(argv: list[str] | None = None) -> int:
                         (key, str(campaign.defaults[key])),
                     )
                 conn.commit()
+                projection_report = ProjectionService(campaign, conn).refresh(
+                    names=("search", "snapshots", "cards"),
+                    dirty_only=False,
+                    include_outbox=False,
+                    profile="migration_apply:derived_projection",
+                    commit_policy="caller_committed_required",
+                )
+                if not projection_report.ok:
+                    print("projection: FAILED")
+                    for error in projection_report.errors:
+                        print(f"- {error}")
+                    return 1
                 if backup:
                     print(f"backup: {backup.id}")
                 if applied:

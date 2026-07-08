@@ -10,6 +10,7 @@ from typing import Any
 from .campaign import Campaign
 from .palette import find_palette_candidate, palette_entry_to_entity
 from .render import parse_json
+from .visibility import ensure_visibility_sql_functions, entity_not_archived_sql
 
 
 @dataclass(frozen=True)
@@ -175,11 +176,12 @@ def write_content_delta(delta: dict[str, Any], output: str | Path | None) -> str
 
 def audit_content_quality(conn: sqlite3.Connection) -> list[ContentAuditFinding]:
     findings: list[ContentAuditFinding] = []
+    ensure_visibility_sql_functions(conn)
     rows = conn.execute(
-        """
+        f"""
         select id, type, name, summary, details_json
         from entities
-        where status != 'archived'
+        where {entity_not_archived_sql("entities")}
           and type in ('material', 'species', 'faction', 'location', 'recipe', 'project')
         order by type, id
         """

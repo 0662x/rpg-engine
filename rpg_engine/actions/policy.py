@@ -3,6 +3,14 @@ from __future__ import annotations
 import re
 import sqlite3
 
+from ..db import entity_subtype_visibility_sql
+from ..visibility import (
+    clock_visibility_sql,
+    ensure_visibility_sql_functions,
+    entity_not_archived_sql,
+    entity_visibility_sql,
+)
+
 
 def first_matching_clock(conn: sqlite3.Connection, terms: list[str]) -> sqlite3.Row | None:
     rows = matching_clock_rows(conn, terms, limit=1)
@@ -13,12 +21,20 @@ def matching_clock_rows(conn: sqlite3.Connection, terms: list[str], *, limit: in
     normalized = [term.lower() for term in terms if len(str(term).strip()) >= 2]
     if not normalized:
         return []
+    ensure_visibility_sql_functions(conn)
+    entity_visibility_clause = entity_visibility_sql("player", "e")
+    clock_visibility_clause = clock_visibility_sql("player", "c")
+    subtype_visibility_clause = entity_subtype_visibility_sql("player", "e", "c")
     rows = conn.execute(
-        """
+        f"""
         select c.entity_id, e.name, e.summary, c.clock_type, c.segments_filled, c.segments_total,
                c.visibility, c.trigger_when_full, c.tick_rules_json
         from clocks c
         join entities e on e.id = c.entity_id
+        where {entity_not_archived_sql("e")}
+          {entity_visibility_clause}
+          {clock_visibility_clause}
+          {subtype_visibility_clause}
         order by c.visibility desc, c.entity_id
         """
     ).fetchall()

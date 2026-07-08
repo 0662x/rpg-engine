@@ -4,10 +4,18 @@ import re
 import sqlite3
 from typing import Any
 
-from ..db import get_meta, get_player_entity_id
+from ..db import entity_subtype_visibility_sql, get_meta, get_player_entity_id
 from ..player_resources import player_detail_items
+from ..redaction import hidden_entity_refs, redact_entity_refs
 from ..render import parse_json
 from ..time_weather import format_time_brief, format_weather_brief
+from ..visibility import (
+    can_read_hidden,
+    ensure_visibility_sql_functions,
+    entity_not_archived_sql,
+    entity_visibility_sql,
+    normalized_text_sql,
+)
 from .resolution import EntityHit, as_list, is_direct_hit
 
 
@@ -48,10 +56,12 @@ DETAIL_LABELS = {
 }
 
 
-def render_player_state(conn: sqlite3.Connection) -> str:
+def render_player_state(conn: sqlite3.Connection, *, view: str = "player") -> str:
+    ensure_visibility_sql_functions(conn)
     meta = get_meta(conn)
     pc = conn.execute("select * from entities where id = ?", (get_player_entity_id(conn),)).fetchone()
-    details = parse_json(pc["details_json"], {}) if pc else {}
+    refs = hidden_entity_refs(conn)
+    details = redact_for_view(parse_json(pc["details_json"], {}) if pc else {}, refs, view)
     lines = [
         "### 玩家状态",
         "",
@@ -59,21 +69,45 @@ def render_player_state(conn: sqlite3.Connection) -> str:
         "|------|------|",
         f"| 时间 | {format_time_brief(meta)} |",
         f"| 天气 | {format_weather_brief(meta)} |",
-        f"| 位置 | `{meta.get('current_location_id', 'unknown')}` |",
+        f"| 位置 | {player_current_location_label(conn, meta, view=view)} |",
     ]
     if pc:
         lines.append(f"| 主角 | `{pc['id']}` {pc['name']} |")
-        lines.append(f"| 摘要 | {pc['summary'] or '无'} |")
+        lines.append(f"| 摘要 | {redact_for_view(pc['summary'] or '无', refs, view) or '无'} |")
     for label, value in player_detail_items(details, meta):
-        lines.append(f"| {label} | {value} |")
+        lines.append(f"| {label} | {redact_for_view(value, refs, view) or '无'} |")
     return "\n".join(lines)
 
 
-def render_relevant_entities(state: Any) -> str:
+def player_current_location_label(conn: sqlite3.Connection, meta: dict[str, str], *, view: str = "player") -> str:
+    location_id = meta.get("current_location_id", "")
+    if not location_id:
+        return "未知"
+    visibility_clause = entity_visibility_sql(view, "e")
+    subtype_clause = entity_subtype_visibility_sql(view, "e", "c")
+    row = conn.execute(
+        f"""
+        select e.id, e.name
+        from entities e
+        left join clocks c on c.entity_id = e.id
+        where e.id = ?
+          and {normalized_text_sql("e.type")} = 'location'
+          and {entity_not_archived_sql("e")}
+          {visibility_clause}
+          {subtype_clause}
+        """,
+        (location_id,),
+    ).fetchone()
+    if not row:
+        return "当前地点不可见或不存在"
+    return f"`{row['id']}` {row['name']}"
+
+
+def render_relevant_entities(state: Any, *, view: str = "player") -> str:
     lines = ["### 相关实体", ""]
     for hit in state.entity_hits[:12]:
         detail = entity_context_level(state, hit)
-        lines.extend(render_entity_hit(state.conn, hit, detail=detail))
+        lines.extend(render_entity_hit(state.conn, hit, detail=detail, view=view))
         lines.append("")
     return "\n".join(lines).rstrip()
 
@@ -86,19 +120,25 @@ def entity_context_level(state: Any, hit: EntityHit) -> str:
     return "standard"
 
 
-def render_entity_hit(conn: sqlite3.Connection, hit: EntityHit, *, detail: str) -> list[str]:
+def render_entity_hit(conn: sqlite3.Connection, hit: EntityHit, *, detail: str, view: str = "player") -> list[str]:
     if detail in {"standard", "full"}:
-        return render_context_entity(conn, hit, level=detail)
-    location = f"；位置：{hit.location_id}" if hit.location_id else ""
-    owner = f"；所有者：{hit.owner_id}" if hit.owner_id else ""
+        return render_context_entity(conn, hit, level=detail, view=view)
+    refs = hidden_entity_refs(conn)
+    location_id = redact_for_view(hit.location_id, refs, view) if hit.location_id else None
+    owner_id = redact_for_view(hit.owner_id, refs, view) if hit.owner_id else None
+    location = f"；位置：{location_id}" if location_id else ""
+    owner = f"；所有者：{owner_id}" if owner_id else ""
+    name = redact_for_view(hit.name, refs, view) or hit.name
+    reason = redact_for_view(hit.reason, refs, view) or hit.reason
+    summary = redact_for_view(hit.summary or "无", refs, view) or "无"
     return [
-        f"- `{hit.id}` {hit.name}（{TYPE_LABELS.get(hit.type, hit.type)}；状态：{hit.status}{location}{owner}）",
-        f"  - 原因：{hit.reason}",
-        f"  - 摘要：{trim_inline(hit.summary or '无', 120)}",
+        f"- `{hit.id}` {name}（{TYPE_LABELS.get(hit.type, hit.type)}；状态：{hit.status}{location}{owner}）",
+        f"  - 原因：{reason}",
+        f"  - 摘要：{trim_inline(summary, 120)}",
     ]
 
 
-def render_context_entity(conn: sqlite3.Connection, hit: EntityHit, *, level: str) -> list[str]:
+def render_context_entity(conn: sqlite3.Connection, hit: EntityHit, *, level: str, view: str = "player") -> list[str]:
     row = conn.execute("select * from entities where id = ?", (hit.id,)).fetchone()
     if not row:
         return [
@@ -109,27 +149,34 @@ def render_context_entity(conn: sqlite3.Connection, hit: EntityHit, *, level: st
             "- 实体已不在当前数据库中。",
         ]
 
-    details = parse_json(row["details_json"], {})
+    refs = hidden_entity_refs(conn)
+    details = redact_for_view(parse_json(row["details_json"], {}), refs, view)
+    name = redact_for_view(row["name"], refs, view) or row["name"]
+    reason = redact_for_view(hit.reason, refs, view) or hit.reason
     lines = [
-        f"#### `{row['id']}` {row['name']}",
+        f"#### `{row['id']}` {name}",
         "",
-        f"- 加载原因：{hit.reason}",
+        f"- 加载原因：{reason}",
         f"- 上下文视图：{level}",
         "",
     ]
     if row["type"] in {"item", "equipment"}:
-        append_context_item(conn, lines, row, details, level)
+        append_context_item(conn, lines, row, details, level, view)
     elif row["type"] == "location":
-        append_context_location(conn, lines, row, details, level)
+        append_context_location(conn, lines, row, details, level, view)
     elif row["type"] == "character":
-        append_context_character(conn, lines, row, details, level)
+        append_context_character(conn, lines, row, details, level, view)
     elif row["type"] == "clock":
-        append_context_clock(conn, lines, row)
+        append_context_clock(conn, lines, row, view)
     elif row["type"] == "rule":
-        append_context_rule(conn, lines, row)
+        append_context_rule(conn, lines, row, view)
     else:
-        append_context_generic(lines, row, details, level)
+        append_context_generic(conn, lines, row, details, level, view)
     return lines
+
+
+def redact_for_view(value: Any, refs: dict[str, set[str]], view: str) -> Any:
+    return value if can_read_hidden(view) else redact_entity_refs(value, refs)
 
 
 def append_context_item(
@@ -138,9 +185,12 @@ def append_context_item(
     row: sqlite3.Row,
     details: dict[str, Any],
     level: str,
+    view: str,
 ) -> None:
     item = conn.execute("select * from items where entity_id = ?", (row["id"],)).fetchone()
-    properties = parse_json(item["properties_json"], {}) if item else {}
+    refs = hidden_entity_refs(conn)
+    properties = redact_for_view(parse_json(item["properties_json"], {}), refs, view) if item else {}
+    location = redact_for_view(row["location_id"] or row["owner_id"] or "未知", refs, view) or "未知"
     append_context_table(
         lines,
         [
@@ -148,13 +198,13 @@ def append_context_item(
             ("类型", TYPE_LABELS.get(row["type"], row["type"])),
             ("分类", item["category"] if item else "未知"),
             ("状态", row["status"]),
-            ("位置", row["location_id"] or row["owner_id"] or "未知"),
+            ("位置", location),
             ("数量", format_context_quantity(item)),
             ("品质", item["quality"] if item and item["quality"] else "未知"),
             ("装备槽", item["equipped_slot"] if item and item["equipped_slot"] else "无"),
         ],
     )
-    append_summary(lines, row["summary"])
+    append_summary(lines, redact_for_view(row["summary"], refs, view))
     append_context_item_profiles(lines, properties, level=level)
     append_context_details(lines, details, level=level, entity_type=row["type"])
 
@@ -165,10 +215,14 @@ def append_context_location(
     row: sqlite3.Row,
     details: dict[str, Any],
     level: str,
+    view: str,
 ) -> None:
     location = conn.execute("select * from locations where entity_id = ?", (row["id"],)).fetchone()
+    refs = hidden_entity_refs(conn)
     resources = parse_json(location["resources_json"], []) if location else []
     exits = parse_json(location["exits_json"], []) if location else []
+    resources = redact_for_view(resources, refs, view)
+    exits = redact_for_view(exits, refs, view)
     append_context_table(
         lines,
         [
@@ -186,6 +240,7 @@ def append_context_location(
         ],
     )
     summary = location["description_short"] if location and location["description_short"] else row["summary"]
+    summary = redact_for_view(summary, refs, view)
     append_summary(lines, summary)
     append_sequence_section(lines, "### 已知资源", resources, limit=6 if level == "full" else 4)
     append_sequence_section(lines, "### 出口/路线", exits, limit=5 if level == "full" else 3)
@@ -198,23 +253,29 @@ def append_context_character(
     row: sqlite3.Row,
     details: dict[str, Any],
     level: str,
+    view: str,
 ) -> None:
     character = conn.execute("select * from characters where entity_id = ?", (row["id"],)).fetchone()
+    refs = hidden_entity_refs(conn)
+    location_id = redact_for_view(row["location_id"] or "未知", refs, view) or "未知"
+    species_id = (
+        redact_for_view(character["species_id"], refs, view) if character and character["species_id"] else None
+    ) or "未知"
     append_context_table(
         lines,
         [
             ("ID", f"`{row['id']}`"),
             ("类型", TYPE_LABELS.get(row["type"], row["type"])),
             ("状态", row["status"]),
-            ("位置", row["location_id"] or "未知"),
-            ("种族", character["species_id"] if character and character["species_id"] else "未知"),
+            ("位置", location_id),
+            ("种族", species_id),
             ("角色", character["role"] if character and character["role"] else "未知"),
             ("态度", character["attitude"] if character and character["attitude"] else "未知"),
             ("信任", str(character["trust"]) if character else "未知"),
             ("健康", character["health_state"] if character and character["health_state"] else "未知"),
         ],
     )
-    append_summary(lines, row["summary"])
+    append_summary(lines, redact_for_view(row["summary"], refs, view))
     for key, title in [
         ("known_abilities", "### 已知能力"),
         ("commitments", "### 当前承诺"),
@@ -224,10 +285,18 @@ def append_context_character(
     append_context_details(lines, details, level=level, entity_type=row["type"])
 
 
-def append_context_clock(conn: sqlite3.Connection, lines: list[str], row: sqlite3.Row) -> None:
+def append_context_clock(conn: sqlite3.Connection, lines: list[str], row: sqlite3.Row, view: str) -> None:
     clock = conn.execute("select * from clocks where entity_id = ?", (row["id"],)).fetchone()
+    refs = hidden_entity_refs(conn)
     if not clock:
-        append_context_generic(lines, row, parse_json(row["details_json"], {}), "standard")
+        append_context_generic(
+            conn,
+            lines,
+            row,
+            redact_for_view(parse_json(row["details_json"], {}), refs, view),
+            "standard",
+            view,
+        )
         return
     filled = int(clock["segments_filled"])
     total = int(clock["segments_total"])
@@ -240,16 +309,24 @@ def append_context_clock(conn: sqlite3.Connection, lines: list[str], row: sqlite
             ("状态", row["status"]),
             ("进度", f"{bar} {filled}/{total}"),
             ("可见性", clock["visibility"]),
-            ("满格触发", clock["trigger_when_full"]),
+            ("满格触发", redact_for_view(clock["trigger_when_full"], refs, view)),
         ],
     )
-    append_summary(lines, row["summary"])
+    append_summary(lines, redact_for_view(row["summary"], refs, view))
 
 
-def append_context_rule(conn: sqlite3.Connection, lines: list[str], row: sqlite3.Row) -> None:
+def append_context_rule(conn: sqlite3.Connection, lines: list[str], row: sqlite3.Row, view: str) -> None:
     rule = conn.execute("select * from rules where entity_id = ?", (row["id"],)).fetchone()
+    refs = hidden_entity_refs(conn)
     if not rule:
-        append_context_generic(lines, row, parse_json(row["details_json"], {}), "standard")
+        append_context_generic(
+            conn,
+            lines,
+            row,
+            redact_for_view(parse_json(row["details_json"], {}), refs, view),
+            "standard",
+            view,
+        )
         return
     append_context_table(
         lines,
@@ -260,25 +337,29 @@ def append_context_rule(conn: sqlite3.Connection, lines: list[str], row: sqlite3
             ("锁定", "是" if rule["locked"] else "否"),
         ],
     )
-    append_summary(lines, rule["statement"])
+    append_summary(lines, redact_for_view(rule["statement"], refs, view))
 
 
 def append_context_generic(
+    conn: sqlite3.Connection,
     lines: list[str],
     row: sqlite3.Row,
     details: dict[str, Any],
     level: str,
+    view: str,
 ) -> None:
+    refs = hidden_entity_refs(conn)
+    location = redact_for_view(row["location_id"] or row["owner_id"] or "未知", refs, view) or "未知"
     append_context_table(
         lines,
         [
             ("ID", f"`{row['id']}`"),
             ("类型", TYPE_LABELS.get(row["type"], row["type"])),
             ("状态", row["status"]),
-            ("位置", row["location_id"] or row["owner_id"] or "未知"),
+            ("位置", location),
         ],
     )
-    append_summary(lines, row["summary"])
+    append_summary(lines, redact_for_view(row["summary"], refs, view))
     append_context_details(lines, details, level=level, entity_type=row["type"])
 
 

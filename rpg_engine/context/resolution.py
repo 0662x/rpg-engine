@@ -6,9 +6,16 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Any
 
-from ..db import get_meta, get_player_entity_id
+from ..db import entity_subtype_visibility_sql, get_meta, get_player_entity_id
 from ..render import parse_json
-from ..visibility import context_visibility_view, entity_visibility_sql
+from ..visibility import (
+    can_read_hidden,
+    context_visibility_view,
+    ensure_visibility_sql_functions,
+    entity_not_archived_sql,
+    entity_visibility_sql,
+    normalized_text_sql,
+)
 
 
 ENTITY_ID_PATTERN = re.compile(
@@ -27,6 +34,7 @@ AMBIGUOUS_STOP_TERMS = [
     "一下",
     "看看",
     "查看",
+    "看",
     "查询",
     "说明",
     "我",
@@ -34,6 +42,60 @@ AMBIGUOUS_STOP_TERMS = [
     "要",
     "的",
 ]
+QUERY_STOP_WORDS = {
+    "what",
+    "a",
+    "an",
+    "can",
+    "did",
+    "does",
+    "is",
+    "are",
+    "was",
+    "were",
+    "in",
+    "of",
+    "to",
+    "at",
+    "the",
+    "and",
+    "for",
+    "me",
+    "with",
+    "that",
+    "this",
+    "tell",
+    "you",
+    "please",
+    "show",
+    "look",
+    "around",
+    "see",
+    "prove",
+    "proved",
+    "about",
+    "where",
+    "which",
+    "who",
+    "how",
+    "查看",
+    "看",
+    "查",
+    "问",
+    "找",
+    "查询",
+    "看看",
+    "说明",
+    "是什么",
+    "是谁",
+    "在哪",
+    "哪里",
+    "什么",
+    "怎么",
+    "如何",
+    "一下",
+}
+CJK_REQUEST_PREFIXES = ("查看", "查询", "看看", "说明", "看", "查", "问", "找")
 AMBIGUOUS_SPLIT_PATTERN = re.compile(r"[\s,，。！？!?、；;：:（）()【】\[\]{}<>《》\"']+")
 AMBIGUOUS_CJK_OR_WORD_PATTERN = re.compile(r"[\u4e00-\u9fff]{2,}|[A-Za-z][A-Za-z0-9_.:-]{1,}")
 
@@ -52,10 +114,14 @@ class EntityHit:
     depth: int = 0
 
 
+def state_visibility_view(state: Any) -> str:
+    return getattr(state, "visibility_view", None) or context_visibility_view(getattr(state, "mode", None))
+
+
 def collect_entity_hits(state: Any) -> None:
     hits: dict[str, EntityHit] = {}
     text = state.user_text
-    view = context_visibility_view(state.mode)
+    view = state_visibility_view(state)
 
     for row in find_explicit_entity_matches(state.conn, text, view=view):
         add_hit(
@@ -73,7 +139,7 @@ def collect_entity_hits(state: Any) -> None:
             ),
         )
 
-    if not hits and state.submode == "entity":
+    if not hits and state.mode == "query":
         for row in find_candidate_entities(state.conn, text, limit=5, view=view):
             add_hit(
                 hits,
@@ -105,7 +171,7 @@ def apply_semantic_entity_hints(state: Any) -> None:
         return
 
     hits = {hit.id: hit for hit in state.entity_hits}
-    view = context_visibility_view(state.mode)
+    view = state_visibility_view(state)
     for label in labels[:10]:
         rows = resolve_exact_entity_label(state.conn, label, view=view)
         exact = bool(rows)
@@ -200,15 +266,19 @@ def maybe_add_entity(
 ) -> EntityHit | None:
     if not entity_id or entity_id in hits or depth > state.max_depth:
         return None
-    view = context_visibility_view(state.mode)
+    ensure_visibility_sql_functions(state.conn)
+    view = state_visibility_view(state)
     visibility_clause = entity_visibility_sql(view, "e")
+    subtype_visibility_clause = entity_subtype_visibility_sql(view, "e", "c")
     row = state.conn.execute(
         f"""
         select e.*
         from entities e
+        left join clocks c on c.entity_id = e.id
         where e.id = ?
-          and e.status != 'archived'
+          and {entity_not_archived_sql("e")}
           {visibility_clause}
+          {subtype_visibility_clause}
         """,
         (entity_id,),
     ).fetchone()
@@ -240,14 +310,18 @@ def resolve_exact_entity_label(
     stripped = label.strip()
     if not stripped:
         return rows
+    ensure_visibility_sql_functions(conn)
     visibility_clause = entity_visibility_sql(view, "e")
+    subtype_visibility_clause = entity_subtype_visibility_sql(view, "e", "c")
     rows.extend(
         conn.execute(
             f"""
             select e.*
             from entities e
-            where e.status != 'archived'
+            left join clocks c on c.entity_id = e.id
+            where {entity_not_archived_sql("e")}
               {visibility_clause}
+              {subtype_visibility_clause}
               and (e.id = ? or e.name = ?)
             order by e.type, e.name
             limit 6
@@ -261,8 +335,10 @@ def resolve_exact_entity_label(
             select e.*
             from aliases a
             join entities e on e.id = a.entity_id
-            where e.status != 'archived'
+            left join clocks c on c.entity_id = e.id
+            where {entity_not_archived_sql("e")}
               {visibility_clause}
+              {subtype_visibility_clause}
               and a.alias = ?
             order by e.type, e.name
             limit 6
@@ -281,14 +357,18 @@ def find_explicit_entity_matches(
 ) -> list[sqlite3.Row]:
     rows: list[sqlite3.Row] = []
     stripped = text.strip()
+    ensure_visibility_sql_functions(conn)
     visibility_clause = entity_visibility_sql(view, "e")
+    subtype_visibility_clause = entity_subtype_visibility_sql(view, "e", "c")
     exact = conn.execute(
         f"""
         select e.*, 'id exact' as _reason
         from entities e
+        left join clocks c on c.entity_id = e.id
         where e.id = ?
-          and e.status != 'archived'
+          and {entity_not_archived_sql("e")}
           {visibility_clause}
+          {subtype_visibility_clause}
         limit 1
         """,
         (stripped,),
@@ -298,8 +378,10 @@ def find_explicit_entity_matches(
         f"""
         select e.*, 'name contains' as _reason
         from entities e
-        where e.status != 'archived'
+        left join clocks c on c.entity_id = e.id
+        where {entity_not_archived_sql("e")}
           {visibility_clause}
+          {subtype_visibility_clause}
           and length(e.name) >= 2
           and instr(?, e.name) > 0
         order by length(e.name) desc, e.type, e.name
@@ -313,8 +395,10 @@ def find_explicit_entity_matches(
         select e.*, 'alias contains: ' || a.alias as _reason
         from aliases a
         join entities e on e.id = a.entity_id
-        where e.status != 'archived'
+        left join clocks c on c.entity_id = e.id
+        where {entity_not_archived_sql("e")}
           {visibility_clause}
+          {subtype_visibility_clause}
           and (length(a.alias) >= 2 or a.alias = ?)
           and instr(?, a.alias) > 0
         order by length(a.alias) desc, e.type, e.name
@@ -328,8 +412,10 @@ def find_explicit_entity_matches(
         select e.*, 'short alias contains: ' || a.alias as _reason
         from aliases a
         join entities e on e.id = a.entity_id
-        where e.status != 'archived'
+        left join clocks c on c.entity_id = e.id
+        where {entity_not_archived_sql("e")}
           {visibility_clause}
+          {subtype_visibility_clause}
           and length(a.alias) = 1
           and instr(?, a.alias) > 0
           and e.type in ('equipment', 'item', 'threat')
@@ -349,40 +435,292 @@ def find_candidate_entities(
     limit: int,
     view: str = "player",
 ) -> list[sqlite3.Row]:
-    like = f"%{text.strip()}%"
+    query = text.strip()
+    if not query:
+        return []
+    if is_stopword_only_query(query):
+        return []
+    if not has_searchable_literal(query):
+        return []
+    tokens = candidate_search_tokens(query)
+    significant_query = " ".join(tokens)
+    public_view = "player"
+    exact_matches = find_literal_candidate_entities(conn, query, limit=limit, view=public_view, exact_only=True)
+    if significant_query and significant_query != query:
+        exact_matches.extend(find_literal_candidate_entities(conn, significant_query, limit=limit, view=public_view, exact_only=True))
+    broad_matches: list[sqlite3.Row] = []
+    if significant_query and significant_query != query:
+        broad_matches.extend(find_literal_candidate_entities(conn, significant_query, limit=limit, view=public_view))
+    else:
+        broad_matches.extend(find_literal_candidate_entities(conn, query, limit=limit, view=public_view))
+    safe_query = sanitize_fts_query(text)
+    if safe_query:
+        ensure_visibility_sql_functions(conn)
+        visibility_clause = entity_visibility_sql(public_view, "e")
+        subtype_visibility_clause = entity_subtype_visibility_sql(public_view, "e", "c")
+        broad_matches.extend(
+            conn.execute(
+                f"""
+                select e.*
+                from fts_index f
+                join entities e on e.id = f.entity_id
+                left join clocks c on c.entity_id = e.id
+                where fts_index match ?
+                  and {entity_not_archived_sql("e")}
+                  {visibility_clause}
+                  {subtype_visibility_clause}
+                limit ?
+                """,
+                (safe_query, limit),
+            ).fetchall()
+        )
+    if significant_query and significant_query != query:
+        broad_matches.extend(find_literal_candidate_entities(conn, query, limit=limit, view=public_view))
+    trusted_exact_matches = (
+        find_trusted_literal_candidate_entities(conn, query, limit=limit, view=view, exact_only=True)
+        if can_read_hidden(view)
+        else []
+    )
+    if can_read_hidden(view) and significant_query and significant_query != query:
+        trusted_exact_matches.extend(
+            find_trusted_literal_candidate_entities(conn, significant_query, limit=limit, view=view, exact_only=True)
+        )
+    trusted_broad_matches = find_trusted_token_candidate_entities(conn, query, limit=limit, view=view) if can_read_hidden(view) else []
+    return dedupe_rows([*trusted_exact_matches, *exact_matches, *trusted_broad_matches, *broad_matches])[:limit]
+
+
+def find_literal_candidate_entities(
+    conn: sqlite3.Connection,
+    text: str,
+    *,
+    limit: int,
+    view: str,
+    exact_only: bool = False,
+) -> list[sqlite3.Row]:
+    literal = text.strip()
+    if not literal:
+        return []
+    ensure_visibility_sql_functions(conn)
     visibility_clause = entity_visibility_sql(view, "e")
-    rows = conn.execute(
+    subtype_visibility_clause = entity_subtype_visibility_sql(view, "e", "c")
+    if exact_only:
+        return conn.execute(
+            f"""
+            select e.*
+            from entities e
+            left join clocks c on c.entity_id = e.id
+            where {entity_not_archived_sql("e")}
+              {visibility_clause}
+              {subtype_visibility_clause}
+              and lower(e.name) = lower(?)
+            order by
+              case e.status when 'active' then 0 when 'retired' then 1 else 2 end,
+              e.type,
+              e.name
+            limit ?
+            """,
+            (literal, limit),
+        ).fetchall()
+
+    like = f"%{escape_like(literal)}%"
+    return conn.execute(
         f"""
         select e.*
         from entities e
-        where e.status != 'archived'
+        left join clocks c on c.entity_id = e.id
+        where {entity_not_archived_sql("e")}
           {visibility_clause}
-          and (e.name like ? or e.summary like ?)
+          {subtype_visibility_clause}
+          and (e.name like ? escape '\\' or e.summary like ? escape '\\')
+        order by
+          case
+            when lower(e.name) = lower(?) then 0
+            when e.name like ? escape '\\' then 1
+            else 2
+          end,
+          case e.status when 'active' then 0 when 'retired' then 1 else 2 end,
+          e.type,
+          e.name
+        limit ?
+        """,
+        (like, like, literal, like, limit),
+    ).fetchall()
+
+
+def find_trusted_token_candidate_entities(
+    conn: sqlite3.Connection,
+    text: str,
+    *,
+    limit: int,
+    view: str,
+) -> list[sqlite3.Row]:
+    if not can_read_hidden(view):
+        return []
+    query = text.strip()
+    if not query or is_stopword_only_query(query) or not has_searchable_literal(query):
+        return []
+    literal_matches = find_trusted_literal_candidate_entities(conn, query, limit=limit, view=view)
+    tokens = candidate_search_tokens(query)
+    if not tokens:
+        tokens = [query]
+    if not tokens:
+        return literal_matches
+    ensure_visibility_sql_functions(conn)
+    subtype_visibility_clause = entity_subtype_visibility_sql(view, "e", "c")
+    clauses: list[str] = []
+    params: list[str] = []
+    for token in tokens[:8]:
+        like = f"%{escape_like(token)}%"
+        clauses.append(
+            """
+            e.name like ? escape '\\' or e.summary like ? escape '\\' or e.details_json like ? escape '\\'
+            or exists (select 1 from aliases a where a.entity_id = e.id and a.alias like ? escape '\\')
+            """
+        )
+        params.extend([like, like, like, like])
+    token_clause = " and ".join(f"({clause})" for clause in clauses)
+    token_matches = conn.execute(
+        f"""
+        select e.*
+        from entities e
+        left join clocks c on c.entity_id = e.id
+        where {entity_not_archived_sql("e")}
+          {subtype_visibility_clause}
+          and (
+            {normalized_text_sql("e.visibility")} = 'hidden'
+            or ({normalized_text_sql("e.type")} = 'clock'
+                and {normalized_text_sql("coalesce(c.visibility, e.visibility)")} = 'hidden')
+          )
+          and ({token_clause})
         order by
           case e.status when 'active' then 0 when 'retired' then 1 else 2 end,
           e.type,
           e.name
         limit ?
         """,
-        (like, like, limit),
+        [*params, limit],
     ).fetchall()
-    if rows:
-        return rows
-    safe_query = sanitize_fts_query(text)
-    if not safe_query:
+    return dedupe_rows([*literal_matches, *token_matches])[:limit]
+
+
+def find_trusted_literal_candidate_entities(
+    conn: sqlite3.Connection,
+    text: str,
+    *,
+    limit: int,
+    view: str,
+    exact_only: bool = False,
+) -> list[sqlite3.Row]:
+    literal = text.strip()
+    if not can_read_hidden(view):
         return []
+    if not literal or is_stopword_only_query(literal) or not has_searchable_literal(literal):
+        return []
+    ensure_visibility_sql_functions(conn)
+    subtype_visibility_clause = entity_subtype_visibility_sql(view, "e", "c")
+    if exact_only:
+        return conn.execute(
+            f"""
+            select e.*
+            from entities e
+            left join clocks c on c.entity_id = e.id
+            where {entity_not_archived_sql("e")}
+              {subtype_visibility_clause}
+              and (
+                {normalized_text_sql("e.visibility")} = 'hidden'
+                or ({normalized_text_sql("e.type")} = 'clock'
+                    and {normalized_text_sql("coalesce(c.visibility, e.visibility)")} = 'hidden')
+              )
+              and lower(e.name) = lower(?)
+            order by
+              case e.status when 'active' then 0 when 'retired' then 1 else 2 end,
+              e.type,
+              e.name
+            limit ?
+            """,
+            (literal, limit),
+        ).fetchall()
+
+    like = f"%{escape_like(literal)}%"
     return conn.execute(
         f"""
         select e.*
-        from fts_index f
-        join entities e on e.id = f.entity_id
-        where fts_index match ?
-          and e.status != 'archived'
-          {visibility_clause}
+        from entities e
+        left join clocks c on c.entity_id = e.id
+        where {entity_not_archived_sql("e")}
+          {subtype_visibility_clause}
+          and (
+            {normalized_text_sql("e.visibility")} = 'hidden'
+            or ({normalized_text_sql("e.type")} = 'clock'
+                and {normalized_text_sql("coalesce(c.visibility, e.visibility)")} = 'hidden')
+          )
+          and (
+            e.name like ? escape '\\'
+            or e.summary like ? escape '\\'
+            or e.details_json like ? escape '\\'
+            or exists (select 1 from aliases a where a.entity_id = e.id and a.alias like ? escape '\\')
+          )
+        order by
+          case
+            when lower(e.name) = lower(?) then 0
+            when e.name like ? escape '\\' then 1
+            else 2
+          end,
+          case e.status when 'active' then 0 when 'retired' then 1 else 2 end,
+          e.type,
+          e.name
         limit ?
         """,
-        (safe_query, limit),
+        (like, like, like, like, literal, like, limit),
     ).fetchall()
+
+
+def is_stopword_only_query(text: str) -> bool:
+    raw_tokens = [token for token in re.findall(r"[\w\u4e00-\u9fff]+", text) if token.strip()]
+    if len(raw_tokens) == 1 and raw_tokens[0][:1].isupper():
+        return False
+    tokens = [token.lower() for token in raw_tokens]
+    return bool(tokens) and all(token in QUERY_STOP_WORDS for token in tokens)
+
+
+def has_searchable_literal(text: str) -> bool:
+    return bool(re.search(r"[A-Za-z0-9\u4e00-\u9fff]", text))
+
+
+def escape_like(text: str) -> str:
+    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def candidate_search_tokens(text: str) -> list[str]:
+    tokens: list[str] = []
+    for token in re.findall(r"[\w\u4e00-\u9fff]+", text):
+        for normalized in significant_token_parts(token):
+            lower = normalized.lower()
+            has_cjk = bool(re.search(r"[\u4e00-\u9fff]", normalized))
+            if lower in QUERY_STOP_WORDS:
+                continue
+            if not has_cjk and len(lower) < 3 and not any(char.isdigit() for char in lower):
+                continue
+            if normalized not in tokens:
+                tokens.append(normalized)
+    return tokens
+
+
+def significant_token_parts(token: str) -> list[str]:
+    normalized = token.strip()
+    if not normalized:
+        return []
+    if not re.search(r"[\u4e00-\u9fff]", normalized):
+        return [normalized]
+    stripped = normalized
+    while True:
+        for prefix in CJK_REQUEST_PREFIXES:
+            if stripped.startswith(prefix) and len(stripped) > len(prefix):
+                stripped = stripped[len(prefix) :]
+                break
+        else:
+            break
+    return [stripped] if stripped else []
 
 
 def ambiguous_candidates(conn: sqlite3.Connection, text: str, *, view: str = "player") -> list[EntityHit]:
@@ -390,7 +728,9 @@ def ambiguous_candidates(conn: sqlite3.Connection, text: str, *, view: str = "pl
     if not keywords:
         return salient_ambiguous_candidates(conn, view=view)
     clauses = " or ".join(["e.name like ? or e.summary like ? or e.details_json like ?" for _ in keywords])
+    ensure_visibility_sql_functions(conn)
     visibility_clause = entity_visibility_sql(view, "e")
+    subtype_visibility_clause = entity_subtype_visibility_sql(view, "e", "c")
     params: list[str] = []
     for keyword in keywords:
         like = f"%{keyword}%"
@@ -399,8 +739,10 @@ def ambiguous_candidates(conn: sqlite3.Connection, text: str, *, view: str = "pl
         f"""
         select e.*
         from entities e
-        where e.status != 'archived'
+        left join clocks c on c.entity_id = e.id
+        where {entity_not_archived_sql("e")}
           {visibility_clause}
+          {subtype_visibility_clause}
           and ({clauses})
         order by
           case e.type
@@ -442,7 +784,9 @@ def salient_ambiguous_candidates(conn: sqlite3.Connection, *, view: str = "playe
     meta = get_meta(conn)
     current_location_id = meta.get("current_location_id") or ""
     player_entity_id = get_player_entity_id(conn)
+    ensure_visibility_sql_functions(conn)
     visibility_clause = entity_visibility_sql(view, "e")
+    subtype_visibility_clause = entity_subtype_visibility_sql(view, "e", "c")
     rows = conn.execute(
         f"""
         select e.*,
@@ -452,10 +796,12 @@ def salient_ambiguous_candidates(conn: sqlite3.Connection, *, view: str = "playe
                  when e.owner_id = ? then 2
                  when e.type = 'character' then 3
                  else 4
-               end as _rank
+	               end as _rank
         from entities e
-        where e.status != 'archived'
+        left join clocks c on c.entity_id = e.id
+        where {entity_not_archived_sql("e")}
           {visibility_clause}
+          {subtype_visibility_clause}
           and e.id != ?
           and (
             (? != '' and e.location_id = ?)
@@ -592,8 +938,12 @@ def character_species_id(conn: sqlite3.Connection, entity_id: str) -> str | None
 
 
 def sanitize_fts_query(text: str) -> str:
-    tokens = re.findall(r"[\w\u4e00-\u9fff]+", text)
-    return " OR ".join(tokens[:6])
+    safe_tokens: list[str] = []
+    for token in candidate_search_tokens(text)[:6]:
+        escaped = token.replace('"', '""')
+        if escaped:
+            safe_tokens.append(f'"{escaped}"')
+    return " OR ".join(safe_tokens)
 
 
 def dedupe_rows(rows: list[sqlite3.Row]) -> list[sqlite3.Row]:

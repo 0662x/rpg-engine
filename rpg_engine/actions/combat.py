@@ -8,13 +8,16 @@ from ..db import get_meta, get_player_entity_id, resolve_entity
 from ..render import parse_json
 from ..preview import (
     build_combat_delta,
+    current_location_row,
     decremented_quantity,
+    entity_ref_label,
     item_row,
     preview_warnings,
     render_combat_preview,
     required_confirmations,
     suggested_clock_ticks,
 )
+from ..redaction import redact_hidden_entity_refs
 from .base import (
     ActionOptionSpec,
     ActionResolverSpec,
@@ -52,6 +55,7 @@ def resolve_combat_inputs(conn: sqlite3.Connection, options: Any) -> dict[str, A
     ammo_properties = parse_json(ammo_item["properties_json"], {}) if ammo_item else {}
     combat = weapon_properties.get("combat_profile") if isinstance(weapon_properties, dict) else {}
     ammo_profile = ammo_properties.get("ammo_profile") if isinstance(ammo_properties, dict) else {}
+    current = current_location_row(conn, meta)
     return {
         "target_query": target_query,
         "weapon_query": weapon_query,
@@ -65,7 +69,8 @@ def resolve_combat_inputs(conn: sqlite3.Connection, options: Any) -> dict[str, A
         "ammo_profile": ammo_profile,
         "distance": option_value(options, "distance"),
         "ready_state": option_value(options, "ready_state"),
-        "current_location_id": meta.get("current_location_id"),
+        "current_location_id": current["id"] if current else None,
+        "current_location_unreadable": bool(meta.get("current_location_id") and not current),
     }
 
 
@@ -84,7 +89,7 @@ def validate_combat_request(
     return ActionValidationResult(missing_required=missing)
 
 
-def combat_blockers(data: dict[str, Any]) -> list[str]:
+def combat_blockers(data: dict[str, Any], conn: sqlite3.Connection | None = None) -> list[str]:
     blockers = required_confirmations(
         data["target"],
         data["ammo"],
@@ -98,13 +103,16 @@ def combat_blockers(data: dict[str, Any]) -> list[str]:
         blockers.append(f"武器未找到：{data['weapon_query']}")
     if data["target_query"] and not data["target"]:
         blockers.append(f"目标未找到：{data['target_query']}")
+    if data.get("current_location_unreadable"):
+        blockers.append("当前地点未登记、不可见或不存在：不能保存战斗结果。")
     if (
         data["target"]
         and data["target"]["location_id"]
         and data["current_location_id"]
         and data["target"]["location_id"] != data["current_location_id"]
     ):
-        blockers.append(f"目标不在当前地点：{data['target']['location_id']}；需要先 travel 或重新确认距离/视线。")
+        location = entity_ref_label(conn, data["target"]["location_id"]) if conn else data["target"]["location_id"]
+        blockers.append(f"目标不在当前地点：{location}；需要先 travel 或重新确认距离/视线。")
     if data["ammo_query"] and not data["ammo"]:
         blockers.append(f"弹药未找到：{data['ammo_query']}")
     if data["ready_state"]:
@@ -120,7 +128,7 @@ def resolve_combat(
 ) -> ResolutionResult:
     del campaign, context_data
     data = resolve_combat_inputs(conn, options)
-    blockers = combat_blockers(data)
+    blockers = combat_blockers(data, conn)
     warnings = preview_warnings(
         data["weapon"],
         data["weapon_item"],
@@ -129,6 +137,7 @@ def resolve_combat(
         data["combat"],
         data["ammo_profile"],
         get_player_entity_id(conn),
+        conn=conn,
     )
     if data["ready_state"]:
         warnings.append(f"武器状态已由请求确认：{data['ready_state']}")
@@ -136,9 +145,9 @@ def resolve_combat(
     if blockers:
         return ResolutionResult(
             status="needs_confirmation",
-            facts_used=tuple(facts),
-            confirmations=tuple(blockers),
-            warnings=tuple(warnings),
+            facts_used=tuple(redact_hidden_entity_refs(conn, tuple(facts), drop_empty=False)),
+            confirmations=tuple(redact_hidden_entity_refs(conn, tuple(blockers), drop_empty=False)),
+            warnings=tuple(redact_hidden_entity_refs(conn, tuple(warnings), drop_empty=False)),
             narrative_constraints=("Ask for target, explicit weapon, ammo, distance and weapon ready state before saving combat.",),
         )
 
@@ -159,10 +168,10 @@ def resolve_combat(
         rules.append("rule:player-agency")
     return ResolutionResult(
         status="ready",
-        facts_used=tuple(facts),
+        facts_used=tuple(redact_hidden_entity_refs(conn, tuple(facts), drop_empty=False)),
         rules_applied=tuple(rules),
-        warnings=tuple(warnings),
-        proposed_delta=proposed_delta,
+        warnings=tuple(redact_hidden_entity_refs(conn, tuple(warnings), drop_empty=False)),
+        proposed_delta=redact_hidden_entity_refs(conn, proposed_delta, drop_empty=False),
         narrative_constraints=(
             "Use combat_turn.md for the response.",
             "Do not resolve hit, damage, target state or collateral effects outside the approved delta.",
@@ -180,7 +189,7 @@ def validate_combat_delta(
 ) -> ActionValidationResult:
     del campaign, context_data
     data = resolve_combat_inputs(conn, options)
-    errors = combat_blockers(data)
+    errors = combat_blockers(data, conn)
     warnings: list[str] = []
     if delta.get("intent") != "combat":
         warnings.append("delta intent is not combat")

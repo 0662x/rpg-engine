@@ -11,7 +11,7 @@ import yaml
 from .campaign import load_campaign
 from .card_registry import get_default_card_registry
 from .cards import GENERATED_MARKER, card_relative_path
-from .db import connect
+from .db import connect, entity_subtype_visibility_sql
 from .migrations import migration_checksum, migration_files
 from .projections import (
     PROJECTION_STATE_SCHEMA_COLUMNS,
@@ -23,7 +23,8 @@ from .projections import (
 )
 from .validation_issues import issues_from_messages
 from .validators import run_checks
-from .visibility import can_read_entity_row
+from .redaction import find_hidden_entity_ref_tokens
+from .visibility import ensure_visibility_sql_functions, entity_not_archived_sql, entity_visibility_sql, normalized_text_sql
 
 
 REQUIRED_SAVE_FILES = {
@@ -166,14 +167,24 @@ def inspect_save_package(save_dir: str | Path) -> dict[str, Any]:
                 validate_meta_compatibility(campaign, save_manifest, meta, errors)
                 validate_time_meta(meta, errors)
                 validate_sqlite_schema(conn, errors)
+                pending_migrations = has_pending_migrations(conn)
                 validate_migrations(conn, errors)
                 errors.extend(run_checks(conn))
                 health = build_projection_health(conn, meta)
                 validate_projection_state(conn, meta, errors)
                 validate_events_jsonl(campaign.events_path, conn, errors)
-                validate_snapshot_json(campaign.current_snapshot_json_path, meta, campaign.campaign_id, errors)
-                validate_cards(campaign.cards_path, conn, errors)
-                validate_search_projection(conn, errors)
+                validate_snapshot_json(
+                    campaign.current_snapshot_path,
+                    campaign.current_snapshot_json_path,
+                    conn,
+                    meta,
+                    campaign.campaign_id,
+                    errors,
+                    scan_hidden_refs=not pending_migrations,
+                )
+                validate_cards(campaign.cards_path, conn, errors, scan_hidden_refs=not pending_migrations)
+                if not pending_migrations:
+                    validate_search_projection(conn, errors)
         except Exception as exc:
             errors.append(str(exc))
     else:
@@ -466,6 +477,26 @@ def validate_migrations(conn: sqlite3.Connection, errors: list[str]) -> None:
             errors.append(f"schema_migrations.{migration.id}: checksum mismatch")
 
 
+def has_pending_migrations(conn: sqlite3.Connection) -> bool:
+    if not table_exists(conn, "schema_migrations"):
+        return True
+    columns = table_columns(conn, "schema_migrations")
+    rows = {
+        row["id"]: row
+        for row in conn.execute(
+            "select id, checksum from schema_migrations" if "checksum" in columns else "select id, null as checksum from schema_migrations"
+        ).fetchall()
+    }
+    for migration in migration_files():
+        row = rows.get(migration.id)
+        if row is None:
+            return True
+        checksum = row["checksum"]
+        if checksum and checksum != migration_checksum(migration):
+            return True
+    return False
+
+
 def validate_projection_state(conn: sqlite3.Connection, meta: dict[str, str], errors: list[str]) -> None:
     if not table_exists(conn, "projection_state"):
         errors.append("projection_state: missing")
@@ -571,7 +602,25 @@ def validate_events_jsonl(path: Path, conn: sqlite3.Connection, errors: list[str
         errors.append(f"data/events.jsonl: missing SQLite event {event_id}")
 
 
-def validate_snapshot_json(path: Path, meta: dict[str, str], campaign_id: str, errors: list[str]) -> None:
+def validate_snapshot_json(
+    markdown_path: Path,
+    path: Path,
+    conn: sqlite3.Connection,
+    meta: dict[str, str],
+    campaign_id: str,
+    errors: list[str],
+    *,
+    scan_hidden_refs: bool = True,
+) -> None:
+    if scan_hidden_refs and markdown_path.exists():
+        try:
+            text = markdown_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            errors.append(f"snapshots/current.md: unreadable: {exc}")
+        else:
+            leaks = find_hidden_entity_ref_tokens(conn, text)
+            if leaks:
+                errors.append(f"snapshots/current.md: contains hidden entity refs: {', '.join(leaks[:5])}")
     if not path.exists():
         return
     try:
@@ -590,44 +639,138 @@ def validate_snapshot_json(path: Path, meta: dict[str, str], campaign_id: str, e
         errors.append("snapshots/current.json.meta: missing")
         return
     for key in ("current_turn_id", "current_location_id", "current_game_day", "current_time_block"):
+        if (
+            key == "current_location_id"
+            and meta.get(key)
+            and snapshot_meta.get(key) == "当前地点不可见或不存在"
+        ):
+            if current_location_unreadable(conn, meta):
+                continue
+            errors.append("snapshots/current.json.meta.current_location_id: placeholder used while current location is visible")
+            continue
         if meta.get(key) and snapshot_meta.get(key) != meta[key]:
             errors.append(f"snapshots/current.json.meta.{key}: expected {meta[key]}, got {snapshot_meta.get(key)}")
+    if scan_hidden_refs:
+        leaks = find_hidden_entity_ref_tokens(conn, data)
+        if leaks:
+            errors.append(f"snapshots/current.json: contains hidden entity refs: {', '.join(leaks[:5])}")
 
 
-def validate_cards(cards_path: Path, conn: sqlite3.Connection, errors: list[str]) -> None:
+def current_location_unreadable(conn: sqlite3.Connection, meta: dict[str, str]) -> bool:
+    location_id = meta.get("current_location_id")
+    if not location_id:
+        return False
+    ensure_visibility_sql_functions(conn)
+    row = conn.execute(
+        f"""
+        select 1
+        from entities e
+        left join clocks c on c.entity_id = e.id
+        where e.id = ?
+          and {normalized_text_sql("e.type")} = 'location'
+          and {entity_not_archived_sql("e")}
+          {entity_visibility_sql("player", "e")}
+          {entity_subtype_visibility_sql("player", "e", "c")}
+        """,
+        (location_id,),
+    ).fetchone()
+    return row is None
+
+
+def validate_cards(
+    cards_path: Path,
+    conn: sqlite3.Connection,
+    errors: list[str],
+    *,
+    scan_hidden_refs: bool = True,
+) -> None:
     if not cards_path.exists():
         return
+    ensure_visibility_sql_functions(conn)
     index = cards_path / "INDEX.md"
     if not index.exists():
         errors.append("cards/INDEX.md: missing")
+    elif scan_hidden_refs:
+        try:
+            index_text = index.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            errors.append(f"cards/INDEX.md: unreadable: {exc}")
+        else:
+            leaks = find_hidden_entity_ref_tokens(conn, index_text)
+            if leaks:
+                errors.append(f"cards/INDEX.md: contains hidden entity refs: {', '.join(leaks[:5])}")
     registry = get_default_card_registry()
-    rows = conn.execute("select * from entities where status != 'archived'").fetchall()
+    visibility_clause = entity_visibility_sql("player", "e")
+    subtype_visibility_clause = entity_subtype_visibility_sql("player", "e", "c")
+    rows = conn.execute(
+        f"""
+        select e.*
+        from entities e
+        left join clocks c on c.entity_id = e.id
+        where {entity_not_archived_sql("e")}
+          {visibility_clause}
+          {subtype_visibility_clause}
+        """
+    ).fetchall()
+    expected_paths: set[Path] = set()
     for row in rows:
-        if not can_read_entity_row(row):
-            continue
         path = cards_path / card_relative_path(row, registry)
+        expected_paths.add(path.resolve())
         if not path.exists():
             errors.append(f"cards: missing generated card {path.relative_to(cards_path).as_posix()}")
             continue
         try:
-            first_line = path.read_text(encoding="utf-8").splitlines()[0]
+            text = path.read_text(encoding="utf-8")
+            first_line = text.splitlines()[0]
         except (OSError, IndexError, UnicodeDecodeError) as exc:
             errors.append(f"cards/{path.relative_to(cards_path).as_posix()}: unreadable: {exc}")
             continue
         if first_line != GENERATED_MARKER:
             errors.append(f"cards/{path.relative_to(cards_path).as_posix()}: not a generated card")
+        if scan_hidden_refs:
+            leaks = find_hidden_entity_ref_tokens(conn, text)
+            if leaks:
+                errors.append(
+                    f"cards/{path.relative_to(cards_path).as_posix()}: contains hidden entity refs: {', '.join(leaks[:5])}"
+                )
+    if scan_hidden_refs:
+        for path in cards_path.rglob("*.md"):
+            if path.name == "INDEX.md":
+                continue
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            if not text.startswith(GENERATED_MARKER):
+                continue
+            if path.resolve() in expected_paths:
+                continue
+            errors.append(f"cards/{path.relative_to(cards_path).as_posix()}: stale generated card for hidden/archived entity")
 
 
 def validate_search_projection(conn: sqlite3.Connection, errors: list[str]) -> None:
     if not table_exists(conn, "fts_index"):
         errors.append("fts_index: missing")
         return
+    ensure_visibility_sql_functions(conn)
     expected = conn.execute(
-        "select count(*) from entities where status != 'archived' and visibility != 'hidden'"
+        f"""
+        select count(*)
+        from entities e
+        left join clocks c on c.entity_id = e.id
+        where {entity_not_archived_sql("e")}
+          and {normalized_text_sql("e.visibility")} != 'hidden'
+          {entity_subtype_visibility_sql("player", "e", "c")}
+        """
     ).fetchone()[0]
     actual = conn.execute("select count(*) from fts_index").fetchone()[0]
     if int(actual) != int(expected):
         errors.append(f"fts_index: expected {expected} indexed entities, got {actual}")
+    rows = conn.execute("select entity_id, title, body, tags from fts_index").fetchall()
+    for row in rows:
+        leaks = find_hidden_entity_ref_tokens(conn, dict(row))
+        if leaks:
+            errors.append(f"fts_index:{row['entity_id']}: contains hidden entity refs: {', '.join(leaks[:5])}")
 
 
 def table_count(conn: sqlite3.Connection, table: str) -> int:

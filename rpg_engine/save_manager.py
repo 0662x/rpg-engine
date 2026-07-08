@@ -16,9 +16,10 @@ import yaml
 from .ai.defaults import DEFAULT_AI_MODEL, DEFAULT_AI_PROVIDER, DEFAULT_INTENT_TIMEOUT_SECONDS
 from .atomic_io import write_text_atomic
 from .campaign import load_campaign
-from .db import utc_now
+from .db import connect, utc_now
 from .game_session import clean, hash_identity
 from .intent_router import make_intent_ai_config, make_intent_request_meta
+from .redaction import redact_hidden_entity_refs
 from .runtime import GMRuntime, intent_ai_config_kwargs, intent_request_meta_kwargs
 from .save_service import init_v1_save, inspect_v1_save, normalize_content_paths_for_save, validate_save_target_outside_source
 from .validation_issues import issues_from_messages
@@ -138,7 +139,7 @@ class SaveManager:
                 return {
                     "ok": False,
                     "active_save_id": registry.get("active_save_id"),
-                    "saves": filtered,
+                    "saves": [self.scrub_cached_save_record(record) for record in filtered],
                     "errors": path_errors,
                     "error_details": issues_from_messages(path_errors, default_code="SAVE_MANAGER_ERROR"),
                 }
@@ -156,6 +157,7 @@ class SaveManager:
                 self.write_registry(registry)
                 filtered_ids = {str(item.get("id")) for item in filtered}
                 filtered = [dict(item) for item in refreshed if str(item.get("id")) in filtered_ids]
+        filtered = [self.scrub_cached_save_record(record) for record in filtered]
         return {
             "ok": True,
             "active_save_id": registry.get("active_save_id"),
@@ -200,7 +202,7 @@ class SaveManager:
         return {
             "ok": True,
             "active_save_id": active_save_id,
-            "save": record,
+            "save": self.scrub_cached_save_record(dict(record)),
             "current_save_authority": current_save_authority(refresh=refresh),
             "errors": [],
         }
@@ -393,9 +395,14 @@ class SaveManager:
     def resolve_save_path_for_runtime(self, save: str | None = None, *, default_save: str | None = None) -> Path:
         if save:
             return self.resolve_relative(normalize_required_relative(save, "save"), "save")
-        current = self.current_save(refresh=False)
+        current = self.current_save(refresh=True)
         if current["ok"] and current.get("save"):
-            return self.resolve_relative(str(current["save"]["path"]), "save")
+            record = dict(current["save"])
+            if record.get("health") == "error":
+                raise SaveManagerError(
+                    "; ".join([f"active save is not healthy: {record.get('label') or record.get('id')}", *record.get("errors", [])])
+                )
+            return self.resolve_relative(str(record["path"]), "save")
         if default_save:
             return self.resolve_relative(normalize_required_relative(default_save, "default_save"), "default_save")
         raise SaveManagerError("save is required because no active or default save is configured")
@@ -785,8 +792,26 @@ class SaveManager:
     def refresh_save_record(self, record: dict[str, Any]) -> dict[str, Any]:
         now = utc_now()
         try:
-            inspect = inspect_v1_save(self.resolve_relative(str(record.get("path", "")), "save"))
-            location_name = location_name_from_save(self.resolve_relative(str(record.get("path", "")), "save"), inspect)
+            save_path = self.resolve_relative(str(record.get("path", "")), "save")
+            inspect = inspect_v1_save(save_path)
+            location_name = location_name_from_save(save_path, inspect)
+            safe_inspect = dict(inspect)
+            safe_current_location_id = inspect.get("current_location_id")
+            safe_errors = list(inspect.get("errors", []))
+            safe_warnings = list(inspect.get("warnings", []))
+            try:
+                runtime = GMRuntime.from_path(save_path)
+                with connect(runtime.campaign) as conn:
+                    safe_current_location_id = redact_hidden_entity_refs(
+                        conn,
+                        safe_current_location_id,
+                        drop_empty=False,
+                    )
+                    safe_errors = list(redact_hidden_entity_refs(conn, safe_errors, drop_empty=False))
+                    safe_warnings = list(redact_hidden_entity_refs(conn, safe_warnings, drop_empty=False))
+            except Exception:
+                pass
+            safe_inspect["current_location_id"] = safe_current_location_id
             health = "ok" if inspect.get("ok") else "error"
             record.update(
                 {
@@ -795,13 +820,13 @@ class SaveManager:
                     "current_turn_id": inspect.get("current_turn_id"),
                     "current_game_day": inspect.get("current_game_day"),
                     "current_time_block": inspect.get("current_time_block"),
-                    "current_location_id": inspect.get("current_location_id"),
+                    "current_location_id": safe_current_location_id,
                     "current_location_name": location_name,
-                    "summary": build_save_summary(inspect, location_name),
+                    "summary": build_save_summary(safe_inspect, location_name),
                     "health": health,
                     "last_inspected_at": now,
-                    "errors": list(inspect.get("errors", [])),
-                    "warnings": list(inspect.get("warnings", [])),
+                    "errors": safe_errors,
+                    "warnings": safe_warnings,
                 }
             )
         except Exception as exc:
@@ -813,7 +838,23 @@ class SaveManager:
                     "warnings": [],
                 }
             )
+            clear_cached_save_sensitive_fields(record)
         return record
+
+    def scrub_cached_save_record(self, record: dict[str, Any]) -> dict[str, Any]:
+        safe_record = dict(record)
+        save_path = safe_record.get("path")
+        if not save_path:
+            return safe_record
+        try:
+            runtime = GMRuntime.from_path(self.resolve_relative(str(save_path), "save"))
+            with connect(runtime.campaign) as conn:
+                for key in ("current_location_id", "current_location_name", "summary", "errors", "warnings", "error_details"):
+                    if key in safe_record:
+                        safe_record[key] = redact_hidden_entity_refs(conn, safe_record[key], drop_empty=False)
+        except Exception:
+            clear_cached_save_sensitive_fields(safe_record)
+        return safe_record
 
     def default_save_label(self, record: dict[str, Any]) -> str:
         registry = self.read_registry()
@@ -1144,6 +1185,15 @@ def build_save_summary(inspect: dict[str, Any], location_name: str | None) -> st
     time_block = inspect.get("current_time_block") or "未知时间"
     location = location_name or inspect.get("current_location_id") or "未知地点"
     return f"{time_block}，位于{location}。"
+
+
+def clear_cached_save_sensitive_fields(record: dict[str, Any]) -> None:
+    for key in ("current_location_id", "current_location_name", "summary"):
+        if record.get(key):
+            record[key] = "[hidden]"
+    for key in ("errors", "warnings", "error_details"):
+        if record.get(key):
+            record[key] = ["[hidden]"] if isinstance(record[key], list) else "[hidden]"
 
 
 def location_name_from_save(save_path: Path, inspect: dict[str, Any]) -> str | None:

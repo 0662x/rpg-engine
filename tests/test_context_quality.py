@@ -130,7 +130,16 @@ class ContextBuilderUnitTests(unittest.TestCase):
         self.assertEqual(low.assumptions, [])
 
     def test_fts_sanitizer_and_entity_id_extraction(self) -> None:
-        self.assertEqual(sanitize_fts_query("终极@复合/弩!!! T3? 火药箭"), "终极 OR 复合 OR 弩 OR T3 OR 火药箭")
+        self.assertEqual(sanitize_fts_query("终极@复合/弩!!! T3? 火药箭"), '"终极" OR "复合" OR "弩" OR "T3" OR "火药箭"')
+        self.assertEqual(sanitize_fts_query("NOT official notice"), '"NOT" OR "official" OR "notice"')
+        self.assertEqual(sanitize_fts_query("看 弩"), '"弩"')
+        self.assertEqual(sanitize_fts_query("查 弩"), '"弩"')
+        self.assertEqual(sanitize_fts_query("问 弩"), '"弩"')
+        self.assertEqual(sanitize_fts_query("找 弩"), '"弩"')
+        self.assertEqual(sanitize_fts_query("看弩"), '"弩"')
+        self.assertEqual(sanitize_fts_query("查弩"), '"弩"')
+        self.assertEqual(sanitize_fts_query("问弩"), '"弩"')
+        self.assertEqual(sanitize_fts_query("找弩"), '"弩"')
         ids = extract_entity_ids({"a": "item:test-harmonic-bow", "b": ["loc:test-crystal-marsh", "not:id"]})
         self.assertEqual(ids, ["item:test-harmonic-bow", "loc:test-crystal-marsh"])
 

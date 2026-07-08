@@ -62,7 +62,7 @@ development_status:
   epic-2: in-progress
   2-1-campaign-and-save-ownership-contract: done
   2-2-content-type-and-merge-contract: done
-  2-3-entity-identity-access-contract: backlog
+  2-3-entity-identity-access-contract: done
   2-4-relationship-access-contract: backlog
   2-5-progress-track-and-clock-access-contract: backlog
   2-6-跨-campaign-的模型边界冒烟测试: backlog

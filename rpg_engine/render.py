@@ -8,10 +8,20 @@ from typing import Any
 from .atomic_io import write_text_atomic
 from .campaign import Campaign
 from .card_registry import CardRegistry, get_default_card_registry
-from .db import get_meta, get_player_entity_id, resolve_entity
+from .db import entity_subtype_visibility_sql, get_meta, get_player_entity_id, resolve_entity
 from .player_resources import player_detail_items
+from .redaction import redact_hidden_entity_refs
 from .time_weather import format_time_brief, format_weather_brief
-from .visibility import PLAYER_VIEW, clock_visibility_sql, entity_visibility_sql, normalize_visibility_view
+from .visibility import (
+    PLAYER_VIEW,
+    can_read_hidden,
+    clock_visibility_sql,
+    ensure_visibility_sql_functions,
+    entity_not_archived_sql,
+    entity_visibility_sql,
+    normalize_visibility_view,
+    normalized_text_sql,
+)
 
 
 def parse_json(text: str | None, default: Any) -> Any:
@@ -476,11 +486,13 @@ def append_sequence_section(lines: list[str], title: str, value: Any) -> None:
 
 
 def render_entity(conn: sqlite3.Connection, query: str, *, view: str = PLAYER_VIEW) -> str:
+    view = normalize_visibility_view(view)
     entity = resolve_entity(conn, query, view=view)
     if entity is None:
+        display_query = str(redact_hidden_entity_refs(conn, query, drop_empty=False)) if view == PLAYER_VIEW else query
         return "\n".join(
             [
-                f"未找到实体：`{query}`",
+                f"未找到实体：`{display_query}`",
                 "",
                 "可尝试：",
                 "- 使用完整实体 ID，例如 `item:powder-arrows`。",
@@ -491,8 +503,12 @@ def render_entity(conn: sqlite3.Connection, query: str, *, view: str = PLAYER_VI
 
     spec = get_default_card_registry().by_entity_type(str(entity["type"]))
     if spec and spec.render_query:
-        return spec.render_query(conn, entity)
-    return render_generic_entity(entity)
+        text = spec.render_query(conn, entity)
+    else:
+        text = render_generic_entity(entity)
+    if view == PLAYER_VIEW:
+        return str(redact_hidden_entity_refs(conn, text))
+    return text
 
 
 def render_generic_entity(entity: sqlite3.Row) -> str:
@@ -549,6 +565,8 @@ def render_item(conn: sqlite3.Connection, entity: sqlite3.Row) -> str:
     item = conn.execute("select * from items where entity_id = ?", (entity["id"],)).fetchone()
     details = parse_json(entity["details_json"], {})
     properties = parse_json(item["properties_json"], {}) if item else {}
+    location_label = entity["location_id"] or entity["owner_id"] or "未知"
+    summary = entity["summary"] or "无"
     lines = [
         f"## 装备/物品：{entity['name']}",
         "",
@@ -557,14 +575,14 @@ def render_item(conn: sqlite3.Connection, entity: sqlite3.Row) -> str:
         f"| ID | `{entity['id']}` |",
         f"| 类型 | {display_label('entity_type', entity['type'])} |",
         f"| 分类 | {display_label('item_category', item['category'], default='未知') if item else '未知'} |",
-        f"| 位置 | {entity['location_id'] or entity['owner_id'] or '未知'} |",
+        f"| 位置 | {location_label} |",
         f"| 状态 | {display_label('status', entity['status'])} |",
         f"| 数量 | {format_quantity(item) if item else '未知'} |",
         f"| 品质 | {display_label('quality', item['quality'], default='未知') if item else '未知'} |",
         f"| 装备槽 | {item['equipped_slot'] if item and item['equipped_slot'] else '无'} |",
         "",
         "### 摘要",
-        entity["summary"] or "无",
+        summary,
     ]
     append_item_profile_sections(lines, properties, heading_level=3)
     hidden_property_keys = {"combat_profile", "ammo_profile", "melee_profile", "defense_profile", "carry_profile"}
@@ -741,21 +759,34 @@ def render_rule(conn: sqlite3.Connection, entity: sqlite3.Row) -> str:
 
 
 def render_scene(conn: sqlite3.Connection, *, view: str = PLAYER_VIEW) -> str:
+    ensure_visibility_sql_functions(conn)
     view = normalize_visibility_view(view)
+    should_redact = not can_read_hidden(view)
+
+    def safe_value(value: Any) -> Any:
+        return redact_hidden_entity_refs(conn, value) if should_redact else value
+
     registry = get_default_card_registry()
     meta = get_meta(conn)
     location_id = meta.get("current_location_id", "")
     entity_visibility_clause = entity_visibility_sql(view, "e")
+    subtype_visibility_clause = entity_subtype_visibility_sql(view, "e", "c")
     location = conn.execute(
         f"""
         select e.*
         from entities e
+        left join clocks c on c.entity_id = e.id
         where e.id = ?
+          and {normalized_text_sql("e.type")} = 'location'
+          and {entity_not_archived_sql("e")}
           {entity_visibility_clause}
+          {subtype_visibility_clause}
         """,
         (location_id,),
     ).fetchone()
     if not location:
+        if view == PLAYER_VIEW:
+            return "当前地点不可见或不存在"
         return f"当前地点不可见或不存在：`{location_id}`"
 
     location_details = conn.execute("select * from locations where entity_id = ?", (location_id,)).fetchone()
@@ -763,8 +794,10 @@ def render_scene(conn: sqlite3.Connection, *, view: str = PLAYER_VIEW) -> str:
         f"""
         select e.id, e.type, e.name, e.summary
         from entities e
-        where e.location_id = ? and e.status = 'active'
+        left join clocks c on c.entity_id = e.id
+        where e.location_id = ? and {normalized_text_sql("e.status")} = 'active'
           {entity_visibility_clause}
+          {subtype_visibility_clause}
         order by e.name
         """,
         (location_id,),
@@ -776,8 +809,10 @@ def render_scene(conn: sqlite3.Connection, *, view: str = PLAYER_VIEW) -> str:
         select e.id, e.type, e.name, i.category, i.quantity, i.unit
         from entities e
         join items i on i.entity_id = e.id
-        where e.owner_id = ? and e.status = 'active'
+        left join clocks c on c.entity_id = e.id
+        where e.owner_id = ? and {normalized_text_sql("e.status")} = 'active'
           {entity_visibility_clause}
+          {subtype_visibility_clause}
         order by i.equipped_slot is null, i.equipped_slot, e.name
         limit 20
         """,
@@ -789,7 +824,7 @@ def render_scene(conn: sqlite3.Connection, *, view: str = PLAYER_VIEW) -> str:
         select e.name, c.segments_filled, c.segments_total, c.visibility
         from clocks c
         join entities e on e.id = c.entity_id
-        where e.status != 'archived'
+        where {entity_not_archived_sql("e")}
           {clock_visibility_clause}
           {entity_visibility_clause}
         order by c.visibility, e.name
@@ -801,7 +836,9 @@ def render_scene(conn: sqlite3.Connection, *, view: str = PLAYER_VIEW) -> str:
         f"## 当前场景：{location['name']}",
         "",
         "### 全景",
-        location_details["description_short"] if location_details and location_details["description_short"] else location["summary"],
+        safe_value(
+            location_details["description_short"] if location_details and location_details["description_short"] else location["summary"],
+        ),
         "",
         "### 当前状态",
         "| 项目 | 当前 |",
@@ -816,7 +853,9 @@ def render_scene(conn: sqlite3.Connection, *, view: str = PLAYER_VIEW) -> str:
     if present:
         visible_present = present[:12]
         for row in visible_present:
-            lines.append(f"- `{row['id']}` {row['name']}（{display_label('entity_type', row['type'])}）：{row['summary']}")
+            name = safe_value(row["name"]) or row["name"]
+            summary = safe_value(row["summary"]) or "无"
+            lines.append(f"- `{row['id']}` {name}（{display_label('entity_type', row['type'])}）：{summary}")
         if len(present) > len(visible_present):
             hidden_count = len(present) - len(visible_present)
             lines.append(f"- 另有 {hidden_count} 项库存/对象已折叠；查询具体物品可用实体查询。")
@@ -833,7 +872,8 @@ def render_scene(conn: sqlite3.Connection, *, view: str = PLAYER_VIEW) -> str:
                 if float(number).is_integer():
                     number = int(number)
                 quantity = f" ×{number}{row['unit'] or ''}"
-            lines.append(f"- `{row['id']}` {row['name']}（{display_label('item_category', row['category'])}）{quantity}")
+            name = safe_value(row["name"]) or row["name"]
+            lines.append(f"- `{row['id']}` {name}（{display_label('item_category', row['category'])}）{quantity}")
     else:
         lines.append("- 无")
 
@@ -843,7 +883,8 @@ def render_scene(conn: sqlite3.Connection, *, view: str = PLAYER_VIEW) -> str:
             filled = int(row["segments_filled"])
             total = int(row["segments_total"])
             bar = "■" * filled + "□" * max(total - filled, 0)
-            lines.append(f"- {row['name']}：{bar} {filled}/{total}（{display_label('visibility', row['visibility'])}）")
+            name = safe_value(row["name"]) or row["name"]
+            lines.append(f"- {name}：{bar} {filled}/{total}（{display_label('visibility', row['visibility'])}）")
     else:
         lines.append("- 无")
 
@@ -860,6 +901,32 @@ def render_scene(conn: sqlite3.Connection, *, view: str = PLAYER_VIEW) -> str:
     return "\n".join(lines)
 
 
+def current_location_display(conn: sqlite3.Connection, meta: dict[str, str], view: str) -> str:
+    location_id = meta.get("current_location_id", "")
+    if not location_id:
+        return "未知"
+    entity_visibility_clause = entity_visibility_sql(view, "e")
+    subtype_visibility_clause = entity_subtype_visibility_sql(view, "e", "c")
+    location = conn.execute(
+        f"""
+        select e.id, e.name
+        from entities e
+        left join clocks c on c.entity_id = e.id
+        where e.id = ?
+          and {normalized_text_sql("e.type")} = 'location'
+          and {entity_not_archived_sql("e")}
+          {entity_visibility_clause}
+          {subtype_visibility_clause}
+        """,
+        (location_id,),
+    ).fetchone()
+    if location:
+        return f"`{location['id']}` {location['name']}"
+    if view == PLAYER_VIEW:
+        return "当前地点不可见或不存在"
+    return f"当前地点不可见或不存在：`{location_id}`"
+
+
 def scene_affordances(
     conn: sqlite3.Connection,
     location_id: str,
@@ -867,7 +934,9 @@ def scene_affordances(
     *,
     view: str = PLAYER_VIEW,
 ) -> list[tuple[str, str]]:
+    ensure_visibility_sql_functions(conn)
     entity_visibility_clause = entity_visibility_sql(view, "e")
+    subtype_visibility_clause = entity_subtype_visibility_sql(view, "e", "c")
     actions: list[tuple[str, str]] = [
         ("查看周围细节", "查询当前地点资源和风险"),
         ("盘点库存", "低风险日常行动，不制造新资源"),
@@ -878,16 +947,26 @@ def scene_affordances(
             actions.append((f"找 {row['name']} 谈谈", "社交预演；重要承诺或交易需保存 delta"))
             break
     routes = conn.execute(
-        """
+        f"""
         select r.to_location_id as destination_id, e.name
         from routes r
         join entities e on e.id = r.to_location_id
+        left join clocks c on c.entity_id = e.id
         where r.from_location_id = ?
+          and {normalized_text_sql("e.type")} = 'location'
+          and {entity_not_archived_sql("e")}
+          {entity_visibility_clause}
+          {subtype_visibility_clause}
         union
         select r.from_location_id as destination_id, e.name
         from routes r
         join entities e on e.id = r.from_location_id
+        left join clocks c on c.entity_id = e.id
         where r.to_location_id = ?
+          and {normalized_text_sql("e.type")} = 'location'
+          and {entity_not_archived_sql("e")}
+          {entity_visibility_clause}
+          {subtype_visibility_clause}
         order by name
         limit 3
         """,
@@ -899,7 +978,7 @@ def scene_affordances(
         f"""
         select e.id, e.name
         from entities e
-        where e.type = 'project' and e.status = 'active'
+        where e.type = 'project' and {normalized_text_sql("e.status")} = 'active'
           {entity_visibility_clause}
         order by e.name
         limit 2
@@ -917,6 +996,10 @@ def render_current_snapshot(campaign: Campaign, conn: sqlite3.Connection, *, vie
     scene = render_scene(conn, view=view)
     pc = conn.execute("select * from entities where id = ?", (get_player_entity_id(conn),)).fetchone()
     pc_details = parse_json(pc["details_json"], {}) if pc else {}
+    pc_summary = pc["summary"] if pc else "未知"
+    if view == PLAYER_VIEW:
+        pc_summary = redact_hidden_entity_refs(conn, pc_summary) or "未知"
+        pc_details = redact_hidden_entity_refs(conn, pc_details)
     lines = [
         "# 当前局面",
         "",
@@ -926,15 +1009,16 @@ def render_current_snapshot(campaign: Campaign, conn: sqlite3.Connection, *, vie
         f"游戏时间：{format_time_brief(meta)}",
         f"天气：{format_weather_brief(meta)}",
         f"季节：{meta.get('year_label', '未登记')} / {meta.get('season_label', '未登记')} / {meta.get('month_label', '未登记')}",
-        f"当前位置：{meta.get('current_location_id', 'unknown')}",
+        f"当前位置：{current_location_display(conn, meta, view)}",
         "",
         "## 玩家状态",
-        f"- 摘要：{pc['summary'] if pc else '未知'}",
+        f"- 摘要：{pc_summary}",
     ]
     for label, value in player_detail_items(pc_details, meta):
         lines.append(f"- {label}: {value}")
     lines.extend(["", scene])
-    return "\n".join(lines)
+    text = "\n".join(lines)
+    return str(redact_hidden_entity_refs(conn, text)) if view == PLAYER_VIEW else text
 
 
 def render_current_snapshot_json(
@@ -943,6 +1027,7 @@ def render_current_snapshot_json(
     *,
     view: str = PLAYER_VIEW,
 ) -> dict[str, Any]:
+    ensure_visibility_sql_functions(conn)
     view = normalize_visibility_view(view)
     registry = get_default_card_registry()
     meta = get_meta(conn)
@@ -950,35 +1035,47 @@ def render_current_snapshot_json(
     player_entity_id = get_player_entity_id(conn)
     pc = conn.execute("select * from entities where id = ?", (player_entity_id,)).fetchone()
     entity_visibility_clause = entity_visibility_sql(view, "e")
+    subtype_visibility_clause = entity_subtype_visibility_sql(view, "e", "c")
     location = conn.execute(
         f"""
         select e.*
         from entities e
+        left join clocks c on c.entity_id = e.id
         where e.id = ?
+          and {normalized_text_sql("e.type")} = 'location'
+          and {entity_not_archived_sql("e")}
           {entity_visibility_clause}
+          {subtype_visibility_clause}
         """,
         (current_location_id,),
     ).fetchone()
-    location_row = conn.execute("select * from locations where entity_id = ?", (current_location_id,)).fetchone()
-    present = conn.execute(
-        f"""
-        select e.id, e.type, e.name, e.summary
-        from entities e
-        where e.location_id = ? and e.status = 'active'
-          {entity_visibility_clause}
-        order by e.name
-        limit 40
-        """,
-        (current_location_id,),
-    ).fetchall()
-    present = sorted(present, key=lambda row: entity_sort_key(row, registry))[:40]
+    location_row = None
+    present = []
+    if location:
+        location_row = conn.execute("select * from locations where entity_id = ?", (current_location_id,)).fetchone()
+        present = conn.execute(
+            f"""
+            select e.id, e.type, e.name, e.summary
+            from entities e
+            left join clocks c on c.entity_id = e.id
+            where e.location_id = ? and {normalized_text_sql("e.status")} = 'active'
+              {entity_visibility_clause}
+              {subtype_visibility_clause}
+            order by e.name
+            limit 40
+            """,
+            (current_location_id,),
+        ).fetchall()
+        present = sorted(present, key=lambda row: entity_sort_key(row, registry))[:40]
     carried = conn.execute(
         f"""
         select e.id, e.type, e.name, e.summary, i.category, i.quantity, i.unit, i.equipped_slot
         from entities e
         join items i on i.entity_id = e.id
-        where e.owner_id = ? and e.status = 'active'
+        left join clocks c on c.entity_id = e.id
+        where e.owner_id = ? and {normalized_text_sql("e.status")} = 'active'
           {entity_visibility_clause}
+          {subtype_visibility_clause}
         order by i.equipped_slot is null, i.equipped_slot, e.name
         limit 40
         """,
@@ -991,12 +1088,24 @@ def render_current_snapshot_json(
                c.visibility, c.trigger_when_full
         from clocks c
         join entities e on e.id = c.entity_id
-        where e.status != 'archived'
+        where {entity_not_archived_sql("e")}
           {clock_visibility_clause}
           {entity_visibility_clause}
         order by c.visibility, e.name
         """
     ).fetchall()
+    snapshot_meta = dict(meta)
+    should_redact = not can_read_hidden(view)
+    if should_redact and not location:
+        snapshot_meta["current_location_id"] = "当前地点不可见或不存在"
+    if should_redact:
+        snapshot_meta = redact_hidden_entity_refs(conn, snapshot_meta, drop_empty=False)
+    def safe_row(row: sqlite3.Row | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        value = dict(row)
+        return redact_hidden_entity_refs(conn, value, drop_empty=False) if should_redact else value
+
     return {
         "campaign": {
             "id": campaign.campaign_id,
@@ -1004,15 +1113,15 @@ def render_current_snapshot_json(
             "engine_version": campaign.engine_version,
         },
         "visibility_view": view,
-        "meta": meta,
-        "player": dict(pc) if pc else None,
+        "meta": snapshot_meta,
+        "player": safe_row(pc),
         "location": {
-            "entity": dict(location) if location else None,
-            "details": dict(location_row) if location_row else None,
+            "entity": safe_row(location),
+            "details": safe_row(location_row),
         },
-        "present": [dict(row) for row in present],
-        "carried": [dict(row) for row in carried],
-        "active_clocks": [dict(row) for row in clocks],
+        "present": [safe_row(row) for row in present],
+        "carried": [safe_row(row) for row in carried],
+        "active_clocks": [safe_row(row) for row in clocks],
     }
 
 

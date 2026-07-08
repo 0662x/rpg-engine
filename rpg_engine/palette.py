@@ -7,6 +7,8 @@ from typing import Any
 
 from .campaign import Campaign, load_yaml_file
 from .db import get_meta, resolve_entity
+from .redaction import redact_hidden_entity_refs
+from .visibility import clock_visibility_sql, ensure_visibility_sql_functions, entity_not_archived_sql, entity_visibility_sql
 
 
 KIND_KEYS = {
@@ -319,10 +321,10 @@ def evaluate_palette_entry(
     required_clocks = unlock.get("required_clocks") or {}
     if isinstance(required_clocks, dict):
         for clock_id, required in required_clocks.items():
-            filled = clock_segments_filled(conn, str(clock_id))
+            filled = visible_clock_segments_filled(conn, str(clock_id))
             if filled is None or int(filled) < int(required):
                 current = "未知" if filled is None else str(filled)
-                unmet.append(f"{clock_id} 需要 {required}+，当前 {current}")
+                unmet.append(f"[hidden] 需要 {required}+，当前 {current}")
 
     if unmet:
         status = "clue_only" if bool(unlock.get("allow_clue_when_locked", False)) else "locked"
@@ -356,6 +358,23 @@ def candidate(
 
 def clock_segments_filled(conn: sqlite3.Connection, clock_id: str) -> int | None:
     row = conn.execute("select segments_filled from clocks where entity_id = ?", (clock_id,)).fetchone()
+    return int(row["segments_filled"]) if row else None
+
+
+def visible_clock_segments_filled(conn: sqlite3.Connection, clock_id: str) -> int | None:
+    ensure_visibility_sql_functions(conn)
+    row = conn.execute(
+        f"""
+        select c.segments_filled
+        from clocks c
+        join entities e on e.id = c.entity_id
+        where c.entity_id = ?
+          and {entity_not_archived_sql("e")}
+          {entity_visibility_sql("player", "e")}
+          {clock_visibility_sql("player", "c")}
+        """,
+        (clock_id,),
+    ).fetchone()
     return int(row["segments_filled"]) if row else None
 
 
@@ -443,7 +462,7 @@ def render_palette_suggestions(
             "- `锁定` 默认不出现，除非玩家明确改设定或条件满足。",
         ]
     )
-    return "\n".join(lines)
+    return str(redact_hidden_entity_refs(conn, "\n".join(lines)))
 
 
 def render_palette_table(candidates: list[dict[str, Any]], *, empty_text: str) -> list[str]:
@@ -466,7 +485,12 @@ def render_palette_table(candidates: list[dict[str, Any]], *, empty_text: str) -
     return lines
 
 
-def render_compact_palette_table(candidates: list[dict[str, Any]], *, empty_text: str) -> list[str]:
+def render_compact_palette_table(
+    candidates: list[dict[str, Any]],
+    *,
+    empty_text: str,
+    conn: sqlite3.Connection | None = None,
+) -> list[str]:
     if not candidates:
         return [f"- {empty_text}"]
     lines = [
@@ -474,11 +498,12 @@ def render_compact_palette_table(candidates: list[dict[str, Any]], *, empty_text
         "|------|------|--------|-----------|",
     ]
     for item in candidates:
-        entry = item["entry"]
+        entry = redact_hidden_entity_refs(conn, item["entry"]) if conn else item["entry"]
         discovery = entry.get("discovery") or {}
         confirm = join_values([str(value) for value in as_list(discovery.get("confirm_methods"))[:3]])
         if item["unmet"]:
-            confirm = join_values([str(value) for value in item["unmet"][:2]])
+            unmet = redact_hidden_entity_refs(conn, item["unmet"][:2]) if conn else item["unmet"][:2]
+            confirm = join_values([str(value) for value in unmet])
         lines.append(
             f"| {STATUS_LABELS.get(item['status'], item['status'])} | "
             f"`{entry.get('id', '')}` {entry.get('name', '')} | "

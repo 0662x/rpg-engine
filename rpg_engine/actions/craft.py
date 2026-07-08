@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from dataclasses import replace
 from typing import Any
 
 from ..campaign import Campaign
 from ..db import get_meta, resolve_entity
 from ..palette import find_palette_candidate, palette_candidate_payload
+from ..redaction import redact_hidden_entity_refs
+from ..visibility import can_read_hidden, normalize_visibility_view
 from ..render import parse_json
 from ..preview import (
     build_craft_delta,
@@ -31,11 +34,40 @@ from .base import (
 )
 
 
+def redact_repair_options(conn: sqlite3.Connection, options: tuple[RepairOption, ...]) -> tuple[RepairOption, ...]:
+    return tuple(
+        replace(
+            option,
+            label=str(redact_hidden_entity_refs(conn, option.label, drop_empty=False)),
+            description=str(redact_hidden_entity_refs(conn, option.description, drop_empty=False)),
+            options=redact_hidden_entity_refs(conn, option.options, drop_empty=False),
+            effect=str(redact_hidden_entity_refs(conn, option.effect, drop_empty=False)),
+        )
+        for option in options
+    )
+
+
+def action_request_view(context_data: dict[str, Any] | None) -> str:
+    return normalize_visibility_view(str((context_data or {}).get("view") or "player"))
+
+
+def should_redact_action(context_data: dict[str, Any] | None) -> bool:
+    return not can_read_hidden(action_request_view(context_data))
+
+
+def redact_craft_value(conn: sqlite3.Connection, value: Any, *, should_redact: bool) -> Any:
+    return redact_hidden_entity_refs(conn, value, drop_empty=False) if should_redact else value
+
+
+def render_craft_text(conn: sqlite3.Connection, text: str, *, should_redact: bool) -> str:
+    return str(redact_hidden_entity_refs(conn, text, drop_empty=False)) if should_redact else text
+
+
 def preview_craft(campaign: Campaign, conn: sqlite3.Connection, context: dict[str, Any], options: Any) -> str:
-    del context
+    should_redact = should_redact_action(context)
     palette_id = option_value(options, "palette_id")
     if palette_id:
-        return render_palette_craft_preview(campaign, conn, options, str(palette_id))
+        return render_palette_craft_preview(campaign, conn, options, str(palette_id), should_redact=should_redact)
     assistant_shape = hasattr(options, "output")
     return render_craft_preview(
         conn,
@@ -114,10 +146,10 @@ def resolve_craft(
     context_data: dict[str, Any],
     options: Any,
 ) -> ResolutionResult:
-    del context_data
+    should_redact = should_redact_action(context_data)
     palette_id = option_value(options, "palette_id")
     if palette_id:
-        return resolve_palette_craft(campaign, conn, options, str(palette_id))
+        return resolve_palette_craft(campaign, conn, options, str(palette_id), should_redact=should_redact)
     data = resolve_craft_inputs(conn, options)
     confirmations = craft_confirmations(
         data["project_query"],
@@ -138,18 +170,22 @@ def resolve_craft(
         energy_label=primary_energy_label(data["meta"]),
     )
     blockers = [item for item in confirmations if not item.startswith("无硬性缺口")]
+    if not data["location"]:
+        blockers.append("当前地点未登记、不可见或不存在：不能保存制作结果。")
     facts = craft_facts(data)
     if blockers:
+        safe_blockers = tuple(redact_hidden_entity_refs(conn, tuple(blockers), drop_empty=False))
         return ResolutionResult(
             status="needs_confirmation",
-            facts_used=tuple(facts),
-            confirmations=tuple(blockers),
-            warnings=tuple(warnings),
-            player_message=craft_player_message(data, blockers),
-            repair_options=craft_repair_options(data, blockers),
+            facts_used=tuple(redact_hidden_entity_refs(conn, tuple(facts), drop_empty=False)),
+            confirmations=safe_blockers,
+            warnings=tuple(redact_hidden_entity_refs(conn, tuple(warnings), drop_empty=False)),
+            player_message=str(redact_hidden_entity_refs(conn, craft_player_message(data, blockers), drop_empty=False)),
+            repair_options=redact_repair_options(conn, craft_repair_options(data, blockers)),
             narrative_constraints=("Ask for target output, available materials/tools, recipe and time before saving craft.",),
         )
     proposed_delta = build_craft_delta(
+        conn=conn,
         meta=data["meta"],
         location=data["location"],
         project=data["project"],
@@ -164,11 +200,12 @@ def resolve_craft(
     rules = []
     if conn.execute("select 1 from rules where entity_id = 'rule:player-agency'").fetchone():
         rules.append("rule:player-agency")
+    proposed_delta = redact_hidden_entity_refs(conn, proposed_delta, drop_empty=False)
     return ResolutionResult(
         status="ready",
-        facts_used=tuple(facts),
+        facts_used=tuple(redact_hidden_entity_refs(conn, tuple(facts), drop_empty=False)),
         rules_applied=tuple(rules),
-        warnings=tuple(warnings),
+        warnings=tuple(redact_hidden_entity_refs(conn, tuple(warnings), drop_empty=False)),
         proposed_delta=proposed_delta,
         player_message="制作预演已准备好，可以保存材料、耗时和产出变化。",
         narrative_constraints=(
@@ -205,8 +242,10 @@ def validate_craft_delta(
     warnings: list[str] = []
     if delta.get("intent") != "craft":
         warnings.append("delta intent is not craft")
-    expected_location_id = data["location"]["id"] if data["location"] else data["meta"].get("current_location_id")
-    if delta.get("location_after") and str(delta["location_after"]) != str(expected_location_id):
+    expected_location_id = data["location"]["id"] if data["location"] else None
+    if not expected_location_id:
+        errors.append("当前地点未登记、不可见或不存在：不能校验制作位置。")
+    elif delta.get("location_after") and str(delta["location_after"]) != str(expected_location_id):
         errors.append(f"location_after must remain {expected_location_id}")
     for index, event in enumerate(delta.get("events", []) if isinstance(delta.get("events", []), list) else []):
         if not isinstance(event, dict):
@@ -220,7 +259,7 @@ def validate_craft_delta(
             errors.append(f"events[{index}].payload.recipe_id must be {data['recipe']['id']}")
         if payload.get("target_id") and data["target_entity"] and str(payload["target_id"]) != str(data["target_entity"]["id"]):
             errors.append(f"events[{index}].payload.target_id must be {data['target_entity']['id']}")
-        if payload.get("location_id") and str(payload["location_id"]) != str(expected_location_id):
+        if expected_location_id and payload.get("location_id") and str(payload["location_id"]) != str(expected_location_id):
             errors.append(f"events[{index}].payload.location_id must be {expected_location_id}")
     if not delta.get("upsert_entities"):
         warnings.append("craft delta does not define output or project updates")
@@ -232,6 +271,8 @@ def render_palette_craft_preview(
     conn: sqlite3.Connection,
     options: Any,
     palette_id: str,
+    *,
+    should_redact: bool = True,
 ) -> str:
     candidate = find_palette_candidate(campaign, conn, palette_id, intent="craft")
     lines = [
@@ -248,7 +289,7 @@ def render_palette_craft_preview(
     ]
     if candidate is None:
         lines.extend(["### 错误", f"- palette not found: {palette_id}"])
-        return "\n".join(lines)
+        return render_craft_text(conn, "\n".join(lines), should_redact=should_redact)
     entry = candidate["entry"]
     discovery = entry.get("discovery") if isinstance(entry.get("discovery"), dict) else {}
     lines.extend(
@@ -273,8 +314,11 @@ def render_palette_craft_preview(
     validation = validate_palette_craft_candidate(candidate, palette_id)
     if validation.errors:
         lines.extend(f"- {item}" for item in validation.errors)
-        return "\n".join(lines)
-    delta = build_palette_craft_delta(conn, candidate, options)
+        return render_craft_text(conn, "\n".join(lines), should_redact=should_redact)
+    if not current_location_row(conn, get_meta(conn)):
+        lines.append("当前地点不可见，不能生成保存草案。")
+        return render_craft_text(conn, "\n".join(lines), should_redact=should_redact)
+    delta = build_palette_craft_delta(conn, candidate, options, should_redact=should_redact)
     lines.extend(
         [
             "保存后只记录制作候选计划；不会直接扣材料或创建成品。",
@@ -284,7 +328,7 @@ def render_palette_craft_preview(
             "```",
         ]
     )
-    return "\n".join(lines)
+    return render_craft_text(conn, "\n".join(lines), should_redact=should_redact)
 
 
 def validate_palette_craft_candidate(candidate: dict[str, Any] | None, palette_id: str) -> ActionValidationResult:
@@ -306,25 +350,37 @@ def resolve_palette_craft(
     conn: sqlite3.Connection,
     options: Any,
     palette_id: str,
+    *,
+    should_redact: bool = True,
 ) -> ResolutionResult:
     candidate = find_palette_candidate(campaign, conn, palette_id, intent="craft")
     validation = validate_palette_craft_candidate(candidate, palette_id)
     if validation.errors:
+        safe_errors = tuple(redact_craft_value(conn, validation.errors, should_redact=should_redact))
         return ResolutionResult(
             status="blocked",
-            warnings=validation.errors,
-            player_message=validation.errors[0],
+            warnings=safe_errors,
+            player_message=safe_errors[0],
             narrative_constraints=("Do not invent craft inputs from an invalid palette candidate.",),
         )
     if candidate is None:
-        return ResolutionResult(status="blocked", warnings=(f"palette not found: {palette_id}",))
-    entry = candidate["entry"]
+        safe_palette_id = str(redact_craft_value(conn, palette_id, should_redact=should_redact))
+        return ResolutionResult(status="blocked", warnings=(f"palette not found: {safe_palette_id}",))
+    if not current_location_row(conn, get_meta(conn)):
+        return ResolutionResult(
+            status="needs_confirmation",
+            warnings=("当前地点未登记、不可见或不存在：不能保存制作候选计划。",),
+            player_message="当前地点不可见，不能生成制作候选保存草案。",
+            narrative_constraints=("Ask the player to resolve current location before saving craft output.",),
+        )
+    entry = redact_craft_value(conn, candidate["entry"], should_redact=should_redact) or {}
+    display_name = str(entry.get("name") or palette_id)
     return ResolutionResult(
         status="ready",
-        facts_used=(palette_id,),
-        warnings=validation.warnings,
-        proposed_delta=build_palette_craft_delta(conn, candidate, options),
-        player_message=f"制作候选 {entry.get('name', palette_id)} 已准备好；保存后只记录计划，不扣材料或创建成品。",
+        facts_used=(str(redact_craft_value(conn, palette_id, should_redact=should_redact)),),
+        warnings=tuple(redact_craft_value(conn, tuple(validation.warnings), should_redact=should_redact)),
+        proposed_delta=build_palette_craft_delta(conn, candidate, options, should_redact=should_redact),
+        player_message=f"制作候选 {display_name} 已准备好；保存后只记录计划，不扣材料或创建成品。",
         narrative_constraints=(
             "Use craft_turn.md for the response.",
             "Do not consume materials or create output entities outside an approved craft delta.",
@@ -333,13 +389,22 @@ def resolve_palette_craft(
     )
 
 
-def build_palette_craft_delta(conn: sqlite3.Connection, candidate: dict[str, Any], options: Any) -> dict[str, Any]:
+def build_palette_craft_delta(
+    conn: sqlite3.Connection,
+    candidate: dict[str, Any],
+    options: Any,
+    *,
+    should_redact: bool = True,
+) -> dict[str, Any]:
     meta = get_meta(conn)
-    location_id = meta.get("current_location_id")
-    entry = candidate["entry"]
+    current = current_location_row(conn, meta)
+    if not current:
+        raise ValueError("current location is not player-visible")
+    location_id = current["id"]
+    entry = redact_craft_value(conn, candidate["entry"], should_redact=should_redact) or {}
     target = craft_target_value(options) or str(entry.get("name") or entry.get("id"))
     payload = {
-        **palette_candidate_payload(candidate),
+        **redact_craft_value(conn, palette_candidate_payload(candidate), should_redact=should_redact),
         "target": target,
         "location_id": location_id,
         "materials_text": option_value(options, "materials"),
@@ -350,7 +415,7 @@ def build_palette_craft_delta(conn: sqlite3.Connection, candidate: dict[str, Any
         "clue_stage": "hinted",
     }
     summary = f"制作候选计划：{entry.get('name', entry.get('id'))}；材料消耗和产物待 GM 确认。"
-    return {
+    delta = {
         "user_text": option_value(options, "user_text") or f"制作计划：{target}",
         "intent": "craft",
         "changed": True,
@@ -371,6 +436,7 @@ def build_palette_craft_delta(conn: sqlite3.Connection, candidate: dict[str, Any
         "upsert_entities": [],
         "tick_clocks": [],
     }
+    return redact_craft_value(conn, delta, should_redact=should_redact)
 
 
 def validate_palette_craft_delta(
@@ -386,8 +452,11 @@ def validate_palette_craft_delta(
     warnings = list(validation.warnings)
     if delta.get("intent") != "craft":
         warnings.append("delta intent is not craft")
-    expected_location_id = get_meta(conn).get("current_location_id")
-    if delta.get("location_after") and str(delta["location_after"]) != str(expected_location_id):
+    current = current_location_row(conn, get_meta(conn))
+    expected_location_id = current["id"] if current else None
+    if not expected_location_id:
+        errors.append("palette craft delta requires a visible current location")
+    elif delta.get("location_after") and str(delta["location_after"]) != str(expected_location_id):
         errors.append(f"palette craft delta must keep location_after at current location {expected_location_id}")
     payloads = [event.get("payload", {}) for event in delta.get("events", []) if isinstance(event, dict)]
     if not any(isinstance(payload, dict) and payload.get("palette_id") == palette_id for payload in payloads):

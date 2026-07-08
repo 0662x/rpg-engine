@@ -54,11 +54,13 @@ from .preflight_cache import (
     normalize_identity_profile,
 )
 from .proposal import TurnProposal, intent_context_id_from_intent, preflight_id_from_intent, turn_proposal_from_dict
+from .redaction import redact_hidden_entity_refs
 from .render import render_entity, render_scene
 from .ux import PlanStep, RepairOption, UxStatus
 from .validation_issues import issues_from_messages
 from .validators import run_checks
 from .validation_pipeline import run_validation_pipeline
+from .visibility import can_read_hidden, normalize_visibility_view
 from .write_guard import add_generated_write_guards
 
 
@@ -459,6 +461,71 @@ def turn_proposal_from_preview_context(
     ).to_dict()
 
 
+def redact_runtime_value(conn: Any, value: Any) -> Any:
+    return redact_hidden_entity_refs(conn, value, drop_empty=False)
+
+
+def redact_runtime_value_for_view(conn: Any, value: Any, view: str | None) -> Any:
+    return value if can_read_hidden(view) else redact_runtime_value(conn, value)
+
+
+def redact_runtime_tuple(conn: Any, values: tuple[Any, ...] | list[Any]) -> tuple[Any, ...]:
+    redacted = redact_runtime_value(conn, tuple(values))
+    return redacted if isinstance(redacted, tuple) else tuple(values)
+
+
+def redact_runtime_tuple_for_view(conn: Any, values: tuple[Any, ...] | list[Any], view: str | None) -> tuple[Any, ...]:
+    return tuple(values) if can_read_hidden(view) else redact_runtime_tuple(conn, values)
+
+
+def redact_repair_options(conn: Any, options: tuple[RepairOption, ...]) -> tuple[RepairOption, ...]:
+    return tuple(
+        replace(
+            option,
+            label=str(redact_runtime_value(conn, option.label)),
+            description=str(redact_runtime_value(conn, option.description)),
+            action=str(redact_runtime_value(conn, option.action)) if option.action is not None else None,
+            options=redact_runtime_value(conn, option.options),
+            effect=str(redact_runtime_value(conn, option.effect)),
+        )
+        for option in options
+    )
+
+
+def redact_plan_steps(conn: Any, steps: tuple[PlanStep, ...]) -> tuple[PlanStep, ...]:
+    return tuple(
+        replace(
+            step,
+            action=str(redact_runtime_value(conn, step.action)),
+            label=str(redact_runtime_value(conn, step.label)),
+            options=redact_runtime_value(conn, step.options),
+            delta_draft=redact_runtime_value(conn, step.delta_draft) if step.delta_draft is not None else None,
+        )
+        for step in steps
+    )
+
+
+def redact_preview_result(conn: Any, result: PreviewActionResult) -> PreviewActionResult:
+    return replace(
+        result,
+        action=str(redact_runtime_value(conn, result.action)),
+        markdown=str(redact_runtime_value(conn, result.markdown)),
+        player_message=str(redact_runtime_value(conn, result.player_message)),
+        interpretation=redact_runtime_value(conn, result.interpretation),
+        plan=redact_plan_steps(conn, tuple(result.plan)),
+        repair_options=redact_repair_options(conn, tuple(result.repair_options)),
+        delta_draft=redact_runtime_value(conn, result.delta_draft) if result.delta_draft is not None else None,
+        turn_proposal=redact_runtime_value(conn, result.turn_proposal) if result.turn_proposal is not None else None,
+        missing_required=redact_runtime_tuple(conn, tuple(result.missing_required)),
+        errors=redact_runtime_tuple(conn, tuple(result.errors)),
+        warnings=redact_runtime_tuple(conn, tuple(result.warnings)),
+    )
+
+
+def redact_preview_result_for_view(conn: Any, result: PreviewActionResult, view: str | None) -> PreviewActionResult:
+    return result if can_read_hidden(view) else redact_preview_result(conn, result)
+
+
 def default_repair_options(
     action: str,
     status: UxStatus,
@@ -790,6 +857,7 @@ class GMRuntime:
         max_events: int = 6,
         max_depth: int = 1,
         include_palettes: str = "auto",
+        view: str | None = None,
         semantic_ai: str = "off",
         semantic_model: str = DEFAULT_AI_MODEL,
         semantic_provider: str = DEFAULT_AI_PROVIDER,
@@ -823,6 +891,7 @@ class GMRuntime:
                 max_events=max_events,
                 max_depth=max_depth,
                 include_palettes=include_palettes,
+                view=view,
                 semantic_ai=semantic_ai,
                 semantic_model=semantic_model,
                 semantic_provider=semantic_provider,
@@ -884,22 +953,25 @@ class GMRuntime:
     ) -> QueryResult:
         self.require_capability("query")
         normalized_kind = kind.strip().lower()
+        normalized_view = normalize_visibility_view(view)
         with connect(self.campaign) as conn:
             if normalized_kind == "scene":
+                text = render_scene(conn, view=normalized_view)
                 return QueryResult(
                     campaign_id=self.campaign.campaign_id,
                     kind=normalized_kind,
-                    text=render_scene(conn, view=view),
-                    data={"view": view},
+                    text=str(redact_runtime_value_for_view(conn, text, normalized_view)),
+                    data=redact_runtime_value_for_view(conn, {"view": normalized_view}, normalized_view),
                 )
             if normalized_kind == "entity":
                 if not query_text:
                     raise ValueError("entity query requires query_text")
+                text = render_entity(conn, query_text, view=normalized_view)
                 return QueryResult(
                     campaign_id=self.campaign.campaign_id,
                     kind=normalized_kind,
-                    text=render_entity(conn, query_text, view=view),
-                    data={"query": query_text, "view": view},
+                    text=str(redact_runtime_value_for_view(conn, text, normalized_view)),
+                    data=redact_runtime_value_for_view(conn, {"query": query_text, "view": normalized_view}, normalized_view),
                 )
             if normalized_kind == "context":
                 if not query_text:
@@ -909,16 +981,19 @@ class GMRuntime:
                     conn,
                     user_text=query_text,
                     mode="query",
+                    submode="context",
+                    view=normalized_view,
                     budget=budget,
                 )
                 return QueryResult(
                     campaign_id=self.campaign.campaign_id,
                     kind=normalized_kind,
-                    text=context.markdown,
-                    data={"query": query_text},
+                    text=str(redact_runtime_value_for_view(conn, context.markdown, normalized_view)),
+                    data=redact_runtime_value_for_view(conn, {"query": query_text, "view": normalized_view}, normalized_view),
                     context=context,
                 )
-        raise ValueError(f"unsupported query kind: {kind}")
+            safe_kind = str(redact_runtime_value(conn, kind))
+        raise ValueError(f"unsupported query kind: {safe_kind}")
 
     def preview_action(
         self,
@@ -929,10 +1004,17 @@ class GMRuntime:
         source_user_text: str | None = None,
     ) -> PreviewActionResult:
         action_name = action.strip()
+        runtime_context = context or {}
+        request_view = normalize_visibility_view(str(runtime_context.get("view") or "player"))
+
+        def safe_result(result: PreviewActionResult) -> PreviewActionResult:
+            with connect(self.campaign) as conn:
+                return redact_preview_result_for_view(conn, result, request_view)
+
         resolver = self.action_registry.get(action_name)
         if resolver is None:
             errors = [f"unsupported action: {action_name}"]
-            return PreviewActionResult(
+            return safe_result(PreviewActionResult(
                 campaign_id=self.campaign.campaign_id,
                 action=action_name,
                 ok=False,
@@ -940,11 +1022,11 @@ class GMRuntime:
                 player_message=f"不支持的行动类型：{action_name}",
                 repair_options=default_repair_options(action_name, "blocked", [], errors, ()),
                 errors=tuple(errors),
-            )
+            ))
         capability_error = self.capability_error_for_action(action_name)
         if capability_error:
             errors = [capability_error]
-            return PreviewActionResult(
+            return safe_result(PreviewActionResult(
                 campaign_id=self.campaign.campaign_id,
                 action=action_name,
                 ok=False,
@@ -952,10 +1034,10 @@ class GMRuntime:
                 player_message=capability_error,
                 repair_options=default_repair_options(action_name, "blocked", [], errors, ()),
                 errors=tuple(errors),
-            )
+            ))
         option_errors = invalid_action_option_errors(options)
         if option_errors:
-            return PreviewActionResult(
+            return safe_result(PreviewActionResult(
                 campaign_id=self.campaign.campaign_id,
                 action=action_name,
                 ok=False,
@@ -963,12 +1045,12 @@ class GMRuntime:
                 player_message="行动参数格式不安全或不可解析，请改用普通文本、数字或布尔值。",
                 repair_options=default_repair_options(action_name, "blocked", [], option_errors, ()),
                 errors=tuple(option_errors),
-            )
+            ))
         mismatch = detect_preview_action_mismatch(source_user_text, action_name)
         if mismatch and mismatch.get("severity") == "needs_confirmation":
             warning = str(mismatch.get("message") or "source_user_text and action need confirmation")
             suggested_action = str(mismatch.get("expected_action") or "")
-            return PreviewActionResult(
+            result = PreviewActionResult(
                 campaign_id=self.campaign.campaign_id,
                 action=action_name,
                 ok=False,
@@ -994,8 +1076,9 @@ class GMRuntime:
                 ),
                 warnings=(warning,),
             )
+            with connect(self.campaign) as conn:
+                return redact_preview_result_for_view(conn, result, request_view)
         option_object = SimpleNamespace(**(options or {}))
-        runtime_context = context or {}
         with connect(self.campaign) as conn:
             validation = resolver.request_contract(self.campaign, conn, runtime_context, option_object)
             resolution = resolver.resolve_contract(self.campaign, conn, runtime_context, option_object)
@@ -1003,12 +1086,32 @@ class GMRuntime:
             if resolution.proposed_delta is not None:
                 proposed_delta = dict(resolution.proposed_delta)
                 add_generated_write_guards(conn, proposed_delta, prefix=f"preview-{action_name}")
+                proposed_delta = redact_runtime_value_for_view(conn, proposed_delta, request_view)
                 resolution = replace(resolution, proposed_delta=proposed_delta)
                 preview_context["proposed_delta"] = proposed_delta
             markdown = resolver.preview(self.campaign, conn, preview_context, option_object)
-        missing_required = list(validation.missing_required)
-        errors = list(validation.errors)
-        warnings = list(validation.warnings)
+            markdown = str(redact_runtime_value_for_view(conn, markdown, request_view))
+            safe_runtime_context = redact_runtime_value_for_view(conn, runtime_context, request_view)
+            safe_options = redact_runtime_value_for_view(conn, options or {}, request_view)
+            safe_source_user_text = str(redact_runtime_value_for_view(conn, source_user_text, request_view))
+            validation_missing_required = redact_runtime_tuple_for_view(conn, tuple(validation.missing_required), request_view)
+            validation_errors = redact_runtime_tuple_for_view(conn, tuple(validation.errors), request_view)
+            validation_warnings = redact_runtime_tuple_for_view(conn, tuple(validation.warnings), request_view)
+            if not can_read_hidden(request_view):
+                resolution = replace(
+                    resolution,
+                    facts_used=redact_runtime_tuple(conn, tuple(resolution.facts_used)),
+                    rules_applied=redact_runtime_tuple(conn, tuple(resolution.rules_applied)),
+                    confirmations=redact_runtime_tuple(conn, tuple(resolution.confirmations)),
+                    warnings=redact_runtime_tuple(conn, tuple(resolution.warnings)),
+                    narrative_constraints=redact_runtime_tuple(conn, tuple(resolution.narrative_constraints)),
+                    player_message=str(redact_runtime_value(conn, resolution.player_message)),
+                    repair_options=redact_repair_options(conn, tuple(resolution.repair_options)),
+                    plan=redact_plan_steps(conn, tuple(resolution.plan)),
+                )
+        missing_required = list(validation_missing_required)
+        errors = list(validation_errors)
+        warnings = list(validation_warnings)
         if not resolution.ok:
             for item in resolution.confirmations:
                 if item not in missing_required and item not in errors:
@@ -1036,12 +1139,12 @@ class GMRuntime:
         turn_proposal = turn_proposal_from_preview_context(
             self.campaign.campaign_id,
             action_name,
-            options or {},
-            runtime_context,
+            safe_options,
+            safe_runtime_context,
             delta_draft,
             status,
             resolution,
-            source_user_text,
+            safe_source_user_text,
         ) if ready_to_save else None
         return PreviewActionResult(
             campaign_id=self.campaign.campaign_id,
@@ -1168,7 +1271,7 @@ class GMRuntime:
         contract_data = turn_contract_to_dict(turn_contract) or {}
         if intent.kind == "unresolved":
             next_tool = "reject_request" if intent.status == "blocked" and not clarification_data else "ask_clarification"
-            return PreviewActionResult(
+            result = PreviewActionResult(
                 campaign_id=self.campaign.campaign_id,
                 action=str(intent.action or "act"),
                 ok=False,
@@ -1187,6 +1290,8 @@ class GMRuntime:
                 errors=intent.errors,
                 warnings=intent.needs_confirmation,
             )
+            with connect(self.campaign) as conn:
+                return redact_preview_result_for_view(conn, result, view)
         if intent.mode == "query":
             query_kind = query_kind_for_intent(intent.submode)
             query_text = query_text_for_intent(intent, query_kind)
@@ -1197,7 +1302,7 @@ class GMRuntime:
                     view=view,
                 )
             except Exception as exc:
-                return PreviewActionResult(
+                result = PreviewActionResult(
                     campaign_id=self.campaign.campaign_id,
                     action="query",
                     ok=False,
@@ -1214,8 +1319,10 @@ class GMRuntime:
                     },
                     errors=(str(exc),),
                 )
+                with connect(self.campaign) as conn:
+                    return redact_preview_result_for_view(conn, result, view)
             query_data = query_result.to_dict()
-            return PreviewActionResult(
+            result = PreviewActionResult(
                 campaign_id=self.campaign.campaign_id,
                 action="query",
                 ok=True,
@@ -1236,8 +1343,10 @@ class GMRuntime:
                     },
                 },
             )
+            with connect(self.campaign) as conn:
+                return redact_preview_result_for_view(conn, result, view)
         if intent.mode == "maintenance":
-            return PreviewActionResult(
+            result = PreviewActionResult(
                 campaign_id=self.campaign.campaign_id,
                 action="maintenance",
                 ok=False,
@@ -1253,6 +1362,8 @@ class GMRuntime:
                 },
                 warnings=("maintenance request is outside the player turn profile",),
             )
+            with connect(self.campaign) as conn:
+                return redact_preview_result_for_view(conn, result, view)
         if intent.kind == "single" and intent.action:
             result = self.preview_action(
                 intent.action,
@@ -1297,8 +1408,13 @@ class GMRuntime:
                     narrative_claims=(),
                     turn_contract=turn_contract,
                 ).to_dict()
-            return replace(result, interpretation=interpretation, turn_proposal=turn_proposal)
-        return PreviewActionResult(
+            with connect(self.campaign) as conn:
+                interpretation = redact_runtime_value_for_view(conn, interpretation, view)
+                turn_proposal = redact_runtime_value_for_view(conn, turn_proposal, view) if turn_proposal is not None else None
+            result = replace(result, interpretation=interpretation, turn_proposal=turn_proposal)
+            with connect(self.campaign) as conn:
+                return redact_preview_result_for_view(conn, result, view)
+        result = PreviewActionResult(
             campaign_id=self.campaign.campaign_id,
             action="act",
             ok=False,
@@ -1317,6 +1433,8 @@ class GMRuntime:
             repair_options=intent.repair_options,
             warnings=intent.needs_confirmation,
         )
+        with connect(self.campaign) as conn:
+            return redact_preview_result_for_view(conn, result, view)
 
     def act(
         self,
@@ -1388,11 +1506,15 @@ class GMRuntime:
                 missing_required.append(issue.removeprefix("missing: "))
             else:
                 errors.append(issue)
+        with connect(self.campaign) as conn:
+            errors = list(redact_runtime_tuple(conn, tuple(errors)))
+            warnings = redact_runtime_tuple(conn, tuple(report.warnings))
+            missing_required = list(redact_runtime_tuple(conn, tuple(missing_required)))
         return DeltaValidationResult(
             campaign_id=self.campaign.campaign_id,
             ok=not errors and not missing_required,
             errors=tuple(errors),
-            warnings=report.warnings,
+            warnings=warnings,
             missing_required=tuple(missing_required),
         )
 
@@ -1441,13 +1563,15 @@ class GMRuntime:
             if not validation_report.ok:
                 audit_stage = validation_report.stage("state_audit")
                 if audit_stage and audit_stage.status == "blocked":
+                    issues = redact_runtime_tuple(conn, tuple(audit_stage.issues))
                     raise ValueError(
                         "State audit blocked turn delta:\n"
-                        + "\n".join(f"- {message}" for message in audit_stage.issues)
+                        + "\n".join(f"- {message}" for message in issues)
                     )
+                errors = redact_runtime_tuple(conn, tuple(validation_report.errors))
                 raise ValueError(
                     "Invalid turn delta:\n"
-                    + "\n".join(f"- {error}" for error in validation_report.errors)
+                    + "\n".join(f"- {error}" for error in errors)
                 )
             if proposal is None:
                 raise ValueError("player_turn_commit requires an approved TurnProposal validation")
@@ -1502,6 +1626,7 @@ class GMRuntime:
             ).fetchall()
             recent = conn.execute("select intent from turns order by created_at desc, id desc limit 8").fetchall()
             scene = render_scene(conn, view="player")
+            current_location_id = str(redact_runtime_value(conn, meta.get("current_location_id", "")))
         affordance_count = sum(1 for line in scene.splitlines() if line.startswith("| ") and " | " in line) - 2
         notes = []
         if affordance_count <= 0:
@@ -1509,7 +1634,7 @@ class GMRuntime:
         return UxMetricsResult(
             campaign_id=self.campaign.campaign_id,
             current_turn_id=str(meta.get("current_turn_id", "")),
-            current_location_id=str(meta.get("current_location_id", "")),
+            current_location_id=current_location_id,
             total_turns=sum(int(row["count"]) for row in rows),
             turns_by_intent={str(row["intent"]): int(row["count"]) for row in rows},
             recent_intents=tuple(str(row["intent"]) for row in recent),

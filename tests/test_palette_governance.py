@@ -8,6 +8,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from rpg_engine.db import connect, upsert_entity
+from rpg_engine.runtime import GMRuntime
+
 
 ENGINE_ROOT = Path(__file__).resolve().parents[1]
 SMALL_CN = ENGINE_ROOT / "examples" / "small_cn_campaign"
@@ -123,6 +126,94 @@ class PaletteGovernanceTests(unittest.TestCase):
             delta = preview["delta_draft"]
             self.assertEqual(delta["events"][0]["payload"]["palette_status"], "clue_only")
             self.assertEqual(delta["upsert_entities"], [])
+
+    def test_trusted_explore_palette_preview_preserves_hidden_refs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            save_dir = Path(tmp) / "save"
+            run_cli("save", "init", SMALL_CN, save_dir, "--format", "json")
+            runtime = GMRuntime.from_path(save_dir)
+            runtime.campaign.config.setdefault("capabilities", []).append("explore")
+            with connect(runtime.campaign) as conn:
+                upsert_entity(
+                    conn,
+                    {
+                        "id": "faction:bridge-wardens",
+                        "type": "faction_state",
+                        "name": "旧桥守路人",
+                        "summary": "GM-only faction identity.",
+                        "visibility": "hidden",
+                    },
+                )
+                conn.commit()
+
+            options = {"palette_id": "pal:faction:bridge-wardens", "location": "loc:old-bridge"}
+            player = runtime.preview_action("explore", options, context={"view": "player"})
+            gm = runtime.preview_action("explore", options, context={"view": "gm"})
+            player_text = json.dumps(player.to_dict(), ensure_ascii=False, sort_keys=True)
+            gm_text = json.dumps(gm.to_dict(), ensure_ascii=False, sort_keys=True)
+
+            self.assertTrue(gm.ready_to_save, gm.to_dict())
+            self.assertNotIn("faction:bridge-wardens", player_text)
+            self.assertNotIn("旧桥守路人", player_text)
+            self.assertIn("faction:bridge-wardens", gm_text)
+            self.assertIn("旧桥守路人", gm_text)
+
+    def test_trusted_palette_action_previews_preserve_hidden_refs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            save_dir = Path(tmp) / "save"
+            run_cli("save", "init", SMALL_CN, save_dir, "--format", "json")
+            runtime = GMRuntime.from_path(save_dir)
+            runtime.campaign.config.setdefault("capabilities", []).extend(["gather", "craft", "travel", "social"])
+            hidden_entities = [
+                {
+                    "id": "mat:silver-moon-herb",
+                    "type": "material",
+                    "name": "银边月白草",
+                    "summary": "GM-only material candidate.",
+                    "visibility": "hidden",
+                },
+                {
+                    "id": "loc:under-bridge-bank",
+                    "type": "location",
+                    "name": "桥下碎石滩",
+                    "summary": "GM-only location candidate.",
+                    "visibility": "hidden",
+                },
+                {
+                    "id": "faction:bridge-wardens",
+                    "type": "faction_state",
+                    "name": "旧桥守路人",
+                    "summary": "GM-only faction identity.",
+                    "visibility": "hidden",
+                },
+            ]
+            with connect(runtime.campaign) as conn:
+                for entity in hidden_entities:
+                    upsert_entity(conn, entity)
+                conn.commit()
+
+            cases = [
+                ("gather", {"palette_id": "pal:mat:silver-moon-herb", "location": "loc:camp"}, "mat:silver-moon-herb", "银边月白草"),
+                ("craft", {"palette_id": "pal:mat:silver-moon-herb", "target": "草药包"}, "mat:silver-moon-herb", "银边月白草"),
+                ("travel", {"palette_id": "pal:loc:under-bridge-bank", "location": "loc:old-bridge"}, "loc:under-bridge-bank", "桥下碎石滩"),
+                (
+                    "social",
+                    {"palette_id": "pal:faction:bridge-wardens", "npc": "npc:guide-lin", "topic": "旧桥刻痕"},
+                    "faction:bridge-wardens",
+                    "旧桥守路人",
+                ),
+            ]
+            for action, options, hidden_id, hidden_name in cases:
+                with self.subTest(action=action):
+                    player = runtime.preview_action(action, options, context={"view": "player"})
+                    gm = runtime.preview_action(action, options, context={"view": "gm"})
+                    player_text = json.dumps(player.to_dict(), ensure_ascii=False, sort_keys=True)
+                    gm_text = json.dumps(gm.to_dict(), ensure_ascii=False, sort_keys=True)
+
+                    self.assertNotIn(hidden_id, player_text)
+                    self.assertNotIn(hidden_name, player_text)
+                    self.assertIn(hidden_id, gm_text)
+                    self.assertIn(hidden_name, gm_text)
 
     def test_travel_palette_candidate_records_discovery_without_route_or_location_fact(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

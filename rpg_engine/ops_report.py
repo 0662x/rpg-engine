@@ -9,6 +9,7 @@ from .audit import run_audit
 from .campaign import Campaign
 from .context_builder import build_context
 from .db import get_meta
+from .visibility import ensure_visibility_sql_functions, entity_not_archived_sql
 
 
 DEFAULT_SAMPLE_TEXTS = [
@@ -21,6 +22,7 @@ DEFAULT_SAMPLE_TEXTS = [
 
 
 def build_ops_report(campaign: Campaign, conn: sqlite3.Connection, *, run_speed: bool = False) -> str:
+    ensure_visibility_sql_functions(conn)
     meta = get_meta(conn)
     lines = [
         f"# {campaign.name} 运维报告",
@@ -40,7 +42,7 @@ def build_ops_report(campaign: Campaign, conn: sqlite3.Connection, *, run_speed:
         "|------|------|",
     ]
     for label, sql in [
-        ("entities", "select count(*) from entities where status != 'archived'"),
+        ("entities", f"select count(*) from entities e where {entity_not_archived_sql('e')}"),
         ("cards", None),
         ("events", "select count(*) from events"),
         ("turns", "select count(*) from turns"),
@@ -59,11 +61,11 @@ def build_ops_report(campaign: Campaign, conn: sqlite3.Connection, *, run_speed:
 
     lines.extend(["", "## Entity Types", "", "| 类型 | 数量 |", "|------|------|"])
     for row in conn.execute(
-        """
-        select type, count(*) as count
-        from entities
-        where status != 'archived'
-        group by type
+        f"""
+        select e.type, count(*) as count
+        from entities e
+        where {entity_not_archived_sql("e")}
+        group by e.type
         order by count desc, type
         """
     ).fetchall():

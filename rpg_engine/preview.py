@@ -8,7 +8,16 @@ from typing import Any
 
 from .campaign import Campaign
 from .actions.policy import clock_query_terms, first_matching_clock, matching_clock_rows
-from .db import entity_type_priority_sql, get_meta, get_player_entity_id, query_tokens, resolve_entity, sanitize_fts_query
+from .db import (
+    entity_subtype_visibility_sql,
+    entity_type_priority_sql,
+    get_meta,
+    get_player_entity_id,
+    query_tokens,
+    resolve_entity,
+    sanitize_fts_query,
+)
+from .entity_access import read_entity
 from .palette import render_compact_palette_table, suggest_palette_entries
 from .player_resources import (
     primary_energy_detail_key,
@@ -17,8 +26,15 @@ from .player_resources import (
     primary_energy_value,
 )
 from .render import format_quantity, format_value, parse_json
+from .redaction import redact_hidden_entity_refs
 from .time_weather import enrich_time_weather_meta, format_time_brief, format_weather_brief
-from .visibility import entity_visibility_sql
+from .visibility import (
+    clock_visibility_sql,
+    ensure_visibility_sql_functions,
+    entity_not_archived_sql,
+    entity_visibility_sql,
+    normalized_text_sql,
+)
 from .write_guard import add_generated_write_guards
 
 
@@ -53,7 +69,16 @@ def render_combat_preview(
         confirmations = [item for item in confirmations if not item.startswith("必须确认武器是否已上弦")]
     if not weapon:
         confirmations.append("武器未明确：需要指定武器或配置默认战斗武器。")
-    warnings = preview_warnings(weapon, weapon_item, ammo, ammo_item, combat, ammo_profile, get_player_entity_id(conn))
+    warnings = preview_warnings(
+        weapon,
+        weapon_item,
+        ammo,
+        ammo_item,
+        combat,
+        ammo_profile,
+        get_player_entity_id(conn),
+        conn=conn,
+    )
     suggested_ticks = suggested_clock_ticks(conn, ammo, ammo_profile)
     delta = build_combat_delta(
         conn,
@@ -85,9 +110,9 @@ def render_combat_preview(
         "| 项目 | 当前 |",
         "|------|------|",
         f"| 时间 | {format_time_brief(meta)} |",
-        f"| 位置 | `{meta.get('current_location_id', 'unknown')}` |",
-        f"| 目标位置 | {target['location_id'] if target and target['location_id'] else '未知/未登记'} |",
-        f"| 目标摘要 | {target['summary'] if target else '未指定，无法判断'} |",
+        f"| 位置 | {current_location_label(conn, meta)} |",
+        f"| 目标位置 | {entity_ref_label(conn, target['location_id']) if target and target['location_id'] else '未知/未登记'} |",
+        f"| 目标摘要 | {redact_hidden_entity_refs(conn, target['summary']) if target else '未指定，无法判断'} |",
     ]
 
     lines.extend(["", "### 武器检查"])
@@ -98,7 +123,7 @@ def render_combat_preview(
                 "|------|------|",
                 f"| ID | `{weapon['id']}` |",
                 f"| 分类 | {weapon_item['category']} |",
-                f"| 位置/所有者 | {weapon['location_id'] or weapon['owner_id'] or '未知'} |",
+                f"| 位置/所有者 | {entity_ref_label(conn, weapon['location_id'] or weapon['owner_id'])} |",
                 f"| 数量 | {format_quantity(weapon_item)} |",
                 f"| 装备槽 | {weapon_item['equipped_slot'] or '无'} |",
                 f"| 待机状态 | {combat.get('ready_state', '未登记') if isinstance(combat, dict) else '未登记'} |",
@@ -171,7 +196,7 @@ def render_combat_preview(
             "```",
         ]
     )
-    return "\n".join(lines)
+    return str(redact_hidden_entity_refs(conn, "\n".join(lines)))
 
 
 def render_rest_preview(
@@ -195,18 +220,20 @@ def render_rest_preview(
     clocks = active_clock_rows(conn, include_hidden=False)
     crop_summary = summarize_crop_plots(conn)
     suggested_ticks = suggested_rest_clock_ticks(conn, meta, rest_target)
-    delta = build_rest_delta(
-        conn,
-        meta=meta,
-        pc=pc,
-        character=character,
-        target_day=target_day,
-        target_time=target_time,
-        location=location,
-        suggested_ticks=suggested_ticks,
-        user_text=user_text,
-    )
-    add_generated_write_guards(conn, delta, prefix="preview-rest")
+    delta = None
+    if location:
+        delta = build_rest_delta(
+            conn,
+            meta=meta,
+            pc=pc,
+            character=character,
+            target_day=target_day,
+            target_time=target_time,
+            location=location,
+            suggested_ticks=suggested_ticks,
+            user_text=user_text,
+        )
+        add_generated_write_guards(conn, delta, prefix="preview-rest")
 
     lines = [
         "## 休息/过夜预演",
@@ -222,7 +249,7 @@ def render_rest_preview(
         "| 项目 | 当前 |",
         "|------|------|",
         f"| 时间 | {format_time_brief(meta)} |",
-        f"| 位置 | {location_label(location) if location else meta.get('current_location_id', '未知')} |",
+        f"| 位置 | {location_label(location) if location else current_location_label(conn, meta)} |",
         f"| 安全等级 | {location['safety_level'] if location and location['safety_level'] else '未登记'} |",
         f"| 健康 | {pc_details.get('health', character['health_state'] if character else '未登记')} |",
         f"| 体力 | {pc_details.get('stamina', '未登记')} |",
@@ -235,8 +262,8 @@ def render_rest_preview(
         [
             "",
             "### 夜间安全检查",
-            f"- 休息点：{location['description_short'] if location and location['description_short'] else '未登记详细描述'}",
-            f"- 出入口/资源：{format_value(parse_json(location['exits_json'], [])) if location else '未登记'}；{format_value(parse_json(location['resources_json'], [])) if location else '未登记'}",
+            f"- 休息点：{redact_hidden_entity_refs(conn, location['description_short']) if location and location['description_short'] else '未登记详细描述'}",
+            f"- 出入口/资源：{format_value(redact_hidden_entity_refs(conn, parse_json(location['exits_json'], []))) if location else '未登记'}；{format_value(redact_hidden_entity_refs(conn, parse_json(location['resources_json'], []))) if location else '未登记'}",
             f"- 预演不自动触发遭遇；若 GM 判定夜间有声响、入侵、梦境或{energy_label}异常，必须先改写 delta。",
             f"- 清晨{energy_label}恢复到满值后更容易成为感知源；外出前应再次判断遮蔽、武器位置和农田痕迹。",
         ]
@@ -293,14 +320,21 @@ def render_rest_preview(
             "5. 如果玩家确认推进，用 delta 保存正式变化。",
             "",
             "### Delta 草案",
-            "保存前必须由 GM 按实际夜间事件、天气和清晨场景改写。",
-            "",
-            "```json",
-            json.dumps(delta, ensure_ascii=False, indent=2, sort_keys=True),
-            "```",
         ]
     )
-    return "\n".join(lines)
+    if delta is None:
+        lines.append("当前地点不可见，不能生成保存草案。")
+    else:
+        lines.extend(
+            [
+                "保存前必须由 GM 按实际夜间事件、天气和清晨场景改写。",
+                "",
+                "```json",
+                json.dumps(delta, ensure_ascii=False, indent=2, sort_keys=True),
+                "```",
+            ]
+        )
+    return str(redact_hidden_entity_refs(conn, "\n".join(lines)))
 
 
 def render_craft_preview(
@@ -342,19 +376,22 @@ def render_craft_preview(
         recipe_profile,
         energy_label=energy_label,
     )
-    delta = build_craft_delta(
-        meta=meta,
-        location=location,
-        project=project,
-        recipe=recipe,
-        recipe_profile=recipe_profile,
-        target=target,
-        target_entity=target_entity,
-        materials=materials,
-        time_cost=time_cost,
-        user_text=user_text,
-    )
-    add_generated_write_guards(conn, delta, prefix="preview-craft")
+    delta = None
+    if location:
+        delta = build_craft_delta(
+            conn=conn,
+            meta=meta,
+            location=location,
+            project=project,
+            recipe=recipe,
+            recipe_profile=recipe_profile,
+            target=target,
+            target_entity=target_entity,
+            materials=materials,
+            time_cost=time_cost,
+            user_text=user_text,
+        )
+        add_generated_write_guards(conn, delta, prefix="preview-craft")
 
     lines = [
         "## 制作行动预演",
@@ -373,7 +410,7 @@ def render_craft_preview(
         "| 项目 | 当前 |",
         "|------|------|",
         f"| 时间 | {format_time_brief(meta)} |",
-        f"| 地点 | {location_label(location) if location else meta.get('current_location_id', '未知')} |",
+        f"| 地点 | {location_label(location) if location else current_location_label(conn, meta)} |",
         f"| 体力 | {pc_details.get('stamina', '未登记')} |",
         f"| 饥渴 | 饥饿：{pc_details.get('hunger', '未登记')}；口渴：{pc_details.get('thirst', '未登记')} |",
         f"| {energy_label} | {primary_energy_value(pc_details, meta)} |",
@@ -451,14 +488,21 @@ def render_craft_preview(
             "5. 输出制作结果后，用 delta 保存正式变化。",
             "",
             "### Delta 草案",
-            "保存前必须由 GM 填入明确材料扣减、成品实体和项目进度；当前草案不自动扣材料。",
-            "",
-            "```json",
-            json.dumps(delta, ensure_ascii=False, indent=2, sort_keys=True),
-            "```",
         ]
     )
-    return "\n".join(lines)
+    if delta is None:
+        lines.append("当前地点不可见，不能生成保存草案。")
+    else:
+        lines.extend(
+            [
+                "保存前必须由 GM 填入明确材料扣减、成品实体和项目进度；当前草案不自动扣材料。",
+                "",
+                "```json",
+                json.dumps(delta, ensure_ascii=False, indent=2, sort_keys=True),
+                "```",
+            ]
+        )
+    return str(redact_hidden_entity_refs(conn, "\n".join(lines)))
 
 
 def render_travel_preview(
@@ -508,7 +552,7 @@ def render_travel_preview(
         "| 项目 | 值 |",
         "|------|----|",
         f"| 原始行动 | {user_text or '未提供'} |",
-        f"| 出发地 | {location_label(current) if current else meta.get('current_location_id', '未知')} |",
+        f"| 出发地 | {location_label(current) if current else current_location_label(conn, meta)} |",
         f"| 目的地 | {location_label(destination) if destination else destination_query or '未指定'} |",
         f"| 步速 | {pace or 'normal'} |",
         "",
@@ -531,10 +575,10 @@ def render_travel_preview(
                 "| 字段 | 值 |",
                 "|------|----|",
                 f"| ID | `{destination['id']}` |",
-                f"| 摘要 | {destination['summary']} |",
-                f"| 描述 | {destination['description_short'] or '未登记'} |",
-                f"| 出口 | {format_value(parse_json(destination['exits_json'], []))} |",
-                f"| 资源 | {format_value(parse_json(destination['resources_json'], []))} |",
+                f"| 摘要 | {redact_hidden_entity_refs(conn, destination['summary'])} |",
+                f"| 描述 | {redact_hidden_entity_refs(conn, destination['description_short']) if destination['description_short'] else '未登记'} |",
+                f"| 出口 | {format_value(redact_hidden_entity_refs(conn, parse_json(destination['exits_json'], [])))} |",
+                f"| 资源 | {format_value(redact_hidden_entity_refs(conn, parse_json(destination['resources_json'], [])))} |",
             ]
         )
     else:
@@ -616,7 +660,7 @@ def render_travel_preview(
                 "```",
             ]
         )
-    return "\n".join(lines)
+    return str(redact_hidden_entity_refs(conn, "\n".join(lines)))
 
 
 def render_gather_preview(
@@ -628,7 +672,8 @@ def render_gather_preview(
     user_text: str | None = None,
 ) -> str:
     meta = get_meta(conn)
-    location = resolve_location(conn, location_query) if location_query else location_detail_row(conn, meta.get("current_location_id"))
+    current = current_location_row(conn, meta)
+    location = resolve_location(conn, location_query) if location_query else current
     if location and "description_short" not in location.keys():
         location = location_detail_row(conn, location["id"])
     target = resolve_entity(conn, target_query) if target_query else None
@@ -647,9 +692,18 @@ def render_gather_preview(
                 limit=palette_limit,
             )
             palette_candidates.extend(rows)
-    confirmations = gather_confirmations(target_query, target, location, crop, meta)
-    delta = build_gather_delta(meta=meta, target=target, location=location, crop=crop, user_text=user_text)
-    add_generated_write_guards(conn, delta, prefix="preview-gather")
+    confirmations = gather_confirmations(conn, target_query, target, location, current, crop, meta)
+    delta = None
+    if current and location:
+        delta = build_gather_delta(
+            meta=meta,
+            current_location_id=current["id"],
+            target=target,
+            location=location,
+            crop=crop,
+            user_text=user_text,
+        )
+        add_generated_write_guards(conn, delta, prefix="preview-gather")
 
     lines = [
         "## 采集/收获预演",
@@ -666,7 +720,7 @@ def render_gather_preview(
         "|------|------|",
         f"| 时间 | {format_time_brief(meta)} |",
         f"| 地点安全 | {location['safety_level'] if location and location['safety_level'] else '未登记'} |",
-        f"| 地点资源 | {format_value(parse_json(location['resources_json'], [])) if location else '未登记'} |",
+        f"| 地点资源 | {format_value(redact_hidden_entity_refs(conn, parse_json(location['resources_json'], []))) if location else '未登记'} |",
     ]
 
     lines.extend(["", "### 目标检查"])
@@ -674,8 +728,8 @@ def render_gather_preview(
         lines.extend(["| 字段 | 值 |", "|------|----|"])
         lines.append(f"| ID | `{target['id']}` |")
         lines.append(f"| 类型 | {target['type']} |")
-        lines.append(f"| 摘要 | {target['summary']} |")
-        lines.append(f"| 位置 | {target['location_id'] or target['owner_id'] or '未登记'} |")
+        lines.append(f"| 摘要 | {redact_hidden_entity_refs(conn, target['summary'])} |")
+        lines.append(f"| 位置 | {entity_ref_label(conn, target['location_id'] or target['owner_id'])} |")
         if crop:
             lines.append(f"| 畦号 | {crop['plot_no']} |")
             lines.append(f"| 作物 | {crop['crop_entity_id']} |")
@@ -705,6 +759,7 @@ def render_gather_preview(
         render_compact_palette_table(
             palette_candidates[:10],
             empty_text="没有符合当前地点和采集意图的素材库候选。",
+            conn=conn,
         )
     )
 
@@ -725,12 +780,13 @@ def render_gather_preview(
             "### Delta 草案",
             "保存前必须由 GM 填入实际产出和资源状态变化；当前草案不自动新增库存。",
             "",
-            "```json",
-            json.dumps(delta, ensure_ascii=False, indent=2, sort_keys=True),
-            "```",
         ]
     )
-    return "\n".join(lines)
+    if delta is None:
+        lines.append("当前地点或目标地点不可见，不能生成保存草案。")
+    else:
+        lines.extend(["```json", json.dumps(delta, ensure_ascii=False, indent=2, sort_keys=True), "```"])
+    return str(redact_hidden_entity_refs(conn, "\n".join(lines)))
 
 
 def render_social_preview(
@@ -742,21 +798,25 @@ def render_social_preview(
     user_text: str | None = None,
 ) -> str:
     meta = get_meta(conn)
+    current = current_location_row(conn, meta)
     npc = resolve_entity(conn, npc_query) if npc_query else None
     character = conn.execute("select * from characters where entity_id = ?", (npc["id"],)).fetchone() if npc else None
     relevant_clocks = social_relevant_clocks(conn, npc, topic, approach)
     suggested_ticks = suggested_social_clock_ticks(conn, npc, topic, approach)
-    confirmations = social_confirmations(npc_query, npc, character, topic, approach, meta)
-    delta = build_social_delta(
-        meta=meta,
-        npc=npc,
-        character=character,
-        topic=topic,
-        approach=approach,
-        suggested_ticks=suggested_ticks,
-        user_text=user_text,
-    )
-    add_generated_write_guards(conn, delta, prefix="preview-social")
+    confirmations = social_confirmations(conn, npc_query, npc, character, topic, approach, meta)
+    delta = None
+    if current:
+        delta = build_social_delta(
+            meta=meta,
+            current_location_id=current["id"],
+            npc=npc,
+            character=character,
+            topic=topic,
+            approach=approach,
+            suggested_ticks=suggested_ticks,
+            user_text=user_text,
+        )
+        add_generated_write_guards(conn, delta, prefix="preview-social")
 
     lines = [
         "## 社交/交易预演",
@@ -773,8 +833,8 @@ def render_social_preview(
         "| 项目 | 当前 |",
         "|------|------|",
         f"| 时间 | {format_time_brief(meta)} |",
-        f"| 玩家位置 | `{meta.get('current_location_id', '未知')}` |",
-        f"| 对象位置 | {npc['location_id'] if npc and npc['location_id'] else '未登记'} |",
+        f"| 玩家位置 | {current_location_label(conn, meta)} |",
+        f"| 对象位置 | {location_id_label(conn, npc['location_id']) if npc and npc['location_id'] else '未登记'} |",
         f"| 对象摘要 | {npc['summary'] if npc else '未找到'} |",
         f"| 信任 | {character['trust'] if character else '未登记'} |",
         f"| 态度 | {character['attitude'] if character else '未登记'} |",
@@ -815,12 +875,13 @@ def render_social_preview(
             "### Delta 草案",
             "保存前必须由 GM 填入实际对话结果、交易物品和关系变化。",
             "",
-            "```json",
-            json.dumps(delta, ensure_ascii=False, indent=2, sort_keys=True),
-            "```",
         ]
     )
-    return "\n".join(lines)
+    if delta is None:
+        lines.append("当前地点不可见，不能生成保存草案。")
+    else:
+        lines.extend(["```json", json.dumps(delta, ensure_ascii=False, indent=2, sort_keys=True), "```"])
+    return str(redact_hidden_entity_refs(conn, "\n".join(lines)))
 
 
 def item_row(conn: sqlite3.Connection, entity_id: str) -> sqlite3.Row | None:
@@ -831,6 +892,15 @@ def entity_label(entity: sqlite3.Row | None) -> str:
     if not entity:
         return "未找到"
     return f"`{entity['id']}` {entity['name']}（{entity['type']}）"
+
+
+def entity_ref_label(conn: sqlite3.Connection, entity_id: Any) -> str:
+    if not entity_id:
+        return "未登记"
+    record = read_entity(conn, str(entity_id))
+    if not record:
+        return "[hidden]"
+    return f"`{record.id}` {record.name}"
 
 
 def required_confirmations(
@@ -862,25 +932,30 @@ def preview_warnings(
     combat: Any,
     ammo_profile: Any,
     player_entity_id: str,
+    *,
+    conn: sqlite3.Connection | None = None,
 ) -> list[str]:
     warnings: list[str] = []
     if weapon and weapon["owner_id"] not in {player_entity_id, None}:
-        warnings.append(f"武器所有者不是主角：{weapon['owner_id']}")
+        owner = entity_ref_label(conn, weapon["owner_id"]) if conn else weapon["owner_id"]
+        warnings.append(f"武器所有者不是主角：{owner}")
     if weapon_item and weapon_item["category"] != "weapon":
         warnings.append(f"所选武器分类不是 weapon：{weapon_item['category']}")
     if ammo_item and ammo_item["category"] != "ammunition":
         warnings.append(f"所选弹药分类不是 ammunition：{ammo_item['category']}")
     if ammo and ammo["owner_id"] not in {player_entity_id, None}:
-        warnings.append(f"弹药所有者不是主角：{ammo['owner_id']}")
+        owner = entity_ref_label(conn, ammo["owner_id"]) if conn else ammo["owner_id"]
+        warnings.append(f"弹药所有者不是主角：{owner}")
     if isinstance(combat, dict) and combat.get("risks"):
         for item in combat["risks"][:2]:
-            warnings.append(str(item))
+            warnings.append(str(redact_hidden_entity_refs(conn, item) if conn else item))
     if isinstance(ammo_profile, dict):
         for item in ammo_profile.get("risks", [])[:3]:
-            warnings.append(str(item))
+            warnings.append(str(redact_hidden_entity_refs(conn, item) if conn else item))
         compatible_weapon = ammo_profile.get("compatible_weapon_id")
         if weapon and compatible_weapon and compatible_weapon != weapon["id"]:
-            warnings.append(f"弹药兼容武器为 {compatible_weapon}，不是 {weapon['id']}。")
+            label = entity_ref_label(conn, compatible_weapon) if conn else compatible_weapon
+            warnings.append(f"弹药兼容武器为 {label}，不是 {weapon['id']}。")
     return warnings
 
 
@@ -967,8 +1042,11 @@ def current_location_row(conn: sqlite3.Connection, meta: dict[str, str]) -> sqli
     location_id = meta.get("current_location_id")
     if not location_id:
         return None
+    ensure_visibility_sql_functions(conn)
+    visibility_clause = entity_visibility_sql("player", "e")
+    subtype_visibility_clause = entity_subtype_visibility_sql("player", "e", "c")
     return conn.execute(
-        """
+        f"""
         select e.id, e.name, e.type, e.status, e.visibility, e.location_id, e.owner_id,
                e.summary, e.details_json,
                l.parent_id, l.biome, l.safety_level, l.description_short,
@@ -976,6 +1054,9 @@ def current_location_row(conn: sqlite3.Connection, meta: dict[str, str]) -> sqli
         from entities e
         left join locations l on l.entity_id = e.id
         where e.id = ?
+          and e.type = 'location'
+          and {entity_not_archived_sql("e")}
+          {visibility_clause}
         """,
         (location_id,),
     ).fetchone()
@@ -987,8 +1068,23 @@ def location_label(location: sqlite3.Row | None) -> str:
     return f"`{location['id']}` {location['name']}"
 
 
+def current_location_label(conn: sqlite3.Connection, meta: dict[str, str]) -> str:
+    location = current_location_row(conn, meta)
+    return location_label(location) if location else "当前地点不可见"
+
+
+def location_id_label(conn: sqlite3.Connection, location_id: str | None) -> str:
+    if not location_id:
+        return "未登记"
+    location = location_detail_row(conn, location_id)
+    return location_label(location) if location else "未知地点"
+
+
 def active_clock_rows(conn: sqlite3.Connection, *, include_hidden: bool) -> list[sqlite3.Row]:
-    visibility_clause = "" if include_hidden else "and c.visibility != 'hidden'"
+    ensure_visibility_sql_functions(conn)
+    clock_visibility_clause = "" if include_hidden else clock_visibility_sql("player", "c")
+    entity_visibility_clause = "" if include_hidden else entity_visibility_sql("player", "e")
+    subtype_visibility_clause = "" if include_hidden else entity_subtype_visibility_sql("player", "e", "c")
     return conn.execute(
         f"""
         select c.entity_id, e.name, e.summary, c.clock_type, c.segments_filled,
@@ -996,8 +1092,10 @@ def active_clock_rows(conn: sqlite3.Connection, *, include_hidden: bool) -> list
                c.last_ticked_turn_id
         from clocks c
         join entities e on e.id = c.entity_id
-        where e.status = 'active'
-          {visibility_clause}
+        where {normalized_text_sql("e.status")} = 'active'
+          {entity_visibility_clause}
+          {clock_visibility_clause}
+          {subtype_visibility_clause}
         order by
           case c.visibility when 'visible' then 0 when 'hinted' then 1 else 2 end,
           c.entity_id
@@ -1006,8 +1104,13 @@ def active_clock_rows(conn: sqlite3.Connection, *, include_hidden: bool) -> list
 
 
 def summarize_crop_plots(conn: sqlite3.Connection) -> dict[str, Any]:
+    ensure_visibility_sql_functions(conn)
+    plot_visibility_clause = entity_visibility_sql("player", "e")
+    crop_visibility_clause = entity_visibility_sql("player", "ce")
+    plot_subtype_clause = entity_subtype_visibility_sql("player", "e", "plot_clock")
+    crop_subtype_clause = entity_subtype_visibility_sql("player", "ce", "crop_clock")
     rows = conn.execute(
-        """
+        f"""
         select p.entity_id, e.name, p.plot_no, p.crop_entity_id, ce.name as crop_name,
                p.planted_day, p.growth_stage, p.growth_stage_max, p.harvest_day_min,
                p.harvest_day_max, p.harvest_status, p.water_status, p.soil_status,
@@ -1015,6 +1118,14 @@ def summarize_crop_plots(conn: sqlite3.Connection) -> dict[str, Any]:
         from crop_plots p
         join entities e on e.id = p.entity_id
         join entities ce on ce.id = p.crop_entity_id
+        left join clocks plot_clock on plot_clock.entity_id = e.id
+        left join clocks crop_clock on crop_clock.entity_id = ce.id
+        where {entity_not_archived_sql("e")}
+          and {entity_not_archived_sql("ce")}
+          {plot_visibility_clause}
+          {crop_visibility_clause}
+          {plot_subtype_clause}
+          {crop_subtype_clause}
         order by p.plot_no
         """
     ).fetchall()
@@ -1227,15 +1338,28 @@ def split_terms(text: str | None) -> list[str]:
 def resolve_recipe(conn: sqlite3.Connection, text: str | None) -> sqlite3.Row | None:
     if not text:
         return None
-    exact_id = conn.execute("select * from entities where id = ? and type = 'recipe'", (text,)).fetchone()
+    ensure_visibility_sql_functions(conn)
+    visibility_clause = entity_visibility_sql("player", "e")
+    exact_id = conn.execute(
+        f"""
+        select *
+        from entities e
+        where e.id = ?
+          and e.type = 'recipe'
+          and {entity_not_archived_sql("e")}
+          {visibility_clause}
+        """,
+        (text,),
+    ).fetchone()
     if exact_id:
         return exact_id
     exact_name = conn.execute(
-        """
+        f"""
         select *
-        from entities
+        from entities e
         where type = 'recipe'
-          and status != 'archived'
+          and {entity_not_archived_sql("e")}
+          {visibility_clause}
           and name = ?
         limit 1
         """,
@@ -1244,12 +1368,13 @@ def resolve_recipe(conn: sqlite3.Connection, text: str | None) -> sqlite3.Row | 
     if exact_name:
         return exact_name
     alias = conn.execute(
-        """
+        f"""
         select e.*
         from aliases a
         join entities e on e.id = a.entity_id
         where e.type = 'recipe'
-          and e.status != 'archived'
+          and {entity_not_archived_sql("e")}
+          {visibility_clause}
           and a.alias = ?
         limit 1
         """,
@@ -1259,11 +1384,12 @@ def resolve_recipe(conn: sqlite3.Connection, text: str | None) -> sqlite3.Row | 
         return alias
     like = f"%{text}%"
     fuzzy = conn.execute(
-        """
+        f"""
         select *
-        from entities
+        from entities e
         where type = 'recipe'
-          and status != 'archived'
+          and {entity_not_archived_sql("e")}
+          {visibility_clause}
           and (name like ? or summary like ? or details_json like ?)
         order by name
         limit 1
@@ -1321,35 +1447,41 @@ def resolve_materials(
                 "query": query,
                 "entity": entity,
                 "item": item,
-                "availability": material_availability(entity, meta, get_player_entity_id(conn)),
+                "availability": material_availability(conn, entity, meta, get_player_entity_id(conn)),
             }
         )
     return materials
 
 
-def material_availability(entity: sqlite3.Row | None, meta: dict[str, str], player_entity_id: str) -> str:
+def material_availability(conn: sqlite3.Connection, entity: sqlite3.Row | None, meta: dict[str, str], player_entity_id: str) -> str:
     if not entity:
         return "未找到"
-    current_location = meta.get("current_location_id")
-    home_locations = configured_home_location_ids(meta)
+    current = current_location_row(conn, meta)
+    current_location = current["id"] if current else None
+    home_locations = visible_home_location_ids(conn, meta)
     if entity["owner_id"] == player_entity_id:
         return "随身"
     if entity["location_id"] == current_location:
         return "当前地点"
-    if current_location in home_locations and entity["location_id"] in home_locations:
+    if current_location and current_location in home_locations and entity["location_id"] in home_locations:
         return "基地邻近"
     if entity["location_id"]:
-        return f"不在手边：{entity['location_id']}"
+        return f"不在手边：{entity_ref_label(conn, entity['location_id'])}"
     return "位置未登记"
 
 
 def nearby_crafting_candidates(conn: sqlite3.Connection, meta: dict[str, str]) -> list[sqlite3.Row]:
-    current_location = meta.get("current_location_id")
-    home_locations = configured_home_location_ids(meta)
-    allowed_locations = {current_location}
-    if current_location in home_locations:
+    ensure_visibility_sql_functions(conn)
+    visibility_clause = entity_visibility_sql("player", "e")
+    subtype_visibility_clause = entity_subtype_visibility_sql("player", "e", "c")
+    current = current_location_row(conn, meta)
+    current_location = current["id"] if current else None
+    home_locations = visible_home_location_ids(conn, meta)
+    allowed_locations = {current_location} if current_location else set()
+    if current_location and current_location in home_locations:
         allowed_locations.update(home_locations)
     location_placeholders = ",".join("?" for _ in allowed_locations)
+    location_filter = f"e.location_id in ({location_placeholders})" if allowed_locations else "0"
     return conn.execute(
         f"""
         select e.id, e.name, e.summary, e.location_id, e.owner_id,
@@ -1357,9 +1489,12 @@ def nearby_crafting_candidates(conn: sqlite3.Connection, meta: dict[str, str]) -
                i.durability_max, i.stackable, i.equipped_slot
         from entities e
         join items i on i.entity_id = e.id
-        where e.status = 'active'
+        left join clocks c on c.entity_id = e.id
+        where {normalized_text_sql("e.status")} = 'active'
+          {visibility_clause}
+          {subtype_visibility_clause}
           and i.category in ('material', 'tool', 'container', 'weapon', 'armor', 'ammunition')
-          and (e.owner_id = ? or e.location_id in ({location_placeholders}))
+          and (e.owner_id = ? or {location_filter})
         order by
           case i.category
             when 'material' then 0
@@ -1372,6 +1507,14 @@ def nearby_crafting_candidates(conn: sqlite3.Connection, meta: dict[str, str]) -
         """,
         (get_player_entity_id(conn), *tuple(allowed_locations)),
     ).fetchall()
+
+
+def visible_home_location_ids(conn: sqlite3.Connection, meta: dict[str, str]) -> set[str]:
+    return {
+        location_id
+        for location_id in configured_home_location_ids(meta)
+        if location_detail_row(conn, location_id)
+    }
 
 
 def configured_home_location_ids(meta: dict[str, str]) -> set[str]:
@@ -1451,6 +1594,7 @@ def craft_warnings(
 
 def build_craft_delta(
     *,
+    conn: sqlite3.Connection | None = None,
     meta: dict[str, str],
     location: sqlite3.Row | None,
     project: sqlite3.Row | None,
@@ -1466,14 +1610,14 @@ def build_craft_delta(
     project_name = project["name"] if project else "未指定项目"
     effective_time = time_cost or recipe_time_cost(recipe_profile)
     summary = f"预演制作：{project_name} -> {target_name}；材料扣减和成品实体待 GM 确认。"
-    return {
+    delta = {
         "user_text": user_text or "制作行动预演生成的草案",
         "intent": "craft",
         "changed": True,
         "game_time_before": meta.get("current_time_block"),
         "game_time_after": f"{meta.get('current_time_block', '当前时段')} + {effective_time or '未定耗时'}（草案）",
-        "location_before": meta.get("current_location_id"),
-        "location_after": meta.get("current_location_id"),
+        "location_before": location["id"] if location else None,
+        "location_after": location["id"] if location else None,
         "summary": summary,
         "events": [
             {
@@ -1507,13 +1651,17 @@ def build_craft_delta(
         "upsert_entities": [],
         "tick_clocks": recipe_tick_clocks(recipe_profile),
     }
+    return redact_hidden_entity_refs(conn, delta, drop_empty=False) if conn else delta
 
 
 def location_detail_row(conn: sqlite3.Connection, entity_id: str | None) -> sqlite3.Row | None:
     if not entity_id:
         return None
+    ensure_visibility_sql_functions(conn)
+    visibility_clause = entity_visibility_sql("player", "e")
+    subtype_visibility_clause = entity_subtype_visibility_sql("player", "e", "c")
     return conn.execute(
-        """
+        f"""
         select e.id, e.name, e.type, e.status, e.visibility, e.location_id, e.owner_id,
                e.summary, e.details_json,
                l.parent_id, l.coord_x, l.coord_y, l.coord_z, l.biome, l.safety_level,
@@ -1521,6 +1669,9 @@ def location_detail_row(conn: sqlite3.Connection, entity_id: str | None) -> sqli
         from entities e
         left join locations l on l.entity_id = e.id
         where e.id = ?
+          and e.type = 'location'
+          and {entity_not_archived_sql("e")}
+          {visibility_clause}
         """,
         (entity_id,),
     ).fetchone()
@@ -1529,6 +1680,7 @@ def location_detail_row(conn: sqlite3.Connection, entity_id: str | None) -> sqli
 def resolve_location(conn: sqlite3.Connection, text: str | None) -> sqlite3.Row | None:
     if not text:
         return None
+    ensure_visibility_sql_functions(conn)
     text = str(text).strip()
     visibility_clause = entity_visibility_sql("player", "e")
     exact_id = conn.execute(
@@ -1537,7 +1689,7 @@ def resolve_location(conn: sqlite3.Connection, text: str | None) -> sqlite3.Row 
         from entities e
         where e.id = ?
           and e.type = 'location'
-          and e.status != 'archived'
+          and {entity_not_archived_sql("e")}
           {visibility_clause}
         """,
         (text,),
@@ -1550,7 +1702,7 @@ def resolve_location(conn: sqlite3.Connection, text: str | None) -> sqlite3.Row 
         from entities e
         where lower(e.id) = lower(?)
           and e.type = 'location'
-          and e.status != 'archived'
+          and {entity_not_archived_sql("e")}
           {visibility_clause}
         limit 1
         """,
@@ -1564,7 +1716,7 @@ def resolve_location(conn: sqlite3.Connection, text: str | None) -> sqlite3.Row 
         from entities e
         where e.name = ?
           and e.type = 'location'
-          and e.status != 'archived'
+          and {entity_not_archived_sql("e")}
           {visibility_clause}
         order by e.status, e.id
         limit 1
@@ -1580,7 +1732,7 @@ def resolve_location(conn: sqlite3.Connection, text: str | None) -> sqlite3.Row 
         join entities e on e.id = a.entity_id
         where a.alias = ?
           and e.type = 'location'
-          and e.status != 'archived'
+          and {entity_not_archived_sql("e")}
           {visibility_clause}
         order by e.status, e.id
         limit 1
@@ -1600,7 +1752,7 @@ def resolve_location(conn: sqlite3.Connection, text: str | None) -> sqlite3.Row 
             from entities e
             left join aliases a on a.entity_id = e.id
             where e.type = 'location'
-              and e.status != 'archived'
+              and {entity_not_archived_sql("e")}
               {visibility_clause}
               and (
                 lower(e.id) like lower(?)
@@ -1631,7 +1783,7 @@ def resolve_location(conn: sqlite3.Connection, text: str | None) -> sqlite3.Row 
         select e.*
         from entities e
         where e.type = 'location'
-          and e.status != 'archived'
+          and {entity_not_archived_sql("e")}
           {visibility_clause}
           and (e.name like ? or e.summary like ?)
         order by {entity_type_priority_sql("e")}, e.name
@@ -1650,7 +1802,7 @@ def resolve_location(conn: sqlite3.Connection, text: str | None) -> sqlite3.Row 
         from fts_index f
         join entities e on e.id = f.entity_id
         where e.type = 'location'
-          and e.status != 'archived'
+          and {entity_not_archived_sql("e")}
           {visibility_clause}
           and fts_index match ?
         order by bm25(fts_index), e.id
@@ -1691,7 +1843,24 @@ def find_route(
 
 
 def shortest_route_plan(conn: sqlite3.Connection, start_id: str, destination_id: str) -> dict[str, Any] | None:
-    rows = conn.execute("select * from routes order by id").fetchall()
+    ensure_visibility_sql_functions(conn)
+    from_visibility_clause = entity_visibility_sql("player", "from_e")
+    to_visibility_clause = entity_visibility_sql("player", "to_e")
+    rows = conn.execute(
+        f"""
+        select r.*
+        from routes r
+        join entities from_e on from_e.id = r.from_location_id
+        join entities to_e on to_e.id = r.to_location_id
+        where from_e.type = 'location'
+          and to_e.type = 'location'
+          and {entity_not_archived_sql("from_e")}
+          and {entity_not_archived_sql("to_e")}
+          {from_visibility_clause}
+          {to_visibility_clause}
+        order by r.id
+        """
+    ).fetchall()
     if not rows:
         return None
     graph: dict[str, list[tuple[str, sqlite3.Row, int]]] = {}
@@ -1806,12 +1975,13 @@ def format_minutes(minutes: int | None) -> str:
 def destination_threats(conn: sqlite3.Connection, location_id: str | None) -> list[sqlite3.Row]:
     if not location_id:
         return []
+    ensure_visibility_sql_functions(conn)
     visibility_clause = entity_visibility_sql("player", "e")
     return conn.execute(
         f"""
         select e.id, e.name, e.type, e.summary, e.location_id, e.owner_id, e.status, e.visibility
         from entities e
-        where e.status = 'active'
+        where {normalized_text_sql("e.status")} = 'active'
           and e.type = 'threat'
           and e.location_id = ?
           {visibility_clause}
@@ -1824,12 +1994,13 @@ def destination_threats(conn: sqlite3.Connection, location_id: str | None) -> li
 def destination_occupants(conn: sqlite3.Connection, location_id: str | None) -> list[sqlite3.Row]:
     if not location_id:
         return []
+    ensure_visibility_sql_functions(conn)
     visibility_clause = entity_visibility_sql("player", "e")
     return conn.execute(
         f"""
         select e.id, e.name, e.type, e.summary, e.location_id, e.owner_id, e.status, e.visibility
         from entities e
-        where e.status = 'active'
+        where {normalized_text_sql("e.status")} = 'active'
           and e.type in ('character', 'item', 'project')
           and e.location_id = ?
           and e.id != ?
@@ -1844,12 +2015,26 @@ def destination_occupants(conn: sqlite3.Connection, location_id: str | None) -> 
 
 
 def crop_plot_for_entity(conn: sqlite3.Connection, entity_id: str) -> sqlite3.Row | None:
+    ensure_visibility_sql_functions(conn)
+    plot_visibility_clause = entity_visibility_sql("player", "e")
+    crop_visibility_clause = entity_visibility_sql("player", "ce")
+    plot_subtype_clause = entity_subtype_visibility_sql("player", "e", "plot_clock")
+    crop_subtype_clause = entity_subtype_visibility_sql("player", "ce", "crop_clock")
     return conn.execute(
-        """
+        f"""
         select p.*, ce.name as crop_name
         from crop_plots p
+        join entities e on e.id = p.entity_id
         join entities ce on ce.id = p.crop_entity_id
+        left join clocks plot_clock on plot_clock.entity_id = e.id
+        left join clocks crop_clock on crop_clock.entity_id = ce.id
         where p.entity_id = ?
+          and {entity_not_archived_sql("e")}
+          and {entity_not_archived_sql("ce")}
+          {plot_visibility_clause}
+          {crop_visibility_clause}
+          {plot_subtype_clause}
+          {crop_subtype_clause}
         """,
         (entity_id,),
     ).fetchone()
@@ -1857,14 +2042,30 @@ def crop_plot_for_entity(conn: sqlite3.Connection, entity_id: str) -> sqlite3.Ro
 
 def harvestable_crop_rows(conn: sqlite3.Connection, current_day: int | None) -> list[sqlite3.Row]:
     day = current_day or 0
+    ensure_visibility_sql_functions(conn)
+    plot_visibility_clause = entity_visibility_sql("player", "e")
+    crop_visibility_clause = entity_visibility_sql("player", "ce")
+    plot_subtype_clause = entity_subtype_visibility_sql("player", "e", "plot_clock")
+    crop_subtype_clause = entity_subtype_visibility_sql("player", "ce", "crop_clock")
     return conn.execute(
-        """
+        f"""
         select p.*, ce.name as crop_name
         from crop_plots p
+        join entities e on e.id = p.entity_id
         join entities ce on ce.id = p.crop_entity_id
-        where p.harvest_status in ('partial_harvest', 'repeat_harvest', 'regrowing')
-           or (p.harvest_day_min is not null and p.harvest_day_min <= ?)
-           or (p.growth_stage_max is not null and p.growth_stage >= p.growth_stage_max)
+        left join clocks plot_clock on plot_clock.entity_id = e.id
+        left join clocks crop_clock on crop_clock.entity_id = ce.id
+        where {entity_not_archived_sql("e")}
+          and {entity_not_archived_sql("ce")}
+          {plot_visibility_clause}
+          {crop_visibility_clause}
+          {plot_subtype_clause}
+          {crop_subtype_clause}
+          and (
+            p.harvest_status in ('partial_harvest', 'repeat_harvest', 'regrowing')
+            or (p.harvest_day_min is not null and p.harvest_day_min <= ?)
+            or (p.growth_stage_max is not null and p.growth_stage >= p.growth_stage_max)
+          )
         order by
           case p.harvest_status
             when 'partial_harvest' then 0
@@ -1881,14 +2082,20 @@ def harvestable_crop_rows(conn: sqlite3.Connection, current_day: int | None) -> 
 def gatherable_items(conn: sqlite3.Connection, location_id: str | None) -> list[sqlite3.Row]:
     if not location_id:
         return []
+    ensure_visibility_sql_functions(conn)
+    visibility_clause = entity_visibility_sql("player", "e")
+    subtype_visibility_clause = entity_subtype_visibility_sql("player", "e", "c")
     return conn.execute(
-        """
+        f"""
         select e.id, e.name, e.summary, e.location_id, e.owner_id,
                i.category, i.quantity, i.unit, i.quality, i.durability_current,
                i.durability_max, i.stackable, i.equipped_slot
         from entities e
         join items i on i.entity_id = e.id
-        where e.status = 'active'
+        left join clocks c on c.entity_id = e.id
+        where {normalized_text_sql("e.status")} = 'active'
+          {visibility_clause}
+          {subtype_visibility_clause}
           and e.location_id = ?
           and i.category in ('food', 'material', 'tool', 'container')
         order by i.category, e.name
@@ -1899,22 +2106,26 @@ def gatherable_items(conn: sqlite3.Connection, location_id: str | None) -> list[
 
 
 def gather_confirmations(
+    conn: sqlite3.Connection,
     target_query: str | None,
     target: sqlite3.Row | None,
     location: sqlite3.Row | None,
+    current: sqlite3.Row | None,
     crop: sqlite3.Row | None,
     meta: dict[str, str],
 ) -> list[str]:
     items: list[str] = []
-    current_location_id = meta.get("current_location_id")
+    current_location_id = current["id"] if current else None
+    if meta.get("current_location_id") and not current:
+        items.append("当前地点不可见或不存在：不能保存采集结果。")
     if target_query and not target:
         items.append(f"采集目标未找到：{target_query}")
     if not location:
         items.append("采集地点未解析：需要确认当前位置或目的地。")
     elif current_location_id and location["id"] != current_location_id:
-        items.append(f"目标地点不是当前位置：当前在 {current_location_id}，需要先结算 travel 或同回合明确旅行耗时/风险。")
+        items.append(f"目标地点不是当前位置：当前在 {location_label(current)}，需要先结算 travel 或同回合明确旅行耗时/风险。")
     if target and location and target["location_id"] and target["location_id"] != location["id"]:
-        items.append(f"目标不在指定地点：{target['location_id']}；可能需要改地点或先 travel。")
+        items.append(f"目标不在指定地点：{entity_ref_label(conn, target['location_id'])}；可能需要改地点或先 travel。")
     if not target:
         items.append("目标未指定：保存前必须明确采集对象和产出。")
     if target and target["type"] == "crop_plot" and not crop:
@@ -1932,13 +2143,13 @@ def is_home_location(location: sqlite3.Row | None, meta: dict[str, str]) -> bool
 def build_gather_delta(
     *,
     meta: dict[str, str],
+    current_location_id: str,
     target: sqlite3.Row | None,
     location: sqlite3.Row | None,
     crop: sqlite3.Row | None,
     user_text: str | None,
 ) -> dict[str, Any]:
     target_name = target["name"] if target else "未指定目标"
-    current_location_id = meta.get("current_location_id")
     location_id = location["id"] if location else meta.get("current_location_id")
     travel_required = bool(current_location_id and location_id and current_location_id != location_id)
     summary = f"预演采集/收获：{target_name}；实际产出和资源状态待 GM 确认。"
@@ -1948,7 +2159,7 @@ def build_gather_delta(
         "changed": True,
         "game_time_before": meta.get("current_time_block"),
         "game_time_after": f"{meta.get('current_time_block', '当前时段')} + 采集耗时（草案）",
-        "location_before": meta.get("current_location_id"),
+        "location_before": current_location_id,
         "location_after": location_id,
         "summary": summary,
         "events": [
@@ -1991,6 +2202,10 @@ def social_relevant_clocks(
     rows = matching_clock_rows(conn, clock_query_terms(text), limit=3)
     if rows:
         return rows
+    ensure_visibility_sql_functions(conn)
+    entity_visibility_clause = entity_visibility_sql("player", "e")
+    clock_visibility_clause = clock_visibility_sql("player", "c")
+    subtype_visibility_clause = entity_subtype_visibility_sql("player", "e", "c")
     return conn.execute(
         f"""
         select c.entity_id, e.name, c.segments_filled, c.segments_total,
@@ -1998,6 +2213,10 @@ def social_relevant_clocks(
         from clocks c
         join entities e on e.id = c.entity_id
         where c.clock_type in ('relationship', 'faction')
+          and {entity_not_archived_sql("e")}
+          {entity_visibility_clause}
+          {clock_visibility_clause}
+          {subtype_visibility_clause}
         order by c.visibility desc, c.entity_id
         limit 2
         """,
@@ -2024,6 +2243,7 @@ def suggested_social_clock_ticks(
 
 
 def social_confirmations(
+    conn: sqlite3.Connection,
     npc_query: str | None,
     npc: sqlite3.Row | None,
     character: sqlite3.Row | None,
@@ -2032,6 +2252,8 @@ def social_confirmations(
     meta: dict[str, str],
 ) -> list[str]:
     items: list[str] = []
+    if not current_location_row(conn, meta):
+        items.append("当前地点未登记、不可见或不存在：不能保存社交结果。")
     if npc_query and not npc:
         items.append(f"社交对象未找到：{npc_query}")
     if npc and npc["type"] != "character":
@@ -2039,7 +2261,7 @@ def social_confirmations(
     if not npc:
         items.append("对象未指定：保存前必须明确 NPC/群体。")
     if npc and npc["location_id"] and npc["location_id"] != meta.get("current_location_id"):
-        items.append(f"对象不在当前地点：{npc['location_id']}；可能需要先 travel。")
+        items.append(f"对象不在当前地点：{location_id_label(conn, npc['location_id'])}；可能需要先 travel。")
     if not topic:
         items.append("主题未指定：需要明确交易、询问、承诺、道歉、接触或威慑。")
     if not approach:
@@ -2068,6 +2290,7 @@ def social_risks(
 def build_social_delta(
     *,
     meta: dict[str, str],
+    current_location_id: str | None,
     npc: sqlite3.Row | None,
     character: sqlite3.Row | None,
     topic: str | None,
@@ -2083,8 +2306,8 @@ def build_social_delta(
         "changed": True,
         "game_time_before": meta.get("current_time_block"),
         "game_time_after": f"{meta.get('current_time_block', '当前时段')} + 社交耗时（草案）",
-        "location_before": meta.get("current_location_id"),
-        "location_after": meta.get("current_location_id"),
+        "location_before": current_location_id,
+        "location_after": current_location_id,
         "summary": summary,
         "events": [
             {
@@ -2206,12 +2429,12 @@ def build_travel_delta(
                     "to_location_id": destination_id,
                     "route_id": route["id"] if route else None,
                     "route_ids": route.get("route_ids", []) if route else [],
-                    "route_segments": route.get("segments", []) if route else [],
+                    "route_segments": redact_hidden_entity_refs(conn, route.get("segments", [])) if route else [],
                     "estimated_minutes": travel_minutes,
                     "pace": pace or "normal",
                     "route_difficulty": route["difficulty"] if route else None,
-                    "route_hazards": parse_json(route["hazards_json"], []) if route else [],
-                    "route_requirements": parse_json(route["requirements_json"], []) if route else [],
+                    "route_hazards": redact_hidden_entity_refs(conn, parse_json(route["hazards_json"], [])) if route else [],
+                    "route_requirements": redact_hidden_entity_refs(conn, parse_json(route["requirements_json"], [])) if route else [],
                     "destination_safety": destination["safety_level"] if destination else None,
                     "known_threat_ids": [row["id"] for row in threats],
                     "needs_gm_resolution": True,

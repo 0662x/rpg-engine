@@ -7,6 +7,7 @@ from pathlib import Path
 from .campaign import Campaign
 from .db import get_meta
 from .time_weather import format_time_brief
+from .visibility import ensure_visibility_sql_functions, normalized_text_sql
 
 
 @dataclass(frozen=True)
@@ -18,6 +19,7 @@ class AuditFinding:
 
 
 def run_audit(conn: sqlite3.Connection) -> list[AuditFinding]:
+    ensure_visibility_sql_functions(conn)
     findings: list[AuditFinding] = []
     findings.extend(audit_duplicate_aliases(conn))
     findings.extend(audit_duplicate_names(conn))
@@ -48,11 +50,12 @@ def audit_duplicate_aliases(conn: sqlite3.Connection) -> list[AuditFinding]:
 
 
 def audit_duplicate_names(conn: sqlite3.Connection) -> list[AuditFinding]:
+    ensure_visibility_sql_functions(conn)
     rows = conn.execute(
-        """
+        f"""
         select name, group_concat(id, ', ') as targets, count(*) as count
         from entities
-        where status = 'active'
+        where {normalized_text_sql("status")} = 'active'
         group by name
         having count(*) > 1
         order by count desc, name
@@ -70,11 +73,12 @@ def audit_duplicate_names(conn: sqlite3.Connection) -> list[AuditFinding]:
 
 
 def audit_sparse_entities(conn: sqlite3.Connection) -> list[AuditFinding]:
+    ensure_visibility_sql_functions(conn)
     rows = conn.execute(
-        """
+        f"""
         select id, type, name
         from entities
-        where status = 'active'
+        where {normalized_text_sql("status")} = 'active'
           and (summary is null or trim(summary) = '')
         order by type, name
         limit 80
@@ -92,12 +96,13 @@ def audit_sparse_entities(conn: sqlite3.Connection) -> list[AuditFinding]:
 
 
 def audit_hidden_clocks(conn: sqlite3.Connection) -> list[AuditFinding]:
+    ensure_visibility_sql_functions(conn)
     rows = conn.execute(
-        """
+        f"""
         select e.id, e.name, c.segments_filled, c.segments_total, c.trigger_when_full
         from clocks c
         join entities e on e.id = c.entity_id
-        where c.visibility = 'hidden'
+        where {normalized_text_sql("c.visibility")} = 'hidden'
         order by e.name
         """
     ).fetchall()

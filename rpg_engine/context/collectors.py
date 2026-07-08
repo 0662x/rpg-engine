@@ -5,11 +5,21 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable
 
-from ..db import get_meta
+from ..db import entity_subtype_visibility_sql, get_meta
 from ..memory import find_relevant_memories, render_memory_section
 from ..palette import render_compact_palette_table, suggest_palette_entries
+from ..redaction import redact_hidden_entity_refs
 from ..render import parse_json
-from ..visibility import clock_visibility_sql, context_visibility_view, world_setting_visibility_sql
+from ..visibility import (
+    can_read_hidden,
+    clock_visibility_sql,
+    context_visibility_view,
+    ensure_visibility_sql_functions,
+    entity_not_archived_sql,
+    entity_visibility_sql,
+    normalized_text_sql,
+    world_setting_visibility_sql,
+)
 from .sections import ContextSection, estimate_tokens
 
 
@@ -52,6 +62,10 @@ def collect_loaded_items(state: Any, collectors: list[ContextCollector]) -> list
     return items
 
 
+def state_visibility_view(state: Any) -> str:
+    return getattr(state, "visibility_view", None) or context_visibility_view(getattr(state, "mode", None))
+
+
 def collect_routes(state: Any) -> None:
     if state.submode not in {"travel", "gather", "social"}:
         return
@@ -64,19 +78,39 @@ def collect_routes(state: Any) -> None:
     ]
     if not current or not destinations:
         return
+    ensure_visibility_sql_functions(state.conn)
+    view = state_visibility_view(state)
     start_ids = [current]
-    parent_id = location_parent_id(state.conn, current)
+    parent_id = location_parent_id(state.conn, current, view=view)
     if parent_id and parent_id not in start_ids:
         start_ids.append(parent_id)
     start_placeholders = ",".join("?" for _ in start_ids)
     destination_placeholders = ",".join("?" for _ in destinations)
+    from_visibility_clause = entity_visibility_sql(view, "from_e")
+    to_visibility_clause = entity_visibility_sql(view, "to_e")
+    from_subtype_clause = entity_subtype_visibility_sql(view, "from_e", "from_clock")
+    to_subtype_clause = entity_subtype_visibility_sql(view, "to_e", "to_clock")
     state.routes = state.conn.execute(
         f"""
-        select *
-        from routes
-        where (from_location_id in ({start_placeholders}) and to_location_id in ({destination_placeholders}))
-           or (to_location_id in ({start_placeholders}) and from_location_id in ({destination_placeholders}))
-        order by travel_minutes, id
+        select r.*
+        from routes r
+        join entities from_e on from_e.id = r.from_location_id
+        join entities to_e on to_e.id = r.to_location_id
+        left join clocks from_clock on from_clock.entity_id = from_e.id
+        left join clocks to_clock on to_clock.entity_id = to_e.id
+        where {normalized_text_sql("from_e.type")} = 'location'
+          and {normalized_text_sql("to_e.type")} = 'location'
+          and {entity_not_archived_sql("from_e")}
+          and {entity_not_archived_sql("to_e")}
+          {from_visibility_clause}
+          {to_visibility_clause}
+          {from_subtype_clause}
+          {to_subtype_clause}
+          and (
+            (r.from_location_id in ({start_placeholders}) and r.to_location_id in ({destination_placeholders}))
+            or (r.to_location_id in ({start_placeholders}) and r.from_location_id in ({destination_placeholders}))
+          )
+        order by r.travel_minutes, r.id
         limit 5
         """,
         [*start_ids, *destinations, *start_ids, *destinations],
@@ -105,32 +139,51 @@ def collect_palettes(state: Any) -> None:
         include_locked=False,
         limit=5,
     )
+    view = state_visibility_view(state)
+    should_redact = not can_read_hidden(view)
     location_row = context.get("location")
+    location_label = (
+        location_row["id"] + " " + location_row["name"]
+        if location_row
+        else (redact_hidden_entity_refs(state.conn, location) if location and should_redact else location)
+    )
     lines = [
         "### 素材库候选",
         "",
         "这些是候选，不是当前事实；只有观察、采样、研究、交易并保存后才成为实体。",
         "",
-        f"- 查询地点：{location_row['id'] + ' ' + location_row['name'] if location_row else location or '当前地点未解析'}",
+        f"- 查询地点：{location_label or '当前地点未解析'}",
         f"- 查询行动：{state.submode}",
         "",
     ]
-    lines.extend(render_compact_palette_table(candidates, empty_text="没有符合条件的素材库候选。"))
+    lines.extend(
+        render_compact_palette_table(
+            candidates,
+            empty_text="没有符合条件的素材库候选。",
+            conn=state.conn if should_redact else None,
+        )
+    )
+    if should_redact:
+        lines = redact_hidden_entity_refs(state.conn, lines)
     state.palette_lines = lines
 
 
 def collect_world_settings(state: Any) -> None:
     if not table_exists(state.conn, "world_settings"):
         return
-    view = context_visibility_view(state.mode)
+    ensure_visibility_sql_functions(state.conn)
+    view = state_visibility_view(state)
     visibility_clause = world_setting_visibility_sql(view, entity_alias="e", setting_alias="ws")
+    subtype_visibility_clause = entity_subtype_visibility_sql(view, "e", "c")
     rows = state.conn.execute(
         f"""
         select ws.*, e.name, e.summary as entity_summary, e.visibility as entity_visibility
         from world_settings ws
         join entities e on e.id = ws.entity_id
-        where e.status != 'archived'
+        left join clocks c on c.entity_id = e.id
+        where {entity_not_archived_sql("e")}
           {visibility_clause}
+          {subtype_visibility_clause}
         order by ws.priority desc, e.name
         """
     ).fetchall()
@@ -193,14 +246,19 @@ def collect_related_history(state: Any) -> None:
 
 def collect_memory_summaries(state: Any) -> None:
     targets = history_targets(state)
-    state.memory_summaries = find_relevant_memories(state.conn, targets=targets, limit=4)
+    state.memory_summaries = find_relevant_memories(
+        state.conn,
+        targets=targets,
+        limit=4,
+        view=state_visibility_view(state),
+    )
 
 
 def active_clocks_section(state: Any) -> ContextSection:
     return ContextSection(
         key="active_clocks",
         title="Active Clocks",
-        content=render_active_clocks(state.conn, view=context_visibility_view(state.mode)),
+        content=render_active_clocks(state.conn, view=state_visibility_view(state)),
         priority=75,
         required=state.mode == "action",
     )
@@ -347,7 +405,7 @@ def memory_summaries_section(state: Any) -> ContextSection | None:
     return ContextSection(
         key="memory_summaries",
         title="Long-Term Memory",
-        content=render_memory_section(state.memory_summaries),
+        content=render_memory_section(state.memory_summaries, state.conn, view=state_visibility_view(state)),
         priority=64,
         required=False,
     )
@@ -473,15 +531,21 @@ DEFAULT_CONTEXT_COLLECTORS = [
 
 
 def render_active_clocks(conn: sqlite3.Connection, *, view: str = "player") -> str:
-    visibility_clause = clock_visibility_sql(view, "c")
+    ensure_visibility_sql_functions(conn)
+    should_redact = not can_read_hidden(view)
+    clock_visibility_clause = clock_visibility_sql(view, "c")
+    entity_visibility_clause = entity_visibility_sql(view, "e")
+    subtype_visibility_clause = entity_subtype_visibility_sql(view, "e", "c")
     rows = conn.execute(
         f"""
         select e.id, e.name, e.summary, c.clock_type, c.segments_filled, c.segments_total,
                c.visibility, c.trigger_when_full
         from clocks c
         join entities e on e.id = c.entity_id
-        where e.status != 'archived'
-          {visibility_clause}
+        where {entity_not_archived_sql("e")}
+          {entity_visibility_clause}
+          {clock_visibility_clause}
+          {subtype_visibility_clause}
         order by c.visibility, e.name
         limit 10
         """
@@ -498,7 +562,9 @@ def render_active_clocks(conn: sqlite3.Connection, *, view: str = "player") -> s
             f"- `{row['id']}` {row['name']}：{bar} {filled}/{total}（{row['visibility']}）"
         )
         if row["summary"]:
-            lines.append(f"  - {trim_inline(row['summary'], 100)}")
+            summary = redact_hidden_entity_refs(conn, row["summary"]) if should_redact else row["summary"]
+            summary = summary or ""
+            lines.append(f"  - {trim_inline(summary, 100)}")
     return "\n".join(lines)
 
 
@@ -538,6 +604,8 @@ def render_discovery_states(rows: list[sqlite3.Row]) -> str:
 
 
 def render_world_settings_section(state: Any) -> str:
+    view = state_visibility_view(state)
+    should_redact = not can_read_hidden(view)
     lines = [
         "### 大世界设定",
         "",
@@ -549,13 +617,21 @@ def render_world_settings_section(state: Any) -> str:
         content = parse_json(row["content_json"], {})
         linked_rules = parse_json(row["linked_rules_json"], [])
         linked_clocks = parse_json(row["linked_clocks_json"], [])
+        summary = row["summary"] or ""
+        name = item["name"]
+        if should_redact:
+            content = redact_hidden_entity_refs(state.conn, content)
+            linked_rules = redact_hidden_entity_refs(state.conn, linked_rules)
+            linked_clocks = redact_hidden_entity_refs(state.conn, linked_clocks)
+            summary = redact_hidden_entity_refs(state.conn, summary) or ""
+            name = redact_hidden_entity_refs(state.conn, name) or item["name"]
         lines.extend(
             [
-                f"#### `{row['entity_id']}` {item['name']}",
+                f"#### `{row['entity_id']}` {name}",
                 "",
                 f"- 召回原因：{item['reason']}",
                 f"- 分类：{row['category']}；范围：{row['scope']}；可见性：{row['visibility']}",
-                f"- 摘要：{trim_inline(row['summary'], 180)}",
+                f"- 摘要：{trim_inline(summary, 180)}",
             ]
         )
         if linked_rules:
@@ -569,19 +645,29 @@ def render_world_settings_section(state: Any) -> str:
 
 
 def render_world_settings_compact(state: Any) -> str:
+    view = state_visibility_view(state)
+    should_redact = not can_read_hidden(view)
     lines = ["### 必要世界约束", ""]
     for item in state.world_settings:
         row = item["row"]
         linked_rules = parse_json(row["linked_rules_json"], [])
+        if should_redact:
+            linked_rules = redact_hidden_entity_refs(state.conn, linked_rules)
         rule_suffix = f"；规则 {', '.join(str(value) for value in linked_rules[:3])}" if linked_rules else ""
+        name = item["name"]
+        summary = row["summary"] or ""
+        if should_redact:
+            name = redact_hidden_entity_refs(state.conn, name) or item["name"]
+            summary = redact_hidden_entity_refs(state.conn, summary) or ""
         lines.append(
-            f"- `{row['entity_id']}` {item['name']}：{trim_inline(row['summary'], 110)}{rule_suffix}"
+            f"- `{row['entity_id']}` {name}：{trim_inline(summary, 110)}{rule_suffix}"
         )
     lines.append("- 上述内容是结算边界；完整设定区若因预算省略，仍必须遵守这些摘要和关联规则。")
     return "\n".join(lines)
 
 
 def render_history_events(state: Any) -> str:
+    view = state_visibility_view(state)
     rows = [*state.related_events, *state.general_events]
     if not rows:
         return ""
@@ -589,18 +675,23 @@ def render_history_events(state: Any) -> str:
     if state.related_events:
         lines.append("#### 相关事件")
         for row in reversed(state.related_events):
-            lines.append(render_event_line(row))
+            lines.append(render_event_line(row, state.conn, view=view))
     if state.general_events:
         if state.related_events:
             lines.extend(["", "#### 近期事件"])
         for row in reversed(state.general_events):
-            lines.append(render_event_line(row))
+            lines.append(render_event_line(row, state.conn, view=view))
     return "\n".join(lines)
 
 
-def render_event_line(row: sqlite3.Row) -> str:
+def render_event_line(row: sqlite3.Row, conn: sqlite3.Connection | None = None, *, view: str = "player") -> str:
     time = f"（{row['game_time']}）" if row["game_time"] else ""
-    return f"- `{row['turn_id']}` `{row['id']}` {row['title']}{time}：{trim_inline(row['summary'], 120)}"
+    title = row["title"]
+    summary = row["summary"]
+    if conn is not None and not can_read_hidden(view):
+        title = redact_hidden_entity_refs(conn, title) or ""
+        summary = redact_hidden_entity_refs(conn, summary) or ""
+    return f"- `{row['turn_id']}` `{row['id']}` {title}{time}：{trim_inline(summary, 120)}"
 
 
 def find_related_events(state: Any) -> list[sqlite3.Row]:
@@ -706,11 +797,30 @@ def first_location_query(state: Any) -> str | None:
     return current
 
 
-def location_parent_id(conn: sqlite3.Connection, location_id: str | None) -> str | None:
+def location_parent_id(conn: sqlite3.Connection, location_id: str | None, *, view: str = "player") -> str | None:
     if not location_id:
         return None
     row = conn.execute("select parent_id from locations where entity_id = ?", (location_id,)).fetchone()
-    return row["parent_id"] if row and row["parent_id"] else None
+    parent_id = row["parent_id"] if row and row["parent_id"] else None
+    if not parent_id:
+        return None
+    ensure_visibility_sql_functions(conn)
+    visibility_clause = entity_visibility_sql(view, "e")
+    subtype_clause = entity_subtype_visibility_sql(view, "e", "c")
+    parent = conn.execute(
+        f"""
+        select e.id
+        from entities e
+        left join clocks c on c.entity_id = e.id
+        where e.id = ?
+          and {normalized_text_sql("e.type")} = 'location'
+          and {entity_not_archived_sql("e")}
+          {visibility_clause}
+          {subtype_clause}
+        """,
+        (parent_id,),
+    ).fetchone()
+    return str(parent_id) if parent else None
 
 
 def table_exists(conn: sqlite3.Connection, name: str) -> bool:
@@ -721,15 +831,21 @@ def table_exists(conn: sqlite3.Connection, name: str) -> bool:
 def active_clock_ids_for_world_settings(conn: sqlite3.Connection, *, view: str = "player") -> list[str]:
     if not table_exists(conn, "clocks"):
         return []
-    visibility_clause = clock_visibility_sql(view, "c")
+    ensure_visibility_sql_functions(conn)
+    clock_visibility_clause = clock_visibility_sql(view, "c")
+    entity_visibility_clause = entity_visibility_sql(view, "e")
+    subtype_visibility_clause = entity_subtype_visibility_sql(view, "e", "c")
     return [
         row["entity_id"]
         for row in conn.execute(
             f"""
             select c.entity_id
             from clocks c
-            where 1 = 1
-              {visibility_clause}
+            join entities e on e.id = c.entity_id
+            where {entity_not_archived_sql("e")}
+              {entity_visibility_clause}
+              {clock_visibility_clause}
+              {subtype_visibility_clause}
             """
         ).fetchall()
     ]

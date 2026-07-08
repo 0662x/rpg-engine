@@ -20,15 +20,17 @@ from .ai.defaults import (
 )
 from .ai.config import AI_HELPER_BACKENDS, AI_HELPER_FALLBACK_BACKENDS, AI_PROFILES, resolve_ai_helper_settings
 from .campaign_validation import validate_campaign_package
-from .db import utc_now
+from .db import connect, utc_now
 from .game_session import hash_identity
 from .intent_manifest import build_intent_manifest
 from .intent_router import make_intent_ai_config, make_intent_request_meta
+from .redaction import redact_hidden_entity_refs
 from .runtime import GMRuntime, intent_ai_config_kwargs, intent_request_meta_kwargs
 from .save_manager import SaveManager
 from .save_service import inspect_v1_save
 from .surface_inventory import MCP_SURFACE_INVENTORY
 from .validation_issues import issues_from_messages
+from .visibility import normalize_visibility_view
 
 
 MCP_SERVER_NAME = "aigm-kernel"
@@ -529,7 +531,19 @@ class AIGMMCPAdapter:
         )
 
     def save_inspect(self, save: str | None = None) -> dict[str, Any]:
-        return self.call_with_audit("save_inspect", {"save": save}, lambda: inspect_v1_save(self.resolve_save(save)))
+        def run() -> dict[str, Any]:
+            save_path = self.resolve_save(save)
+            result = inspect_v1_save(save_path)
+            if self.config.mcp_profile in HIDDEN_READ_PROFILES:
+                return result
+            try:
+                runtime = GMRuntime.from_path(save_path)
+                with connect(runtime.campaign) as conn:
+                    return redact_hidden_entity_refs(conn, result, drop_empty=False)
+            except Exception:
+                return result
+
+        return self.call_with_audit("save_inspect", {"save": save}, run)
 
     def intent_preflight(
         self,
@@ -607,6 +621,7 @@ class AIGMMCPAdapter:
         self,
         user_text: str,
         save: str | None = None,
+        view: str = "player",
         mode: str = "auto",
         submode: str | None = None,
         budget: int | None = None,
@@ -664,6 +679,7 @@ class AIGMMCPAdapter:
         )
         request = {
             "save": save,
+            "view": view,
             "user_text": user_text,
             "mode": mode,
             "submode": submode,
@@ -691,6 +707,9 @@ class AIGMMCPAdapter:
 
         def run() -> dict[str, Any]:
             self.require_low_level_profile("start_turn")
+            self.require_view_allowed(view)
+            if normalize_visibility_view(mode) == "maintenance" and self.config.mcp_profile not in HIDDEN_READ_PROFILES:
+                raise PermissionError("mode='maintenance' requires trusted_gm, maintenance, or admin MCP profile")
             self.require_player_safe_start(
                 mode=mode,
                 semantic_override=semantic_override,
@@ -717,6 +736,11 @@ class AIGMMCPAdapter:
                 source_user_text_hash=source_user_text_hash,
                 preflight_pending_wait_ms=preflight_pending_wait_ms,
             )
+            runtime_view = (
+                "maintenance"
+                if normalize_visibility_view(mode) == "maintenance" and normalize_visibility_view(view) == "player"
+                else view
+            )
             result = runtime.start_turn(
                 user_text,
                 mode=mode,
@@ -724,6 +748,7 @@ class AIGMMCPAdapter:
                 budget=budget,
                 max_events=max_events,
                 max_depth=max_depth,
+                view=runtime_view,
                 semantic_ai=effective_semantic_ai,
                 semantic_provider=effective_semantic_provider,
                 semantic_model=effective_semantic_model,
@@ -766,6 +791,7 @@ class AIGMMCPAdapter:
         self,
         user_text: str,
         save: str | None = None,
+        view: str = "player",
         mode: str = "auto",
         submode: str | None = None,
         semantic_ai: str | None = None,
@@ -820,6 +846,7 @@ class AIGMMCPAdapter:
         )
         request = {
             "save": save,
+            "view": view,
             "user_text": user_text,
             "mode": mode,
             "submode": submode,
@@ -844,6 +871,7 @@ class AIGMMCPAdapter:
 
         def run() -> dict[str, Any]:
             self.require_low_level_profile("preview_from_text")
+            self.require_view_allowed(view)
             self.require_player_safe_start(
                 mode=mode,
                 semantic_override=semantic_override,
@@ -883,6 +911,7 @@ class AIGMMCPAdapter:
             )
             result = runtime.preview_from_text(
                 user_text,
+                view=view,
                 mode=mode,
                 submode=submode,
                 semantic_ai=effective_semantic_ai,
@@ -904,14 +933,21 @@ class AIGMMCPAdapter:
         save: str | None = None,
         options: dict[str, Any] | None = None,
         source_user_text: str | None = None,
+        view: str = "player",
     ) -> dict[str, Any]:
-        request = {"action": action, "save": save, "options": options or {}, "source_user_text": source_user_text}
+        request = {"action": action, "save": save, "options": options or {}, "source_user_text": source_user_text, "view": view}
 
         def run() -> dict[str, Any]:
             self.require_low_level_profile("preview_action")
+            self.require_view_allowed(view)
             self.require_no_pending_clarification(save, "preview_action")
             runtime = self.runtime_for_save(save)
-            return runtime.preview_action(action, options or {}, source_user_text=source_user_text).to_dict()
+            return runtime.preview_action(
+                action,
+                options or {},
+                context={"view": view},
+                source_user_text=source_user_text,
+            ).to_dict()
 
         return self.call_with_audit("preview_action", request, run)
 
@@ -1038,7 +1074,7 @@ class AIGMMCPAdapter:
             )
 
     def require_view_allowed(self, view: str | None) -> None:
-        normalized = (view or "player").strip().lower()
+        normalized = normalize_visibility_view(view or "player")
         if normalized in {"gm", "maintenance"} and self.config.mcp_profile not in HIDDEN_READ_PROFILES:
             raise PermissionError(f"view={normalized!r} requires trusted_gm, maintenance, or admin MCP profile")
 
@@ -1095,7 +1131,11 @@ class AIGMMCPAdapter:
     def health(self, save: str | None = None) -> dict[str, Any]:
         def run() -> dict[str, Any]:
             runtime = self.runtime_for_save(save)
-            return runtime.health().to_dict()
+            result = runtime.health().to_dict()
+            if self.config.mcp_profile in HIDDEN_READ_PROFILES:
+                return result
+            with connect(runtime.campaign) as conn:
+                return redact_hidden_entity_refs(conn, result, drop_empty=False)
 
         return self.call_with_audit("health", {"save": save}, run)
 
@@ -1347,6 +1387,7 @@ def serve_mcp(config: MCPAdapterConfig, *, transport: str = "stdio") -> None:
     def start_turn(
         user_text: str,
         save: str | None = None,
+        view: str = "player",
         mode: str = "auto",
         submode: str | None = None,
         budget: int | None = None,
@@ -1376,6 +1417,7 @@ def serve_mcp(config: MCPAdapterConfig, *, transport: str = "stdio") -> None:
         return adapter.start_turn(
             user_text=user_text,
             save=save,
+            view=view,
             mode=mode,
             submode=submode,
             budget=budget,
@@ -1417,6 +1459,7 @@ def serve_mcp(config: MCPAdapterConfig, *, transport: str = "stdio") -> None:
     def preview_from_text(
         user_text: str,
         save: str | None = None,
+        view: str = "player",
         mode: str = "auto",
         submode: str | None = None,
         semantic_ai: str | None = None,
@@ -1443,6 +1486,7 @@ def serve_mcp(config: MCPAdapterConfig, *, transport: str = "stdio") -> None:
         return adapter.preview_from_text(
             user_text=user_text,
             save=save,
+            view=view,
             mode=mode,
             submode=submode,
             semantic_ai=semantic_ai,
@@ -1472,9 +1516,10 @@ def serve_mcp(config: MCPAdapterConfig, *, transport: str = "stdio") -> None:
         save: str | None = None,
         options: dict[str, Any] | None = None,
         source_user_text: str | None = None,
+        view: str = "player",
     ) -> dict[str, Any]:
         """Preview an already-selected low-level action contract without saving it."""
-        return adapter.preview_action(action, save, options, source_user_text)
+        return adapter.preview_action(action, save, options, source_user_text, view)
 
     @low_level_tool
     def validate_delta(

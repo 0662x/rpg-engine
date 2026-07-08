@@ -6,7 +6,16 @@ from typing import Any
 from ..campaign import Campaign
 from ..db import get_meta, resolve_entity
 from ..palette import find_palette_candidate, palette_candidate_payload
-from ..preview import build_social_delta, render_social_preview, social_confirmations, social_risks
+from ..preview import (
+    build_social_delta,
+    current_location_row,
+    location_detail_row,
+    render_social_preview,
+    social_confirmations,
+    social_risks,
+)
+from ..redaction import redact_hidden_entity_refs
+from ..visibility import can_read_hidden, normalize_visibility_view
 from ..ux import PlanStep, RepairOption
 from .base import (
     ActionOptionSpec,
@@ -19,8 +28,20 @@ from .base import (
 from .scope import InteractionScope, location_scope
 
 
+def action_request_view(context_data: dict[str, Any] | None) -> str:
+    return normalize_visibility_view(str((context_data or {}).get("view") or "player"))
+
+
+def should_redact_action(context_data: dict[str, Any] | None) -> bool:
+    return not can_read_hidden(action_request_view(context_data))
+
+
+def redact_social_value(conn: sqlite3.Connection, value: Any, *, should_redact: bool) -> Any:
+    return redact_hidden_entity_refs(conn, value, drop_empty=False) if should_redact else value
+
+
 def preview_social(campaign: Campaign, conn: sqlite3.Connection, context: dict[str, Any], options: Any) -> str:
-    del context
+    should_redact = should_redact_action(context)
     text = render_social_preview(
         conn,
         npc_query=option_value(options, "npc") or option_value(options, "target"),
@@ -32,7 +53,8 @@ def preview_social(campaign: Campaign, conn: sqlite3.Connection, context: dict[s
     if not palette_id:
         return text
     candidate = find_palette_candidate(campaign, conn, str(palette_id), intent="social")
-    return text + "\n\n" + render_social_palette_section(candidate, str(palette_id))
+    combined = text + "\n\n" + render_social_palette_section(candidate, str(palette_id))
+    return str(redact_hidden_entity_refs(conn, combined, drop_empty=False)) if should_redact else combined
 
 
 def resolve_social_inputs(conn: sqlite3.Connection, options: Any) -> dict[str, Any]:
@@ -40,15 +62,15 @@ def resolve_social_inputs(conn: sqlite3.Connection, options: Any) -> dict[str, A
     npc_query = option_value(options, "npc") or option_value(options, "target")
     npc = resolve_entity(conn, str(npc_query)) if npc_query else None
     character = conn.execute("select * from characters where entity_id = ?", (npc["id"],)).fetchone() if npc else None
-    current_location = None
-    if meta.get("current_location_id"):
-        current_location = conn.execute("select * from entities where id = ?", (meta["current_location_id"],)).fetchone()
+    current_location = current_location_row(conn, meta)
+    npc_location = location_detail_row(conn, npc["location_id"]) if npc and npc["location_id"] else None
     return {
         "meta": meta,
         "npc_query": npc_query,
         "npc": npc,
         "character": character,
         "current_location": current_location,
+        "npc_location": npc_location,
         "topic": option_value(options, "topic"),
         "approach": option_value(options, "approach"),
     }
@@ -77,10 +99,11 @@ def resolve_social(
     context_data: dict[str, Any],
     options: Any,
 ) -> ResolutionResult:
-    del context_data
+    should_redact = should_redact_action(context_data)
     data = resolve_social_inputs(conn, options)
     scope = social_scope(conn, data)
     confirmations = social_confirmations(
+        conn,
         data["npc_query"],
         data["npc"],
         data["character"],
@@ -159,14 +182,15 @@ def resolve_social(
     if blockers:
         return ResolutionResult(
             status="needs_confirmation",
-            facts_used=tuple(facts),
-            confirmations=tuple(blockers),
-            warnings=tuple(warnings),
+            facts_used=tuple(redact_hidden_entity_refs(conn, tuple(facts), drop_empty=False)),
+            confirmations=tuple(redact_hidden_entity_refs(conn, tuple(blockers), drop_empty=False)),
+            warnings=tuple(redact_hidden_entity_refs(conn, tuple(warnings), drop_empty=False)),
             narrative_constraints=("Ask for NPC, topic, approach and current-location access before saving social results.",),
         )
 
     proposed_delta = build_social_delta(
         meta=data["meta"],
+        current_location_id=data["current_location"]["id"] if data["current_location"] else None,
         npc=data["npc"],
         character=data["character"],
         topic=data["topic"],
@@ -182,28 +206,30 @@ def resolve_social(
         candidate = find_palette_candidate(campaign, conn, str(palette_id), intent="social")
         palette_validation = validate_social_palette_candidate(candidate, str(palette_id))
         if palette_validation.errors:
+            safe_errors = tuple(redact_social_value(conn, palette_validation.errors, should_redact=should_redact))
             return ResolutionResult(
                 status="blocked",
-                facts_used=tuple(facts),
-                warnings=palette_validation.errors,
-                player_message=palette_validation.errors[0],
+                facts_used=tuple(redact_social_value(conn, tuple(facts), should_redact=should_redact)),
+                warnings=safe_errors,
+                player_message=safe_errors[0],
                 narrative_constraints=("Do not use invalid palette candidates as confirmed social facts.",),
             )
         if candidate:
-            attach_palette_to_social_delta(proposed_delta, candidate)
-            palette_facts.append(str(palette_id))
+            attach_palette_to_social_delta(conn, proposed_delta, candidate, should_redact=should_redact)
+            safe_palette_id = str(redact_social_value(conn, str(palette_id), should_redact=should_redact))
+            palette_facts.append(safe_palette_id)
             palette_warnings.append(
-                f"社交主题关联候选 `{palette_id}`；对话只能询问或记录传闻，不能直接确认派系/文明事实。"
+                f"社交主题关联候选 `{safe_palette_id}`；对话只能询问或记录传闻，不能直接确认派系/文明事实。"
             )
     rules = []
     if conn.execute("select 1 from rules where entity_id = 'rule:player-agency'").fetchone():
         rules.append("rule:player-agency")
     return ResolutionResult(
         status="ready",
-        facts_used=tuple([*facts, *palette_facts]),
+        facts_used=tuple(redact_social_value(conn, tuple([*facts, *palette_facts]), should_redact=should_redact)),
         rules_applied=tuple(rules),
-        warnings=tuple([*warnings, *palette_warnings]),
-        proposed_delta=proposed_delta,
+        warnings=tuple(redact_social_value(conn, tuple([*warnings, *palette_warnings]), should_redact=should_redact)),
+        proposed_delta=redact_social_value(conn, proposed_delta, should_redact=should_redact),
         player_message="社交预演已准备好，可以保存结构化对话后果。",
         narrative_constraints=(
             "Use social_turn.md for the response.",
@@ -223,6 +249,7 @@ def validate_social_delta(
     del context_data
     data = resolve_social_inputs(conn, options)
     confirmations = social_confirmations(
+        conn,
         data["npc_query"],
         data["npc"],
         data["character"],
@@ -234,8 +261,10 @@ def validate_social_delta(
     warnings = [item for item in confirmations if item.startswith("关系变化必须记录")]
     if delta.get("intent") != "social":
         warnings.append("delta intent is not social")
-    expected_location_id = data["meta"].get("current_location_id")
-    if delta.get("location_after") and str(delta["location_after"]) != str(expected_location_id):
+    expected_location_id = data["current_location"]["id"] if data.get("current_location") else None
+    if not expected_location_id:
+        errors.append("当前地点未登记、不可见或不存在：不能校验社交位置。")
+    elif delta.get("location_after") and str(delta["location_after"]) != str(expected_location_id):
         errors.append(f"location_after must remain {expected_location_id}")
     for index, event in enumerate(delta.get("events", []) if isinstance(delta.get("events", []), list) else []):
         if not isinstance(event, dict):
@@ -315,8 +344,14 @@ def validate_social_palette_candidate(candidate: dict[str, Any] | None, palette_
     return ActionValidationResult()
 
 
-def attach_palette_to_social_delta(delta: dict[str, Any], candidate: dict[str, Any]) -> None:
-    payload = palette_candidate_payload(candidate)
+def attach_palette_to_social_delta(
+    conn: sqlite3.Connection,
+    delta: dict[str, Any],
+    candidate: dict[str, Any],
+    *,
+    should_redact: bool = True,
+) -> None:
+    payload = redact_social_value(conn, palette_candidate_payload(candidate), should_redact=should_redact)
     for event in delta.get("events", []):
         if not isinstance(event, dict):
             continue
@@ -336,8 +371,9 @@ def social_facts(data: dict[str, Any]) -> list[str]:
         facts.append(str(current["id"]))
     if npc:
         facts.append(str(npc["id"]))
-        if npc["location_id"]:
-            facts.append(str(npc["location_id"]))
+    npc_location = data.get("npc_location")
+    if npc_location:
+        facts.append(str(npc_location["id"]))
     return list(dict.fromkeys(facts))
 
 
@@ -358,8 +394,8 @@ def location_blocked_only(blockers: list[str]) -> bool:
 def location_name(conn: sqlite3.Connection, location_id: str | None) -> str:
     if not location_id:
         return "未知地点"
-    row = conn.execute("select name from entities where id = ?", (location_id,)).fetchone()
-    return str(row["name"]) if row else str(location_id)
+    row = location_detail_row(conn, location_id)
+    return str(row["name"]) if row else "未知地点"
 
 
 SOCIAL_RESOLVER = ActionResolverSpec(

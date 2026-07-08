@@ -8,9 +8,19 @@ from pathlib import Path
 from typing import Any
 
 from .campaign import Campaign
-from .db import get_meta, get_player_entity_id, utc_now
+from .db import entity_subtype_visibility_sql, get_meta, get_player_entity_id, utc_now
+from .redaction import redact_hidden_entity_refs
 from .render import parse_json
 from .time_weather import format_time_brief, format_weather_brief
+from .visibility import (
+    MAINTENANCE_VIEW,
+    can_read_hidden,
+    clock_visibility_sql,
+    ensure_visibility_sql_functions,
+    entity_not_archived_sql,
+    entity_visibility_sql,
+    normalized_text_sql,
+)
 
 
 DAY_PATTERN = re.compile(r"第\s*(\d+)\s*天")
@@ -95,16 +105,18 @@ def rebuild_memory_summaries(campaign: Campaign, conn: sqlite3.Connection) -> Me
 
 
 def build_memory_records(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    ensure_visibility_sql_functions(conn)
+    projection_view = MAINTENANCE_VIEW
     memories: list[dict[str, Any]] = []
-    memories.extend(build_day_memories(conn))
-    memories.extend(build_world_memories(conn))
-    memories.extend(build_character_memories(conn))
-    memories.extend(build_project_memories(conn))
-    memories.extend(build_faction_memories(conn))
+    memories.extend(build_day_memories(conn, view=projection_view))
+    memories.extend(build_world_memories(conn, view=projection_view))
+    memories.extend(build_character_memories(conn, view=projection_view))
+    memories.extend(build_project_memories(conn, view=projection_view))
+    memories.extend(build_faction_memories(conn, view=projection_view))
     return memories
 
 
-def build_day_memories(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+def build_day_memories(conn: sqlite3.Connection, *, view: str = "player") -> list[dict[str, Any]]:
     meta = get_meta(conn)
     fallback_day = str(meta.get("current_game_day") or "unknown")
     rows = recent_memory_events(conn, limit=80)
@@ -121,12 +133,12 @@ def build_day_memories(conn: sqlite3.Connection) -> list[dict[str, Any]]:
         if history_rows:
             selected = history_rows[-2:]
             non_history = [row for row in ordered if row["type"] != "history_reconstruction"][-4:]
-            points = history_points(selected)
-            points.extend(event_point(row) for row in non_history)
+            points = history_points(conn, selected, view=view)
+            points.extend(event_point(row, conn, view=view) for row in non_history)
             source_rows = [*selected, *non_history]
         else:
             source_rows = ordered[-12:]
-            points = [event_point(row) for row in ordered[-8:]]
+            points = [event_point(row, conn, view=view) for row in ordered[-8:]]
         memories.append(
             {
                 "id": f"summary:day-{safe_id(day).zfill(3) if day.isdigit() else safe_id(day)}",
@@ -142,14 +154,24 @@ def build_day_memories(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     return memories
 
 
-def build_world_memories(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+def build_world_memories(conn: sqlite3.Connection, *, view: str = "player") -> list[dict[str, Any]]:
+    ensure_visibility_sql_functions(conn)
     meta = get_meta(conn)
+    should_redact = not can_read_hidden(view)
+    clock_public_clause = f"and {normalized_text_sql('c.visibility')} in ('visible', 'hinted')" if should_redact else ""
+    entity_visibility_clause = entity_visibility_sql(view, "e")
+    clock_visibility_clause = clock_visibility_sql(view, "c")
+    subtype_visibility_clause = entity_subtype_visibility_sql(view, "e", "c")
     clocks = conn.execute(
-        """
+        f"""
         select e.id, e.name, e.summary, c.segments_filled, c.segments_total, c.visibility, c.trigger_when_full
         from clocks c
         join entities e on e.id = c.entity_id
-        where c.visibility in ('visible', 'hinted')
+        where {entity_not_archived_sql("e")}
+          {clock_public_clause}
+          {entity_visibility_clause}
+          {clock_visibility_clause}
+          {subtype_visibility_clause}
         order by c.visibility, e.name
         limit 8
         """
@@ -157,10 +179,13 @@ def build_world_memories(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     points = [
         f"当前时间：{format_time_brief(meta)}",
         f"当前天气：{format_weather_brief(meta)}",
-        f"当前位置：{meta.get('current_location_id', 'unknown')}",
+        f"当前位置：{current_world_location_label(conn, meta, view=view)}",
     ]
     for row in clocks:
-        points.append(f"{row['name']} {row['segments_filled']}/{row['segments_total']}：{row['summary'] or row['trigger_when_full']}")
+        clock_text = str(row["summary"] or row["trigger_when_full"] or "")
+        if should_redact:
+            clock_text = redact_hidden_entity_refs(conn, clock_text) or ""
+        points.append(f"{row['name']} {row['segments_filled']}/{row['segments_total']}：{clock_text}")
     return [
         {
             "id": "summary:current-world",
@@ -174,15 +199,40 @@ def build_world_memories(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     ]
 
 
-def build_character_memories(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+def current_world_location_label(conn: sqlite3.Connection, meta: dict[str, str], *, view: str = "player") -> str:
+    location_id = meta.get("current_location_id", "")
+    if not location_id:
+        return "未知"
+    visibility_clause = entity_visibility_sql(view, "e")
+    subtype_visibility_clause = entity_subtype_visibility_sql(view, "e", "c")
+    row = conn.execute(
+        f"""
+        select e.id, e.name
+        from entities e
+        left join clocks c on c.entity_id = e.id
+        where e.id = ?
+          and {normalized_text_sql("e.type")} = 'location'
+          and {entity_not_archived_sql("e")}
+          {visibility_clause}
+          {subtype_visibility_clause}
+        """,
+        (location_id,),
+    ).fetchone()
+    return f"{row['id']} {row['name']}" if row else "当前地点不可见或不存在"
+
+
+def build_character_memories(conn: sqlite3.Connection, *, view: str = "player") -> list[dict[str, Any]]:
+    ensure_visibility_sql_functions(conn)
     player_entity_id = get_player_entity_id(conn)
+    should_redact = not can_read_hidden(view)
+    visibility_clause = entity_visibility_sql(view, "e")
     rows = conn.execute(
-        """
+        f"""
         select e.*, c.role, c.attitude, c.trust, c.health_state, c.goals_json, c.knowledge_json
         from characters c
         join entities e on e.id = c.entity_id
-        where e.status = 'active'
-          and e.visibility != 'hidden'
+        where {normalized_text_sql("e.status")} = 'active'
+          {visibility_clause}
           and e.id != ?
         order by c.trust desc, e.name
         limit 20
@@ -193,14 +243,18 @@ def build_character_memories(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     for row in rows:
         events = related_events_for_subject(conn, row["id"], row["name"], limit=5)
         goals = parse_json(row["goals_json"], [])
+        row_summary = str(row["summary"] or "")
+        if should_redact:
+            goals = redact_hidden_entity_refs(conn, goals) or []
+            row_summary = redact_hidden_entity_refs(conn, row_summary) or ""
         points = [
             f"角色：{row['role'] or '未知'}",
             f"态度/信任：{row['attitude'] or '未知'} / {row['trust']}",
             f"健康：{row['health_state'] or '未知'}",
-            f"摘要：{row['summary']}",
+            f"摘要：{row_summary}",
         ]
         points.extend(f"目标：{goal}" for goal in as_text_list(goals)[:3])
-        points.extend(event_point(event) for event in events[:3])
+        points.extend(event_point(event, conn, view=view) for event in events[:3])
         memories.append(
             {
                 "id": f"reflection:character:{row['id'].replace(':', '-')}",
@@ -216,15 +270,18 @@ def build_character_memories(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     return memories
 
 
-def build_project_memories(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+def build_project_memories(conn: sqlite3.Connection, *, view: str = "player") -> list[dict[str, Any]]:
+    ensure_visibility_sql_functions(conn)
+    should_redact = not can_read_hidden(view)
+    visibility_clause = entity_visibility_sql(view, "e")
     rows = conn.execute(
-        """
-        select *
-        from entities
-        where status = 'active'
-          and type = 'project'
-          and visibility != 'hidden'
-        order by name
+        f"""
+        select e.*
+        from entities e
+        where {normalized_text_sql("e.status")} = 'active'
+          and e.type = 'project'
+          {visibility_clause}
+        order by e.name
         limit 30
         """
     ).fetchall()
@@ -232,11 +289,15 @@ def build_project_memories(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     for row in rows:
         events = related_events_for_subject(conn, row["id"], row["name"], limit=5)
         details = parse_json(row["details_json"], {})
-        points = [f"摘要：{row['summary']}"]
+        row_summary = str(row["summary"] or "")
+        if should_redact:
+            details = redact_hidden_entity_refs(conn, details) or {}
+            row_summary = redact_hidden_entity_refs(conn, row_summary) or ""
+        points = [f"摘要：{row_summary}"]
         for key in ["status", "next_steps", "risks", "linked_entities"]:
             if key in details:
                 points.append(f"{key}: {format_memory_value(details[key])}")
-        points.extend(event_point(event) for event in events[:3])
+        points.extend(event_point(event, conn, view=view) for event in events[:3])
         memories.append(
             {
                 "id": f"reflection:project:{row['id'].replace(':', '-')}",
@@ -252,15 +313,18 @@ def build_project_memories(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     return memories
 
 
-def build_faction_memories(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+def build_faction_memories(conn: sqlite3.Connection, *, view: str = "player") -> list[dict[str, Any]]:
+    ensure_visibility_sql_functions(conn)
+    should_redact = not can_read_hidden(view)
+    visibility_clause = entity_visibility_sql(view, "e")
     rows = conn.execute(
-        """
-        select *
-        from entities
-        where status = 'active'
-          and type in ('faction', 'faction_state', 'species')
-          and visibility != 'hidden'
-        order by type, name
+        f"""
+        select e.*
+        from entities e
+        where {normalized_text_sql("e.status")} = 'active'
+          and e.type in ('faction', 'faction_state', 'species')
+          {visibility_clause}
+        order by e.type, e.name
         limit 20
         """
     ).fetchall()
@@ -268,12 +332,17 @@ def build_faction_memories(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     for row in rows:
         events = related_events_for_subject(conn, row["id"], row["name"], limit=5)
         details = parse_json(row["details_json"], {})
+        if should_redact:
+            details = redact_hidden_entity_refs(conn, details) or {}
         profile = details.get("profile") or details.get("encyclopedia") or details
-        points = [f"摘要：{row['summary']}"]
+        row_summary = str(row["summary"] or "")
+        if should_redact:
+            row_summary = redact_hidden_entity_refs(conn, row_summary) or ""
+        points = [f"摘要：{row_summary}"]
         if isinstance(profile, dict):
             for key, value in list(profile.items())[:4]:
                 points.append(f"{key}: {format_memory_value(value)}")
-        points.extend(event_point(event) for event in events[:3])
+        points.extend(event_point(event, conn, view=view) for event in events[:3])
         memories.append(
             {
                 "id": f"reflection:faction:{row['id'].replace(':', '-')}",
@@ -320,9 +389,18 @@ def related_events_for_subject(conn: sqlite3.Connection, subject_id: str, name: 
     ).fetchall()
 
 
-def find_relevant_memories(conn: sqlite3.Connection, *, targets: list[str], limit: int = 4) -> list[sqlite3.Row]:
+def find_relevant_memories(
+    conn: sqlite3.Connection,
+    *,
+    targets: list[str],
+    limit: int = 4,
+    view: str = "player",
+) -> list[sqlite3.Row]:
     if not memory_table_exists(conn):
         return []
+    ensure_visibility_sql_functions(conn)
+    visibility_clause = entity_visibility_sql(view, "e")
+    subtype_visibility_clause = entity_subtype_visibility_sql(view, "e", "c")
     clauses = ["m.kind in ('world', 'day')"]
     params: list[str] = []
     for target in targets[:16]:
@@ -336,7 +414,8 @@ def find_relevant_memories(conn: sqlite3.Connection, *, targets: list[str], limi
         select m.*
         from memory_summaries m
         left join entities e on e.id = m.subject_id
-        where (e.id is null or e.visibility != 'hidden')
+        left join clocks c on c.entity_id = e.id
+        where (e.id is null or ({entity_not_archived_sql("e")} {visibility_clause} {subtype_visibility_clause}))
           and ({' or '.join(clauses)})
         order by
           case m.kind
@@ -353,27 +432,54 @@ def find_relevant_memories(conn: sqlite3.Connection, *, targets: list[str], limi
         """,
         [*params, limit],
     ).fetchall()
-    return rows
+    if can_read_hidden(view):
+        return rows
+    return [redact_memory_row_for_view(conn, row, view=view) for row in rows]
 
 
-def render_memory_section(rows: list[sqlite3.Row]) -> str:
+def render_memory_section(rows: list[sqlite3.Row], conn: sqlite3.Connection | None = None, *, view: str = "player") -> str:
     lines = ["### 长期记忆摘要", ""]
     for row in rows:
-        lines.append(f"- `{row['id']}` {row['title']}（{row['kind']}）：{row['summary']}")
+        title = row["title"]
+        summary = row["summary"]
         points = parse_json(row["key_points_json"], [])
+        if conn is not None and not can_read_hidden(view):
+            title = redact_hidden_entity_refs(conn, title) or ""
+            summary = redact_hidden_entity_refs(conn, summary) or ""
+            points = redact_hidden_entity_refs(conn, points) or []
+        lines.append(f"- `{row['id']}` {title}（{row['kind']}）：{summary}")
         for point in as_text_list(points)[:3]:
             lines.append(f"  - {point}")
     return "\n".join(lines)
 
 
+def redact_memory_row_for_view(conn: sqlite3.Connection, row: sqlite3.Row, *, view: str = "player") -> dict[str, Any]:
+    safe = dict(row)
+    if can_read_hidden(view):
+        return safe
+    safe["subject_id"] = redact_hidden_entity_refs(conn, safe.get("subject_id"), drop_empty=False)
+    safe["title"] = redact_hidden_entity_refs(conn, str(safe.get("title") or ""), drop_empty=False) or ""
+    safe["summary"] = redact_hidden_entity_refs(conn, str(safe.get("summary") or ""), drop_empty=False) or ""
+    points = parse_json(str(safe.get("key_points_json") or "[]"), [])
+    safe["key_points_json"] = json.dumps(
+        redact_hidden_entity_refs(conn, points, drop_empty=False) or [],
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    return safe
+
+
 def write_memory_report(campaign: Campaign, conn: sqlite3.Connection) -> Path:
-    rows = conn.execute(
-        """
-        select *
-        from memory_summaries
-        order by kind, id
-        """
-    ).fetchall()
+    rows = [
+        redact_memory_row_for_view(conn, row, view="player")
+        for row in conn.execute(
+            """
+            select *
+            from memory_summaries
+            order by kind, id
+            """
+        ).fetchall()
+    ]
     path = campaign.root / "reports" / "memory-current.md"
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = [
@@ -406,20 +512,30 @@ def parse_day(value: str | None) -> str | None:
     return match.group(1) if match else None
 
 
-def event_point(row: sqlite3.Row) -> str:
+def event_point(row: sqlite3.Row, conn: sqlite3.Connection | None = None, *, view: str = "player") -> str:
     title = str(row["title"] or row["type"])
     summary = str(row["summary"] or "")
+    if conn is not None and not can_read_hidden(view):
+        title = redact_hidden_entity_refs(conn, title) or ""
+        summary = redact_hidden_entity_refs(conn, summary) or ""
     return trim_join([title, summary], "：", 180)
 
 
-def history_points(rows: list[sqlite3.Row]) -> list[str]:
+def history_points(conn: sqlite3.Connection, rows: list[sqlite3.Row], *, view: str = "player") -> list[str]:
     points: list[str] = []
     for row in rows:
-        points.append(event_point(row))
+        points.append(event_point(row, conn, view=view))
         payload = parse_json(row["payload_json"], {})
         key_points = payload.get("key_points") if isinstance(payload, dict) else None
         if isinstance(key_points, list):
-            points.extend(str(point) for point in key_points[:8] if str(point))
+            if can_read_hidden(view):
+                points.extend(str(point) for point in key_points[:8] if str(point))
+            else:
+                points.extend(
+                    str(redact_hidden_entity_refs(conn, str(point)) or "")
+                    for point in key_points[:8]
+                    if str(point)
+                )
         provenance = payload.get("provenance") if isinstance(payload, dict) else None
         if isinstance(provenance, dict):
             tier = provenance.get("tier")

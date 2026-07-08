@@ -6,6 +6,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+from .entity_access import validate_delta_entity_references
 from .resource_paths import schema_resource_text
 
 
@@ -213,8 +214,16 @@ def validate_entity_subrecords(errors: list[str], entity: dict[str, Any], path: 
             errors.append(f"{path}.character: must be object")
         elif "trust" in character and not isinstance(character["trust"], int):
             errors.append(f"{path}.character.trust: must be integer")
-    if "crop_plot" in entity and not isinstance(entity["crop_plot"], dict):
-        errors.append(f"{path}.crop_plot: must be object")
+    if "crop_plot" in entity:
+        crop_plot = entity["crop_plot"]
+        if not isinstance(crop_plot, dict):
+            errors.append(f"{path}.crop_plot: must be object")
+        else:
+            if "plot_no" not in crop_plot or isinstance(crop_plot["plot_no"], bool) or not isinstance(crop_plot["plot_no"], int):
+                errors.append(f"{path}.crop_plot.plot_no: required integer")
+            require_string(errors, crop_plot, "crop_entity_id", path_prefix=f"{path}.crop_plot")
+    elif entity_type == "crop_plot":
+        errors.append(f"{path}.crop_plot: required")
 
 
 def validate_tick_clocks(errors: list[str], tick_clocks: Any, conn: sqlite3.Connection | None) -> None:
@@ -263,29 +272,9 @@ def validate_cross_field_rules(errors: list[str], delta: dict[str, Any]) -> None
 
 
 def validate_database_refs(errors: list[str], delta: dict[str, Any], conn: sqlite3.Connection) -> None:
-    upsert_ids = {
-        str(entity.get("id"))
-        for entity in delta.get("upsert_entities", [])
-        if isinstance(entity, dict) and entity.get("id")
-    }
-    for field in ["location_before", "location_after"]:
-        entity_id = delta.get(field)
-        if entity_id:
-            validate_entity_ref(errors, conn, str(entity_id), f"$.{field}", upsert_ids)
-    meta = delta.get("meta", {})
-    if isinstance(meta, dict) and meta.get("current_location_id"):
-        validate_entity_ref(errors, conn, str(meta["current_location_id"]), "$.meta.current_location_id", upsert_ids)
-    for index, entity in enumerate(delta.get("upsert_entities", [])):
-        if not isinstance(entity, dict):
-            continue
-        path = f"$.upsert_entities[{index}]"
-        for field in ["location_id", "owner_id"]:
-            if entity.get(field):
-                validate_entity_ref(errors, conn, str(entity[field]), f"{path}.{field}", upsert_ids)
-        if isinstance(entity.get("character"), dict) and entity["character"].get("species_id"):
-            validate_entity_ref(errors, conn, str(entity["character"]["species_id"]), f"{path}.character.species_id", upsert_ids)
-        if isinstance(entity.get("location"), dict) and entity["location"].get("parent_id"):
-            validate_entity_ref(errors, conn, str(entity["location"]["parent_id"]), f"{path}.location.parent_id", upsert_ids)
+    for error in validate_delta_entity_references(conn, delta):
+        if error not in errors:
+            errors.append(error)
 
 
 def validate_entity_ref(
@@ -295,8 +284,6 @@ def validate_entity_ref(
     path: str,
     upsert_ids: set[str],
 ) -> None:
-    if entity_id in upsert_ids:
-        return
-    row = conn.execute("select 1 from entities where id = ?", (entity_id,)).fetchone()
-    if not row:
-        errors.append(f"{path}: missing entity {entity_id}")
+    from .entity_access import validate_entity_reference
+
+    validate_entity_reference(errors, conn, entity_id, path, upsert_ids)

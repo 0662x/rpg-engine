@@ -874,13 +874,13 @@ class CoreRuleContentAndSaveValidationCoverageTests(unittest.TestCase):
                 snapshot_path = save_dir / "bad-snapshot.json"
                 snapshot_errors: list[str] = []
                 snapshot_path.write_text("{bad", encoding="utf-8")
-                validate_snapshot_json(snapshot_path, meta, campaign.campaign_id, snapshot_errors)
+                validate_snapshot_json(snapshot_path, snapshot_path, conn, meta, campaign.campaign_id, snapshot_errors)
                 snapshot_path.write_text("[]", encoding="utf-8")
-                validate_snapshot_json(snapshot_path, meta, campaign.campaign_id, snapshot_errors)
+                validate_snapshot_json(snapshot_path, snapshot_path, conn, meta, campaign.campaign_id, snapshot_errors)
                 snapshot_path.write_text(json.dumps({"campaign": {"id": "wrong"}, "meta": []}), encoding="utf-8")
-                validate_snapshot_json(snapshot_path, meta, campaign.campaign_id, snapshot_errors)
+                validate_snapshot_json(snapshot_path, snapshot_path, conn, meta, campaign.campaign_id, snapshot_errors)
                 snapshot_path.write_text(json.dumps({"campaign": {"id": campaign.campaign_id}, "meta": {"current_turn_id": "wrong"}}), encoding="utf-8")
-                validate_snapshot_json(snapshot_path, meta, campaign.campaign_id, snapshot_errors)
+                validate_snapshot_json(snapshot_path, snapshot_path, conn, meta, campaign.campaign_id, snapshot_errors)
 
                 cards_dir = save_dir / "bad-cards"
                 cards_dir.mkdir()
@@ -1022,7 +1022,7 @@ class CoreRuleContextResolutionRenderingCoverageTests(unittest.TestCase):
         self.assertEqual(linked_priority(EntityHit("x", "location", "", "", "active", None, None, "r", 1), SimpleNamespace(submode="scene")), 58)
         self.assertEqual(profile_links(EntityHit("x", "item", "", "", "active", None, None, "r", 1), {"combat_profile": {"compatible_ammo": {"id": "ammo"}}, "ammo_profile": {"compatible_weapon_id": "weapon"}}, SimpleNamespace(submode="scene"))[0][2], 68)
         self.assertEqual(recipe_links(EntityHit("x", "recipe", "", "", "active", None, None, "r", 1), {}, SimpleNamespace(submode="craft")), [])
-        self.assertEqual(sanitize_fts_query("a b c d e f g"), "a OR b OR c OR d OR e OR f")
+        self.assertEqual(sanitize_fts_query("a b c d e f g"), "")
         self.assertEqual(dedupe_texts([" a ", "", "a", "b"]), ["a", "b"])
         self.assertTrue(contains_any("abc", ["", "b"]))
         self.assertTrue(is_direct_hit(EntityHit("x", "item", "", "", "active", None, None, "candidate search", 1)))
