@@ -4,6 +4,7 @@ from typing import Any
 
 from .base import ContentRuntime, ContentTypeSpec, MergePolicy
 from .registry import ContentRegistry
+from ..progress_access import is_valid_clock_id
 
 
 def _require_strings(record: dict[str, Any], keys: tuple[str, ...]) -> list[str]:
@@ -69,8 +70,8 @@ def validate_rule_record(record: dict[str, Any]) -> list[str]:
 
 def validate_clock_record(record: dict[str, Any]) -> list[str]:
     errors = _require_strings(record, ("id", "name", "trigger_when_full"))
-    if record.get("id") and not str(record["id"]).startswith("clock:"):
-        errors.append("id: clock id must start with clock:")
+    if record.get("id") and not is_valid_clock_id(record["id"]):
+        errors.append("id: invalid clock id")
     total = record.get("segments_total")
     filled = record.get("segments_filled", 0)
     if not isinstance(total, int) or isinstance(total, bool) or total <= 0:

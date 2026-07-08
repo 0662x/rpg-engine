@@ -107,7 +107,7 @@ from rpg_engine.content_validation import (
     validate_metadata,
 )
 from rpg_engine.content_types import get_default_registry
-from rpg_engine.db import connect, upsert_entity
+from rpg_engine.db import connect, upsert_clock, upsert_entity
 from rpg_engine.intent_router import action_intent_from_dict, turn_contract_from_dict
 from rpg_engine.proposal import (
     ApprovedOutcome,
@@ -560,6 +560,31 @@ class CoreRuleProposalCoverageTests(unittest.TestCase):
                     proposal_from_parts(intent=intent_data(action="missing"), contract=contract_data(intent_data(action="missing"))),
                     registry=registry_with("ready"),
                 )
+                upsert_clock(
+                    conn,
+                    {
+                        "id": "clock:hidden-proposal",
+                        "name": "Hidden Proposal Clock",
+                        "summary": "Hidden from player proposal validation.",
+                        "clock_type": "threat",
+                        "segments_total": 4,
+                        "segments_filled": 1,
+                        "visibility": "hidden",
+                        "trigger_when_full": "Hidden consequence.",
+                    },
+                )
+                conn.commit()
+                hidden_clock = validate_turn_proposal(
+                    campaign,
+                    conn,
+                    proposal_from_parts(
+                        delta=base_delta(
+                            events=[{"type": "test", "title": "Clock", "summary": "Progress changed.", "source": "test"}],
+                            tick_clocks=[{"id": "clock:hidden-proposal", "delta": 1}],
+                        )
+                    ),
+                    registry=registry_with("ready"),
+                )
                 with self.assertRaises(TypeError):
                     validate_turn_proposal(campaign, conn, "bad")  # type: ignore[arg-type]
 
@@ -577,6 +602,8 @@ class CoreRuleProposalCoverageTests(unittest.TestCase):
         self.assertIn("$.action: required", no_action.errors)
         self.assertEqual(unknown.status, "rejected")
         self.assertTrue(any("unknown action resolver" in item for item in unknown.errors))
+        self.assertEqual(hidden_clock.status, "rejected")
+        self.assertTrue(any("unavailable clock clock:hidden-proposal" in item for item in hidden_clock.errors))
 
     def test_proposal_delta_source_contract_and_preflight_identity_branches(self) -> None:
         proposal = proposal_from_parts(delta_source="response_draft", human_confirmed=False)

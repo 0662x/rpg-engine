@@ -302,10 +302,12 @@ def validate_delta_schema_stage(
 ) -> ValidationStageResult:
     if delta is None:
         return skipped("delta_schema", profile, "no delta provided")
-    errors = tuple(validate_delta_schema(delta, conn))
+    caller_view = "player" if profile in {"player_turn_commit", "response_acceptance"} else "maintenance"
+    errors = tuple(validate_delta_schema(delta, conn, caller_view=caller_view))
+    artifacts = {"caller_view": caller_view}
     if errors:
-        return ValidationStageResult("delta_schema", profile, "blocked", issues=errors)
-    return ok("delta_schema", profile)
+        return ValidationStageResult("delta_schema", profile, "blocked", issues=errors, artifacts=artifacts)
+    return ok("delta_schema", profile, artifacts=artifacts)
 
 
 def validate_capability_stage(

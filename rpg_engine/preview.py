@@ -979,6 +979,17 @@ def suggested_clock_ticks(
     return [{"id": clock["entity_id"], "delta": 1, "reason": "爆炸/巨大声响/暴露痕迹"}]
 
 
+def clock_tick_deltas(suggested_ticks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    ticks: list[dict[str, Any]] = []
+    for item in suggested_ticks:
+        tick = {"id": item["id"], "delta": item["delta"]}
+        reason = str(item.get("reason") or "").strip()
+        if reason:
+            tick["reason"] = reason
+        ticks.append(tick)
+    return ticks
+
+
 def build_combat_delta(
     conn: sqlite3.Connection,
     *,
@@ -1016,7 +1027,7 @@ def build_combat_delta(
             }
         ],
         "upsert_entities": upserts,
-        "tick_clocks": [{"id": item["id"], "delta": item["delta"]} for item in suggested_ticks],
+        "tick_clocks": clock_tick_deltas(suggested_ticks),
     }
 
 
@@ -1249,7 +1260,7 @@ def build_rest_delta(
             }
         ],
         "upsert_entities": [],
-        "tick_clocks": [{"id": item["id"], "delta": item["delta"]} for item in suggested_ticks],
+        "tick_clocks": clock_tick_deltas(suggested_ticks),
         "meta": enrich_time_weather_meta({
             "current_game_day": str(target_day) if target_day else str(meta.get("current_game_day", "")),
             "current_time_block": morning_time_block(target_day, target_time, energy_label=energy_label),
@@ -1428,8 +1439,16 @@ def recipe_tick_clocks(recipe_profile: Any) -> list[dict[str, Any]]:
         return []
     ticks = []
     for item in recipe_profile.get("suggested_clock_ticks", []):
-        if isinstance(item, dict) and item.get("id"):
-            ticks.append({"id": str(item["id"]), "delta": int(item.get("delta", 0))})
+        if not isinstance(item, dict) or not item.get("id"):
+            continue
+        delta = item.get("delta", 0)
+        if isinstance(delta, bool) or not isinstance(delta, int):
+            continue
+        tick = {"id": str(item["id"]), "delta": delta}
+        reason = str(item.get("reason") or "").strip()
+        if reason:
+            tick["reason"] = reason
+        ticks.append(tick)
     return ticks
 
 
@@ -2327,7 +2346,7 @@ def build_social_delta(
             }
         ],
         "upsert_entities": [],
-        "tick_clocks": [{"id": item["id"], "delta": item["delta"]} for item in suggested_ticks],
+        "tick_clocks": clock_tick_deltas(suggested_ticks),
     }
 
 
@@ -2444,7 +2463,7 @@ def build_travel_delta(
             }
         ],
         "upsert_entities": [],
-        "tick_clocks": [{"id": item["id"], "delta": item["delta"]} for item in suggested_ticks],
+        "tick_clocks": clock_tick_deltas(suggested_ticks),
         "meta": {
             "current_location_id": destination_id or current_id,
             "current_time_block": f"{meta.get('current_time_block', '当前时段')} + {format_minutes(travel_minutes)}（到达{destination['name'] if destination else '未知地点'}，草案）",

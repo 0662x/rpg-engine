@@ -121,7 +121,10 @@ class CurrentNativeActionTests(FormalCurrentSaveReadOnlyTestCase):
         self.assertEqual(delta["location_before"], "loc:home-mycelium-house")
         self.assertEqual(delta["location_after"], "loc:home-mycelium-house")
         self.assertEqual(delta["meta"]["current_game_day"], "29")
-        self.assertIn({"id": "clock:drought-spring", "delta": 1}, delta["tick_clocks"])
+        self.assertIn("clock:drought-spring", {item["id"] for item in delta["tick_clocks"]})
+        drought_tick = next(item for item in delta["tick_clocks"] if item["id"] == "clock:drought-spring")
+        self.assertEqual(drought_tick["delta"], 1)
+        self.assertTrue(drought_tick["reason"].strip())
 
     def test_explore_preview_delta_does_not_silently_confirm_hidden_facts(self) -> None:
         runtime = GMRuntime.from_path(SAVE_ROOT)

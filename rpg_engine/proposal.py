@@ -280,7 +280,7 @@ def validate_turn_proposal(
 
     approved_delta = proposal.delta
 
-    delta_errors = validate_delta_schema(approved_delta, conn)
+    delta_errors = validate_delta_schema(approved_delta, conn, caller_view=proposal_caller_view(proposal))
     errors.extend(f"delta: {item}" for item in delta_errors)
     delta_contract = spec.delta_contract(campaign, conn, {}, options, approved_delta)
     collect_delta_result(delta_contract, errors, warnings, confirmations)
@@ -332,6 +332,12 @@ def validate_contract_matches_intent(proposal: TurnProposal, errors: list[str]) 
         errors.append("$.turn_contract.intent.action: does not match proposal intent")
     if proposal.turn_contract.validation_profile != "player_turn_commit" and proposal.delta_source != "maintenance_delta":
         errors.append("$.turn_contract.validation_profile: player turn proposal requires player_turn_commit")
+
+
+def proposal_caller_view(proposal: TurnProposal) -> str:
+    if proposal.turn_contract and proposal.turn_contract.validation_profile == "player_turn_commit":
+        return "player"
+    return "maintenance"
 
 
 def validate_context_id_matches_intent(

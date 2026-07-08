@@ -9,7 +9,7 @@ from dataclasses import replace
 
 from rpg_engine.campaign import Campaign, load_campaign
 from rpg_engine.commit_service import commit_turn_delta
-from rpg_engine.db import connect, init_database
+from rpg_engine.db import connect, init_database, upsert_clock
 from rpg_engine.proposal import turn_proposal_from_dict
 from rpg_engine.runtime import GMRuntime
 from rpg_engine.validation_pipeline import VALIDATION_PROFILES, run_validation_pipeline, stable_delta_digest
@@ -241,6 +241,46 @@ class ValidationPipelineTests(unittest.TestCase):
 
             self.assertTrue(report.ok, report.to_dict())
             self.assertEqual(current_turn(campaign), "turn:seed")
+
+    def test_player_turn_profile_uses_player_progress_visibility(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_campaign(tmp, MINIMAL_FIXTURE))
+            delta = {
+                "expected_turn_id": "turn:seed",
+                "command_id": "validation-hidden-clock",
+                "user_text": "advance hidden clock",
+                "intent": "clock",
+                "summary": "Hidden progress attempted.",
+                "events": [{"type": "test", "title": "Clock", "summary": "Progress changed.", "source": "test"}],
+                "tick_clocks": [{"id": "clock:hidden-pipeline", "delta": 1, "reason": "Hidden pipeline pressure."}],
+            }
+            with connect(campaign) as conn:
+                upsert_clock(
+                    conn,
+                    {
+                        "id": "clock:hidden-pipeline",
+                        "name": "Hidden Pipeline Clock",
+                        "summary": "Hidden from player validation.",
+                        "clock_type": "threat",
+                        "segments_total": 4,
+                        "segments_filled": 1,
+                        "visibility": "hidden",
+                        "trigger_when_full": "Hidden consequence.",
+                    },
+                )
+                conn.commit()
+                player_report = run_validation_pipeline(campaign, conn, profile="player_turn_commit", delta=delta)
+                response_report = run_validation_pipeline(campaign, conn, profile="response_acceptance", delta=delta)
+                maintenance_report = run_validation_pipeline(campaign, conn, profile="maintenance_commit", delta=delta)
+
+            self.assertFalse(player_report.ok, player_report.to_dict())
+            self.assertEqual(player_report.stage("delta_schema").artifacts["caller_view"], "player")
+            self.assertIn("$.tick_clocks[0].id: unavailable clock clock:hidden-pipeline", player_report.errors)
+            self.assertFalse(response_report.ok, response_report.to_dict())
+            self.assertEqual(response_report.stage("delta_schema").artifacts["caller_view"], "player")
+            self.assertIn("$.tick_clocks[0].id: unavailable clock clock:hidden-pipeline", response_report.errors)
+            self.assertEqual(maintenance_report.stage("delta_schema").status, "ok")
+            self.assertEqual(maintenance_report.stage("delta_schema").artifacts["caller_view"], "maintenance")
 
 
 if __name__ == "__main__":
