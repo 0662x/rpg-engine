@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .entity_access import validate_delta_entity_references
+from .relationship_access import validate_delta_relationship_references
 from .resource_paths import schema_resource_text
 
 
@@ -272,7 +273,10 @@ def validate_cross_field_rules(errors: list[str], delta: dict[str, Any]) -> None
 
 
 def validate_database_refs(errors: list[str], delta: dict[str, Any], conn: sqlite3.Connection) -> None:
-    for error in validate_delta_entity_references(conn, delta):
+    for error in [
+        *validate_delta_entity_references(conn, delta),
+        *validate_delta_relationship_references(conn, delta),
+    ]:
         if error not in errors:
             errors.append(error)
 

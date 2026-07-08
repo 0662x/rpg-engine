@@ -8,6 +8,7 @@ from typing import Any
 
 from .campaign import Campaign, load_yaml_file
 from .content_types import ContentRegistry, ContentTypeSpec, get_default_registry
+from .relationship_access import validate_delta_relationship_references
 
 
 CONTENT_METADATA_KEYS = {
@@ -292,6 +293,9 @@ def validate_references(
         | created_clock_ids
         | set(extra_created_entity_ids or set())
     )
+    for error in validate_delta_relationship_references(conn, delta, extra_entity_ids=created_entity_ids):
+        if error not in errors:
+            errors.append(error)
 
     for index, entity in enumerate(records_for_key(delta, "upsert_entities")):
         if not isinstance(entity, dict):

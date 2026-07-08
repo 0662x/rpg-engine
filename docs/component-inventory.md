@@ -22,6 +22,7 @@
 | Save Patch | `rpg_engine/save_patch.py` | 存档补丁 |
 | Save Archive | `rpg_engine/save_archive.py` | 存档归档 |
 | Entity Access | `rpg_engine/entity_access.py` | Entity Identity Access Contract：common identity 读取、status/visibility filter、runtime delta entity reference validation |
+| Relationship Access | `rpg_engine/relationship_access.py` | Relationship Access Contract：entity-backed relationship 读取、endpoint visibility/status filter、runtime delta relationship endpoint validation |
 
 ## AI 意图链
 

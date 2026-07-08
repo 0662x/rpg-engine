@@ -249,6 +249,29 @@ commit authorization model.
 后续 Relationship / Progress access contract 应复用 `entities.id` 作为身份锚点，不新增并行
 identity system，也不要求调用方直接依赖 table-specific storage 细节来读取 common fields。
 
+### Relationship Access Contract
+
+`rpg_engine/relationship_access.py` 是当前 Relationship Access Contract 的命名实现。
+Relationship 仍以 `entities.type='relationship'` 存储，并把 `source_id`、`target_id`、
+`kind`、`state`、`attitude`、`stance`、`trust` 等关系字段放在规范化 `details` 中；调用方应
+使用 access contract，而不是直接解析任意 `details_json`。
+
+- `RelationshipRecord` 暴露 stable relationship fields：`id`、`source_id`、`target_id`、
+  `kind`、`state`、`attitude`、`stance`、`trust`、`visibility`、`summary`、parsed
+  `details`、`updated_turn_id`、`updated_at`，以及可解析 endpoint records 和
+  `endpoint_issues`。
+- `read_relationship()` / `list_relationships()` 默认排除 archived relationship，并对
+  player view 同时过滤 hidden relationship、hidden endpoint、archived endpoint 和缺失 endpoint。
+  GM / maintenance view 必须显式选择；这类 view 可以读取 hidden endpoints，但 archived 或缺失
+  endpoints 只会作为 `endpoint_issues` 报告，不会作为 normal endpoint record 返回。
+- Runtime delta 中 `upsert_entities[*].type == "relationship"` 时，`details.source_id` 和
+  `details.target_id` 必须存在、是合法非空 entity id，并且引用已存在 entity 或同一 delta 中创建的
+  entity。该校验通过 `validate_delta_schema(..., conn)` 的 database reference gate 执行，并由
+  maintenance/content delta validation 对 relationship-shaped `upsert_entities` 复用。
+- Relationship suggestions from AI, maintenance assistants, package tooling, or proposal workflows are
+  advisory until they enter an explicit validated mutation, proposal, or maintenance path. Relationship
+  access helpers do not grant confirmation, validation bypass, proposal approval, or commit authority.
+
 ### Typed Side Tables
 
 Typed side tables 增加结构化字段，但不替代 entity row：
