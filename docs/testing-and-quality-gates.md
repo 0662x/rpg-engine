@@ -94,7 +94,20 @@ Campaign smoke：
 ```bash
 python3 -m rpg_engine campaign validate ./examples/v1_minimal_adventure
 python3 -m rpg_engine campaign test ./examples/v1_minimal_adventure
+python3 -m rpg_engine campaign validate ./examples/small_cn_campaign
+python3 -m rpg_engine campaign test ./examples/small_cn_campaign
 ```
+
+跨 Campaign model-boundary smoke：
+
+```bash
+python3 -m pytest -q tests/test_cross_campaign_model_smoke.py
+```
+
+该 gate 适用于触碰 Campaign/Save ownership、Content Type / Merge、Entity、Relationship 或
+Progress access contract 的 foundation 变更。它必须只写临时 Save Package，不能修改正式 current
+save package 或 source Campaign Package。完整 Context Slice、basic query 和 player-safe play loop
+跨 Campaign 测试属于 context 集成 gate，不由这个 model-boundary smoke 代替。
 
 慢测试观察：
 

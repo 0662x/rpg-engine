@@ -59,13 +59,13 @@ development_status:
   1-8-platform-forwarding-与审计边界: done
   epic-1-retrospective: optional
 
-  epic-2: in-progress
+  epic-2: done
   2-1-campaign-and-save-ownership-contract: done
   2-2-content-type-and-merge-contract: done
   2-3-entity-identity-access-contract: done
   2-4-relationship-access-contract: done
   2-5-progress-track-and-clock-access-contract: done
-  2-6-跨-campaign-的模型边界冒烟测试: backlog
+  2-6-跨-campaign-的模型边界冒烟测试: done
   epic-2-retrospective: optional
 
   epic-3: backlog

@@ -147,6 +147,12 @@ python3 -m rpg_engine campaign test ./examples/v1_minimal_adventure
 `campaign validate` 校验 manifest、内容记录、引用、capability 覆盖和 smoke 文件格式。
 `campaign test` 会初始化临时 Save Package 并执行 smoke tests。
 
+跨 Campaign model-boundary 回归使用至少两个不同 package，例如 `examples/v1_minimal_adventure`
+和 `examples/small_cn_campaign`，在临时 Save 上连续跑 campaign validate/test、save init/inspect、
+ContentRegistry、entity/relationship/progress access 和 `tick_clocks` validation。该 gate 证明题材、
+语言、capability 和内容差异仍复用同一 Campaign/Save ownership 与模型合同，并且 source Campaign
+Package 不会被写入运行态文件。当前测试入口是 `tests/test_cross_campaign_model_smoke.py`。
+
 Authoring 工具可以辅助创建和检查作者包：
 
 ```bash
