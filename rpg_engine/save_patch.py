@@ -14,6 +14,7 @@ from .db import connect, utc_now
 from .projection_service import ProjectionReport, ProjectionService
 from .render import parse_json
 from .validation_issues import issues_from_messages
+from .visibility import ENTITY_VISIBILITY_LABELS
 
 
 PATCH_SCHEMA_VERSION = "1"
@@ -28,7 +29,8 @@ ALLOWED_OPS = {
     "remove_entity_detail",
     "set_character_field",
 }
-ALLOWED_VISIBILITY = {"known", "hinted", "hidden"}
+ALLOWED_VISIBILITY = set(ENTITY_VISIBILITY_LABELS)
+ALLOWED_VISIBILITY_MESSAGE = "/".join(sorted(ALLOWED_VISIBILITY))
 ALLOWED_CHARACTER_FIELDS = {"attitude", "trust", "health_state"}
 DETAIL_KEY_PATTERN = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 
@@ -151,7 +153,7 @@ def validate_operation_shape(operation: dict[str, Any], path: str, errors: list[
     elif op == "set_entity_visibility":
         visibility = operation.get("visibility")
         if visibility not in ALLOWED_VISIBILITY:
-            errors.append(f"{path}.visibility: must be known/hinted/hidden")
+            errors.append(f"{path}.visibility: must be {ALLOWED_VISIBILITY_MESSAGE}")
     elif op in {"add_entity_alias", "remove_entity_alias"}:
         require_text(operation, "alias", f"{path}.alias", errors)
     elif op == "set_entity_detail":
@@ -278,6 +280,11 @@ def apply_operation(conn: Any, operation: dict[str, Any], *, current_turn_id: st
             "update entities set visibility = ?, updated_turn_id = ?, updated_at = ? where id = ?",
             (str(operation["visibility"]), current_turn_id, now, entity_id),
         )
+        if table_exists(conn, "world_settings"):
+            conn.execute(
+                "update world_settings set visibility = ? where entity_id = ?",
+                (str(operation["visibility"]), entity_id),
+            )
     elif op == "add_entity_alias":
         conn.execute(
             "insert or ignore into aliases(alias, entity_id, kind) values (?, ?, 'name')",
@@ -335,3 +342,8 @@ def touch_entity(conn: Any, entity_id: str, current_turn_id: str, now: str) -> N
         "update entities set updated_turn_id = ?, updated_at = ? where id = ?",
         (current_turn_id, now, entity_id),
     )
+
+
+def table_exists(conn: Any, table: str) -> bool:
+    row = conn.execute("select 1 from sqlite_master where type='table' and name = ?", (table,)).fetchone()
+    return bool(row)

@@ -18,6 +18,7 @@ from ..visibility import (
     entity_not_archived_sql,
     entity_visibility_sql,
     normalized_text_sql,
+    player_hidden_visibility_sql,
     world_setting_visibility_sql,
 )
 from .sections import ContextSection, estimate_tokens
@@ -473,9 +474,9 @@ def discovery_state_has_hidden_subject(conn: sqlite3.Connection, row: sqlite3.Ro
         where e.id in ({placeholders})
           and (
             {normalized_text_sql("e.status")} = 'archived'
-            or {normalized_text_sql("e.visibility")} = 'hidden'
+            or {player_hidden_visibility_sql("e.visibility")}
             or ({normalized_text_sql("e.type")} = 'clock'
-                and {normalized_text_sql("coalesce(c.visibility, e.visibility)")} = 'hidden')
+                and {player_hidden_visibility_sql("coalesce(c.visibility, e.visibility)")})
           )
         limit 1
         """,

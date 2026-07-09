@@ -45,7 +45,7 @@
             "properties": {
               "op": { "const": "set_entity_visibility" },
               "entity_id": { "type": "string", "minLength": 1 },
-              "visibility": { "type": "string", "enum": ["known", "hinted", "hidden"] }
+              "visibility": { "type": "string", "enum": ["known", "hinted", "hidden", "gm", "gm-only", "gm_only", "gm only"] }
             }
           },
           {

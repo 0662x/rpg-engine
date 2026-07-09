@@ -54,7 +54,7 @@ from .preflight_cache import (
     normalize_identity_profile,
 )
 from .proposal import TurnProposal, intent_context_id_from_intent, preflight_id_from_intent, turn_proposal_from_dict
-from .redaction import redact_hidden_entity_refs
+from .redaction import redact_player_hidden_material
 from .render import render_entity, render_scene
 from .ux import PlanStep, RepairOption, UxStatus
 from .validation_issues import issues_from_messages
@@ -464,7 +464,7 @@ def turn_proposal_from_preview_context(
 
 
 def redact_runtime_value(conn: Any, value: Any) -> Any:
-    return redact_hidden_entity_refs(conn, value, drop_empty=False)
+    return redact_player_hidden_material(conn, value, drop_empty=False)
 
 
 def redact_runtime_value_for_view(conn: Any, value: Any, view: str | None) -> Any:

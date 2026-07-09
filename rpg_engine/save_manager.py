@@ -23,6 +23,7 @@ from .redaction import redact_hidden_entity_refs
 from .runtime import GMRuntime, intent_ai_config_kwargs, intent_request_meta_kwargs
 from .save_service import init_v1_save, inspect_v1_save, normalize_content_paths_for_save, validate_save_target_outside_source
 from .validation_issues import issues_from_messages
+from .visibility import ensure_visibility_sql_functions, is_player_hidden_visibility, normalize_visibility_label
 
 
 REGISTRY_SCHEMA_VERSION = "1"
@@ -276,11 +277,11 @@ class SaveManager:
             registry["active_save_id"] = save_id
         self.write_registry(registry)
         return {
-            "ok": record.get("health") != "error",
+            "ok": not save_blocks_player_entry(record),
             "mode": "created",
             "active_save_id": registry.get("active_save_id"),
             "save": record,
-            "errors": [] if record.get("health") != "error" else list(record.get("errors", [])),
+            "errors": [] if not save_blocks_player_entry(record) else list(record.get("errors", [])),
         }
 
     def duplicate_save(self, save_id: str, *, label: str | None = None, activate: bool = True) -> dict[str, Any]:
@@ -307,11 +308,11 @@ class SaveManager:
             registry["active_save_id"] = new_save_id
         self.write_registry(registry)
         return {
-            "ok": record.get("health") != "error",
+            "ok": not save_blocks_player_entry(record),
             "mode": "created",
             "active_save_id": registry.get("active_save_id"),
             "save": record,
-            "errors": [] if record.get("health") != "error" else list(record.get("errors", [])),
+            "errors": [] if not save_blocks_player_entry(record) else list(record.get("errors", [])),
         }
 
     def start_or_continue(
@@ -367,7 +368,7 @@ class SaveManager:
                 "errors": ["no save available"],
                 "error_details": issues_from_messages(["no save available"], default_code="SAVE_MANAGER_ERROR"),
             }
-        if save.get("health") == "error":
+        if save_blocks_player_entry(save):
             message = f"active save is not healthy: {save.get('label') or save.get('id')}"
             return {
                 "ok": False,
@@ -398,7 +399,7 @@ class SaveManager:
         current = self.current_save(refresh=True)
         if current["ok"] and current.get("save"):
             record = dict(current["save"])
-            if record.get("health") == "error":
+            if save_blocks_player_entry(record):
                 raise SaveManagerError(
                     "; ".join([f"active save is not healthy: {record.get('label') or record.get('id')}", *record.get("errors", [])])
                 )
@@ -689,7 +690,7 @@ class SaveManager:
                 record = self.refresh_save_record(record)
                 registry["saves"] = replace_record(registry.get("saves", []), record)
                 self.write_registry(registry)
-            if record.get("health") == "error":
+            if save_blocks_player_entry(record):
                 raise SaveManagerError(
                     "; ".join([f"save is not healthy: {record.get('label') or record.get('id')}", *record.get("errors", [])])
                 )
@@ -698,7 +699,7 @@ class SaveManager:
         if not current["ok"] or not current.get("save"):
             raise SaveManagerError("; ".join(current.get("errors", [])) or "no active save is configured")
         save = dict(current["save"])
-        if save.get("health") == "error":
+        if save_blocks_player_entry(save):
             raise SaveManagerError(
                 "; ".join([f"active save is not healthy: {save.get('label') or save.get('id')}", *save.get("errors", [])])
             )
@@ -795,6 +796,8 @@ class SaveManager:
             save_path = self.resolve_relative(str(record.get("path", "")), "save")
             inspect = inspect_v1_save(save_path)
             location_name = location_name_from_save(save_path, inspect)
+            current_location_id = str(inspect.get("current_location_id") or "")
+            entry_ok = bool(inspect.get("ok"))
             safe_inspect = dict(inspect)
             safe_current_location_id = inspect.get("current_location_id")
             safe_errors = list(inspect.get("errors", []))
@@ -802,6 +805,18 @@ class SaveManager:
             try:
                 runtime = GMRuntime.from_path(save_path)
                 with connect(runtime.campaign) as conn:
+                    if current_location_is_player_hidden_location(conn, current_location_id):
+                        current_location_error = (
+                            "meta.current_location_id points to missing or unreadable location: "
+                            f"{current_location_id}"
+                        )
+                        next_errors = [error for error in safe_errors if str(error) != current_location_error]
+                        if len(next_errors) != len(safe_errors):
+                            safe_errors = next_errors
+                            entry_ok = not safe_errors and not inspect.get("missing_files")
+                            safe_warnings.append(
+                                "current location rendered with a player-safe placeholder"
+                            )
                     safe_current_location_id = redact_hidden_entity_refs(
                         conn,
                         safe_current_location_id,
@@ -824,6 +839,7 @@ class SaveManager:
                     "current_location_name": location_name,
                     "summary": build_save_summary(safe_inspect, location_name),
                     "health": health,
+                    "entry_ok": entry_ok,
                     "last_inspected_at": now,
                     "errors": safe_errors,
                     "warnings": safe_warnings,
@@ -1194,6 +1210,30 @@ def clear_cached_save_sensitive_fields(record: dict[str, Any]) -> None:
     for key in ("errors", "warnings", "error_details"):
         if record.get(key):
             record[key] = ["[hidden]"] if isinstance(record[key], list) else "[hidden]"
+
+
+def save_blocks_player_entry(record: dict[str, Any]) -> bool:
+    return record.get("health") == "error" and not bool(record.get("entry_ok"))
+
+
+def current_location_is_player_hidden_location(conn: Any, location_id: str) -> bool:
+    if not location_id:
+        return False
+    ensure_visibility_sql_functions(conn)
+    row = conn.execute(
+        """
+        select type, status, visibility
+        from entities
+        where id = ?
+        """,
+        (location_id,),
+    ).fetchone()
+    return bool(
+        row
+        and normalize_visibility_label(str(row["type"])) == "location"
+        and normalize_visibility_label(str(row["status"])) != "archived"
+        and is_player_hidden_visibility(str(row["visibility"]))
+    )
 
 
 def location_name_from_save(save_path: Path, inspect: dict[str, Any]) -> str | None:

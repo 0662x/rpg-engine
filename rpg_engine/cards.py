@@ -8,10 +8,10 @@ from typing import Any
 from .atomic_io import write_text_atomic
 from .campaign import Campaign
 from .card_registry import CardRegistry, get_default_card_registry
-from .db import entity_subtype_visibility_sql, get_meta, get_player_entity_id
+from .db import entity_subtype_visibility_sql, get_meta, get_player_entity_id, world_setting_entity_join_and_clause
 from .entity_access import read_entity
 from .redaction import hidden_entity_refs
-from .redaction import redact_entity_refs
+from .redaction import redact_entity_refs, redact_player_hidden_material
 from .render import append_item_profile_sections, display_key, display_label, format_quantity, format_value, parse_json
 from .time_weather import format_time_brief, format_weather_brief
 from .visibility import (
@@ -55,15 +55,23 @@ def write_cards(
     ensure_visibility_sql_functions(conn)
     entity_visibility_clause = entity_visibility_sql(index_view, "e")
     subtype_visibility_clause = entity_subtype_visibility_sql(index_view, "e", "c")
+    world_setting_join, world_setting_visibility_clause = world_setting_entity_join_and_clause(
+        conn,
+        index_view,
+        entity_alias="e",
+        setting_alias="ws",
+    )
 
     rows = conn.execute(
         f"""
         select e.*
         from entities e
         left join clocks c on c.entity_id = e.id
+        {world_setting_join}
         where {entity_not_archived_sql("e")}
           {entity_visibility_clause}
           {subtype_visibility_clause}
+          {world_setting_visibility_clause}
         order by name
         """
     ).fetchall()
@@ -166,7 +174,7 @@ def render_card(conn: sqlite3.Connection, entity: sqlite3.Row, registry: CardReg
             "- 行动回合若改变本对象，必须写入结构化 delta 并重新生成卡片。",
         ]
     )
-    return str(redact_hidden_refs("\n".join(lines), hidden_ids))
+    return str(redact_player_hidden_material(conn, redact_hidden_refs("\n".join(lines), hidden_ids), drop_empty=False))
 
 
 def append_item_card(conn: sqlite3.Connection, lines: list[str], entity: sqlite3.Row) -> None:
@@ -594,7 +602,7 @@ def render_card_index(
     )
     text = "\n".join(lines)
     if view == PLAYER_VIEW:
-        return str(redact_hidden_refs(text, hidden_entity_ids(conn)))
+        return str(redact_player_hidden_material(conn, redact_hidden_refs(text, hidden_entity_ids(conn)), drop_empty=False))
     return text
 
 

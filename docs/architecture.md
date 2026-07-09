@@ -150,7 +150,8 @@ preflight cache 只能作为候选来源，不能替代最终 preview、validati
 - `visibility.py` 和 `context_audit.py`：隐藏信息边界和审计。
 
 任何新增上下文来源都必须标明 visibility，不能把 hidden / GM-only 内容泄露到玩家视图、
-FTS、scene output 或普通 query。
+FTS/search、scene output、普通 query、snapshots、cards 或 onboarding。最终 render redaction
+只能作为防御层；玩家派生 read model 应在 collection / projection 阶段排除 player-hidden facts。
 
 ## 数据与包边界
 

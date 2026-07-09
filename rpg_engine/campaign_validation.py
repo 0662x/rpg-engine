@@ -19,10 +19,11 @@ from .projection_service import ProjectionService
 from .runtime import GMRuntime
 from .validation_issues import issues_from_messages
 from .validators import run_checks
+from .visibility import CLOCK_VISIBILITY_LABELS, ENTITY_VISIBILITY_LABELS
 
 
-ALLOWED_ENTITY_VISIBILITY = {"known", "hinted", "hidden"}
-ALLOWED_CLOCK_VISIBILITY = {"visible", "hinted", "hidden"}
+ALLOWED_ENTITY_VISIBILITY = set(ENTITY_VISIBILITY_LABELS)
+ALLOWED_CLOCK_VISIBILITY = set(CLOCK_VISIBILITY_LABELS)
 ALLOWED_RANDOM_TABLE_VISIBILITY = {"known", "hinted", "hidden", "gm"}
 REQUIRED_V1_FILES = (
     "prompts/gm.md",

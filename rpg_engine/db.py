@@ -9,7 +9,7 @@ from typing import Any
 from .atomic_io import write_text_atomic
 from .campaign import Campaign, load_yaml_file
 from .resource_paths import read_resource_text
-from .redaction import hidden_entity_refs, redact_entity_refs
+from .redaction import hidden_entity_refs, redact_player_hidden_material_from_refs
 from .time_weather import enrich_time_weather_meta
 from .visibility import (
     PLAYER_VIEW,
@@ -19,6 +19,8 @@ from .visibility import (
     entity_visibility_sql,
     normalize_visibility_view,
     normalized_text_sql,
+    player_visible_visibility_sql,
+    world_setting_entity_visibility_sql,
 )
 
 
@@ -475,14 +477,22 @@ def rebuild_fts(conn: sqlite3.Connection) -> None:
     ensure_visibility_sql_functions(conn)
     conn.execute("delete from fts_index")
     hidden_refs = hidden_entity_refs(conn)
+    world_setting_join, world_setting_visibility_clause = world_setting_entity_join_and_clause(
+        conn,
+        "player",
+        entity_alias="e",
+        setting_alias="ws",
+    )
     rows = conn.execute(
         f"""
-        select id, type, name, summary, details_json
+        select e.id, e.type, e.name, e.summary, e.details_json
         from entities e
         left join clocks c on c.entity_id = e.id
+        {world_setting_join}
         where {entity_not_archived_sql("e")}
-          and {normalized_text_sql("e.visibility")} != 'hidden'
+          and {player_visible_visibility_sql("e.visibility")}
           {entity_subtype_visibility_sql("player", "e", "c")}
+          {world_setting_visibility_clause}
         """
     ).fetchall()
     for row in rows:
@@ -495,9 +505,9 @@ def rebuild_fts(conn: sqlite3.Connection) -> None:
             for part in [row["summary"], row["details_json"], " ".join(aliases)]
             if part
         )
-        title = redact_entity_refs(row["name"], hidden_refs) or row["name"]
-        body = redact_entity_refs(body, hidden_refs) or ""
-        tags = redact_entity_refs(" ".join(aliases), hidden_refs) or ""
+        title = redact_player_hidden_material_from_refs(row["name"], hidden_refs, drop_empty=False) or ""
+        body = redact_player_hidden_material_from_refs(body, hidden_refs, drop_empty=False) or ""
+        tags = redact_player_hidden_material_from_refs(" ".join(aliases), hidden_refs, drop_empty=False) or ""
         conn.execute(
             "insert into fts_index(entity_id, type, title, body, tags) values (?, ?, ?, ?, ?)",
             (row["id"], row["type"], title, body, tags),
@@ -530,17 +540,27 @@ def resolve_entity(conn: sqlite3.Connection, text: str, *, view: str = PLAYER_VI
     if not text:
         return None
     view = normalize_visibility_view(view)
+    if player_query_contains_hidden_ref(conn, text, view=view):
+        return None
     visibility_clause = entity_visibility_sql(view, "e")
     subtype_visibility_clause = entity_subtype_visibility_sql(view, "e", "c")
+    world_setting_join, world_setting_visibility_clause = world_setting_entity_join_and_clause(
+        conn,
+        view,
+        entity_alias="e",
+        setting_alias="ws",
+    )
     exact_id = conn.execute(
         f"""
         select e.*
         from entities e
         left join clocks c on c.entity_id = e.id
+        {world_setting_join}
         where e.id = ?
           and {entity_not_archived_sql("e")}
           {visibility_clause}
           {subtype_visibility_clause}
+          {world_setting_visibility_clause}
         """,
         (text,),
     ).fetchone()
@@ -551,10 +571,12 @@ def resolve_entity(conn: sqlite3.Connection, text: str, *, view: str = PLAYER_VI
         select e.*
         from entities e
         left join clocks c on c.entity_id = e.id
+        {world_setting_join}
         where lower(e.id) = lower(?)
           and {entity_not_archived_sql("e")}
           {visibility_clause}
           {subtype_visibility_clause}
+          {world_setting_visibility_clause}
         limit 1
         """,
         (text,),
@@ -568,10 +590,12 @@ def resolve_entity(conn: sqlite3.Connection, text: str, *, view: str = PLAYER_VI
         select e.*
         from entities e
         left join clocks c on c.entity_id = e.id
+        {world_setting_join}
         where e.name = ?
           and {entity_not_archived_sql("e")}
           {visibility_clause}
           {subtype_visibility_clause}
+          {world_setting_visibility_clause}
         order by
           case e.status
             when 'active' then 0
@@ -594,10 +618,12 @@ def resolve_entity(conn: sqlite3.Connection, text: str, *, view: str = PLAYER_VI
         from aliases a
         join entities e on e.id = a.entity_id
         left join clocks c on c.entity_id = e.id
+        {world_setting_join}
         where a.alias = ?
           and {entity_not_archived_sql("e")}
           {visibility_clause}
           {subtype_visibility_clause}
+          {world_setting_visibility_clause}
         order by
           case e.status
             when 'active' then 0
@@ -644,10 +670,12 @@ def resolve_entity(conn: sqlite3.Connection, text: str, *, view: str = PLAYER_VI
         from fts_index f
         join entities e on e.id = f.entity_id
         left join clocks c on c.entity_id = e.id
+        {world_setting_join}
         where fts_index match ?
           and {entity_not_archived_sql("e")}
           {visibility_clause}
           {subtype_visibility_clause}
+          {world_setting_visibility_clause}
         order by {entity_type_priority_sql("e")}, bm25(fts_index), e.id
         limit 1
         """,
@@ -661,8 +689,28 @@ def entity_subtype_visibility_sql(view: str | None = PLAYER_VIEW, entity_alias: 
         return ""
     return (
         f"and ({normalized_text_sql(f'{entity_alias}.type')} != 'clock' or "
-        f"{normalized_text_sql(f'coalesce({clock_alias}.visibility, {entity_alias}.visibility)')} != 'hidden')"
+        f"{player_visible_visibility_sql(f'coalesce({clock_alias}.visibility, {entity_alias}.visibility)')})"
     )
+
+
+def world_setting_entity_join_and_clause(
+    conn: sqlite3.Connection,
+    view: str | None = PLAYER_VIEW,
+    *,
+    entity_alias: str = "e",
+    setting_alias: str = "ws",
+) -> tuple[str, str]:
+    has_world_settings = bool(
+        conn.execute("select 1 from sqlite_master where type='table' and name='world_settings'").fetchone()
+    )
+    join = f"left join world_settings {setting_alias} on {setting_alias}.entity_id = {entity_alias}.id" if has_world_settings else ""
+    clause = world_setting_entity_visibility_sql(
+        view,
+        entity_alias=entity_alias,
+        setting_alias=setting_alias,
+        has_world_settings=has_world_settings,
+    )
+    return join, clause
 
 
 def query_tokens(text: str) -> list[str]:
@@ -725,15 +773,23 @@ def resolve_entity_exact_token(conn: sqlite3.Connection, token: str, *, view: st
     view = normalize_visibility_view(view)
     visibility_clause = entity_visibility_sql(view, "e")
     subtype_visibility_clause = entity_subtype_visibility_sql(view, "e", "c")
+    world_setting_join, world_setting_visibility_clause = world_setting_entity_join_and_clause(
+        conn,
+        view,
+        entity_alias="e",
+        setting_alias="ws",
+    )
     return conn.execute(
         f"""
         select e.*
         from entities e
         left join aliases a on a.entity_id = e.id
         left join clocks c on c.entity_id = e.id
+        {world_setting_join}
         where {entity_not_archived_sql("e")}
           {visibility_clause}
           {subtype_visibility_clause}
+          {world_setting_visibility_clause}
           and (
             lower(e.id) = lower(?)
             or lower(e.id) like '%:' || lower(?)
@@ -764,18 +820,26 @@ def resolve_entity_partial_token(conn: sqlite3.Connection, token: str, *, view: 
     view = normalize_visibility_view(view)
     visibility_clause = entity_visibility_sql(view, "e")
     subtype_visibility_clause = entity_subtype_visibility_sql(view, "e", "c")
+    world_setting_join, world_setting_visibility_clause = world_setting_entity_join_and_clause(
+        conn,
+        view,
+        entity_alias="e",
+        setting_alias="ws",
+    )
     like = f"%{token}%"
     suffix_like = f"%:{token}"
     prefix_like = f"{token}%"
-    return conn.execute(
+    rows = conn.execute(
         f"""
         select e.*
         from entities e
         left join aliases a on a.entity_id = e.id
         left join clocks c on c.entity_id = e.id
+        {world_setting_join}
         where {entity_not_archived_sql("e")}
           {visibility_clause}
           {subtype_visibility_clause}
+          {world_setting_visibility_clause}
           and (
             lower(e.id) like lower(?)
             or lower(e.id) like lower(?)
@@ -795,10 +859,14 @@ def resolve_entity_partial_token(conn: sqlite3.Connection, token: str, *, view: 
           {entity_type_priority_sql("e")},
           length(e.name),
           e.id
-        limit 1
+        limit 12
         """,
         (suffix_like, like, like, like, suffix_like, prefix_like, prefix_like, like, like, like),
-    ).fetchone()
+    ).fetchall()
+    for row in rows:
+        if player_candidate_matches_redacted_text(conn, row, token, view=view):
+            return row
+    return None
 
 
 def resolve_entity_body_match(conn: sqlite3.Connection, term: str, *, view: str = PLAYER_VIEW) -> sqlite3.Row | None:
@@ -806,23 +874,66 @@ def resolve_entity_body_match(conn: sqlite3.Connection, term: str, *, view: str 
     if not should_search_body(term):
         return None
     view = normalize_visibility_view(view)
+    if player_query_contains_hidden_ref(conn, term, view=view):
+        return None
     visibility_clause = entity_visibility_sql(view, "e")
     subtype_visibility_clause = entity_subtype_visibility_sql(view, "e", "c")
+    world_setting_join, world_setting_visibility_clause = world_setting_entity_join_and_clause(
+        conn,
+        view,
+        entity_alias="e",
+        setting_alias="ws",
+    )
     like = f"%{term}%"
-    return conn.execute(
+    rows = conn.execute(
         f"""
         select e.*
         from entities e
         left join clocks c on c.entity_id = e.id
+        {world_setting_join}
         where {entity_not_archived_sql("e")}
           {visibility_clause}
           {subtype_visibility_clause}
+          {world_setting_visibility_clause}
           and (e.summary like ? or e.details_json like ?)
         order by
           {entity_type_priority_sql("e")},
           length(e.summary),
           e.id
-        limit 1
+        limit 12
         """,
         (like, like),
-    ).fetchone()
+    ).fetchall()
+    for row in rows:
+        if player_candidate_matches_redacted_text(conn, row, term, view=view):
+            return row
+    return None
+
+
+def player_query_contains_hidden_ref(conn: sqlite3.Connection, term: str, *, view: str = PLAYER_VIEW) -> bool:
+    if can_read_hidden(view):
+        return False
+    redacted_term = redact_player_hidden_material_from_refs(term, hidden_entity_refs(conn))
+    return not redacted_term or redacted_term != term
+
+
+def player_candidate_matches_redacted_text(
+    conn: sqlite3.Connection,
+    row: sqlite3.Row,
+    term: str,
+    *,
+    view: str = PLAYER_VIEW,
+) -> bool:
+    if can_read_hidden(view):
+        return True
+    aliases = [
+        item["alias"]
+        for item in conn.execute("select alias from aliases where entity_id = ?", (row["id"],)).fetchall()
+    ]
+    searchable = " ".join(
+        str(part)
+        for part in [row["id"], row["name"], row["summary"], row["details_json"], " ".join(aliases)]
+        if part
+    )
+    redacted = redact_player_hidden_material_from_refs(searchable, hidden_entity_refs(conn), drop_empty=False)
+    return bool(redacted and str(term).lower() in str(redacted).lower())

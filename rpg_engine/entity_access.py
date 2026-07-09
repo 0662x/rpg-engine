@@ -14,6 +14,8 @@ from .visibility import (
     normalize_visibility_label,
     normalize_visibility_view,
     normalized_text_sql,
+    player_visible_visibility_sql,
+    world_setting_entity_visibility_sql,
 )
 
 
@@ -79,12 +81,13 @@ def read_entity(
     if not entity_id:
         return None
     status_clause = "" if include_archived else f"and {normalized_text_sql('e.status')} != 'archived'"
-    visibility_clause = _entity_access_visibility_sql(view)
+    world_setting_join, visibility_clause = _entity_access_visibility_sql(conn, view)
     row = conn.execute(
         f"""
         select e.*
         from entities e
         left join clocks c on c.entity_id = e.id
+        {world_setting_join}
         where e.id = ?
           {status_clause}
           {visibility_clause}
@@ -127,7 +130,8 @@ def list_entities(
         clauses.append(f"{normalized_text_sql('e.type')} in ({placeholders})")
         params.extend(type_values)
 
-    visibility_clause = _entity_access_visibility_sql(view).strip()
+    world_setting_join, visibility_clause = _entity_access_visibility_sql(conn, view)
+    visibility_clause = visibility_clause.strip()
     if visibility_clause.startswith("and "):
         clauses.append(visibility_clause[4:])
 
@@ -145,6 +149,7 @@ def list_entities(
         select e.*
         from entities e
         left join clocks c on c.entity_id = e.id
+        {world_setting_join}
         {where}
         order by e.type, e.id
         {limit_clause}
@@ -320,14 +325,19 @@ def _filter_values(name: str, values: str | Sequence[str]) -> list[str]:
     return normalized
 
 
-def _entity_access_visibility_sql(view: str | None = PLAYER_VIEW) -> str:
+def _entity_access_visibility_sql(conn: sqlite3.Connection, view: str | None = PLAYER_VIEW) -> tuple[str, str]:
     normalized = normalize_visibility_view(view)
+    has_world_settings = bool(
+        conn.execute("select 1 from sqlite_master where type='table' and name='world_settings'").fetchone()
+    )
+    world_setting_join = "left join world_settings ws on ws.entity_id = e.id" if has_world_settings else ""
     if can_read_hidden(normalized):
-        return ""
-    return (
-        f"and {normalized_text_sql('e.visibility')} != 'hidden' "
+        return world_setting_join, ""
+    return world_setting_join, (
+        f"and {player_visible_visibility_sql('e.visibility')} "
         f"and ({normalized_text_sql('e.type')} != 'clock' or "
-        f"{normalized_text_sql('coalesce(c.visibility, e.visibility)')} != 'hidden')"
+        f"{player_visible_visibility_sql('coalesce(c.visibility, e.visibility)')}) "
+        f"{world_setting_entity_visibility_sql(normalized, entity_alias='e', setting_alias='ws', has_world_settings=has_world_settings)}"
     )
 
 

@@ -9,6 +9,7 @@ from typing import Any
 from .campaign import Campaign, load_yaml_file
 from .content_types import ContentRegistry, ContentTypeSpec, get_default_registry
 from .relationship_access import validate_delta_relationship_references
+from .visibility import is_player_hidden_visibility
 
 
 CONTENT_METADATA_KEYS = {
@@ -435,7 +436,7 @@ def high_impact_warnings(delta: dict[str, Any], conn: sqlite3.Connection) -> lis
         if entity_type == "species" and rarity in {"rare", "very_rare", "hidden", "legendary"}:
             warnings.append(review_warning(f"$.upsert_entities[{index}] creates or updates rare species {entity_id}", reviewed))
         existing = existing_entity(conn, entity_id)
-        if existing and str(existing.get("visibility")) in {"hidden", "hinted"} and str(entity.get("visibility", existing.get("visibility"))) == "known":
+        if existing and promotes_to_known_review_boundary(existing.get("visibility"), entity.get("visibility", existing.get("visibility"))):
             warnings.append(review_warning(f"$.upsert_entities[{index}] promotes {entity_id} from {existing['visibility']} to known", reviewed))
     for index, route in enumerate(records_for_key(delta, "upsert_routes")):
         if isinstance(route, dict):
@@ -452,6 +453,12 @@ def high_impact_warnings(delta: dict[str, Any], conn: sqlite3.Connection) -> lis
 def review_warning(message: str, reviewed: bool) -> str:
     suffix = "review marker present" if reviewed else "requires meta.review_required=true or meta.reviewed_by"
     return f"{message}; {suffix}"
+
+
+def promotes_to_known_review_boundary(existing_visibility: Any, next_visibility: Any) -> bool:
+    return str(next_visibility) == "known" and (
+        str(existing_visibility) == "hinted" or is_player_hidden_visibility(str(existing_visibility))
+    )
 
 
 def existing_entity(conn: sqlite3.Connection, entity_id: str) -> dict[str, Any] | None:

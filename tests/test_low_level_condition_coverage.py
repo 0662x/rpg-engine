@@ -362,7 +362,18 @@ class LowLevelConditionCoverageTests(unittest.TestCase):
         self.assertIn("segments_total: must be positive integer", validate_clock_record({"id": "bad", "name": "", "trigger_when_full": "", "segments_total": False, "segments_filled": -1}))
         self.assertIn("segments_filled: cannot exceed segments_total", validate_clock_record({"id": "clock:x", "name": "Clock", "trigger_when_full": "done", "segments_total": 2, "segments_filled": 3}))
         self.assertIn("travel_minutes: must be positive integer", validate_route_record({"id": "", "from_location_id": "", "to_location_id": "", "travel_minutes": True, "hazards": {}, "requirements": {}}))
-        self.assertIn("visibility: must be known/hinted/hidden", validate_relationship_record({"id": "bad", "name": "", "summary": "", "source_id": "", "target_id": "", "visibility": "public", "details": []}))
+        relationship_errors = validate_relationship_record(
+            {
+                "id": "bad",
+                "name": "",
+                "summary": "",
+                "source_id": "",
+                "target_id": "",
+                "visibility": "public",
+                "details": [],
+            }
+        )
+        self.assertTrue(any(error.startswith("visibility: must be ") and "gm" in error for error in relationship_errors))
 
         calls: list[tuple[object, Path, bool]] = []
 

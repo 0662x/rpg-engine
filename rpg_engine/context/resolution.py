@@ -6,7 +6,14 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Any
 
-from ..db import entity_subtype_visibility_sql, get_meta, get_player_entity_id
+from ..db import (
+    entity_subtype_visibility_sql,
+    get_meta,
+    get_player_entity_id,
+    player_candidate_matches_redacted_text,
+    player_query_contains_hidden_ref,
+    world_setting_entity_join_and_clause,
+)
 from ..render import parse_json
 from ..visibility import (
     can_read_hidden,
@@ -15,6 +22,7 @@ from ..visibility import (
     entity_not_archived_sql,
     entity_visibility_sql,
     normalized_text_sql,
+    player_hidden_visibility_sql,
 )
 
 
@@ -116,6 +124,80 @@ class EntityHit:
 
 def state_visibility_view(state: Any) -> str:
     return getattr(state, "visibility_view", None) or context_visibility_view(getattr(state, "mode", None))
+
+
+def entity_visibility_parts(
+    conn: sqlite3.Connection,
+    view: str,
+    *,
+    entity_alias: str = "e",
+    clock_alias: str = "c",
+    setting_alias: str = "ws",
+) -> tuple[str, str, str, str]:
+    ensure_visibility_sql_functions(conn)
+    visibility_clause = entity_visibility_sql(view, entity_alias)
+    subtype_visibility_clause = entity_subtype_visibility_sql(view, entity_alias, clock_alias)
+    world_setting_join, world_setting_visibility_clause = world_setting_entity_join_and_clause(
+        conn,
+        view,
+        entity_alias=entity_alias,
+        setting_alias=setting_alias,
+    )
+    return visibility_clause, subtype_visibility_clause, world_setting_join, world_setting_visibility_clause
+
+
+def world_setting_hidden_condition(conn: sqlite3.Connection, *, entity_alias: str = "e", setting_alias: str = "ws") -> str:
+    if table_exists(conn, "world_settings"):
+        visibility_expr = f"coalesce({setting_alias}.visibility, '')"
+        return (
+            f"({normalized_text_sql(f'{entity_alias}.type')} = 'world_setting' "
+            f"and ({setting_alias}.entity_id is null "
+            f"or {normalized_text_sql(visibility_expr)} not in ('known', 'hinted')))"
+        )
+    return f"{normalized_text_sql(f'{entity_alias}.type')} = 'world_setting'"
+
+
+def table_exists(conn: sqlite3.Connection, table: str) -> bool:
+    row = conn.execute("select 1 from sqlite_master where type='table' and name = ?", (table,)).fetchone()
+    return bool(row)
+
+
+def player_context_query_is_hidden(conn: sqlite3.Connection, text: str, *, view: str) -> bool:
+    return not can_read_hidden(view) and player_query_contains_hidden_ref(conn, text, view=view)
+
+
+def filter_player_candidate_rows(
+    conn: sqlite3.Connection,
+    rows: list[sqlite3.Row],
+    term: str,
+    *,
+    view: str,
+) -> list[sqlite3.Row]:
+    if can_read_hidden(view):
+        return rows
+    return [row for row in rows if player_candidate_matches_redacted_text(conn, row, term, view=view)]
+
+
+def filter_player_candidate_rows_any(
+    conn: sqlite3.Connection,
+    rows: list[sqlite3.Row],
+    terms: list[str],
+    *,
+    view: str,
+) -> list[sqlite3.Row]:
+    if can_read_hidden(view):
+        return rows
+    usable_terms = [term for term in terms if term.strip() and not player_context_query_is_hidden(conn, term, view=view)]
+    return [
+        row
+        for row in rows
+        if any(player_candidate_matches_redacted_text(conn, row, term, view=view) for term in usable_terms)
+    ]
+
+
+def alias_from_reason(row: sqlite3.Row) -> str:
+    reason = str(row["_reason"] or "") if "_reason" in row.keys() else ""
+    return reason.split(": ", 1)[1] if ": " in reason else ""
 
 
 def collect_entity_hits(state: Any) -> None:
@@ -266,19 +348,22 @@ def maybe_add_entity(
 ) -> EntityHit | None:
     if not entity_id or entity_id in hits or depth > state.max_depth:
         return None
-    ensure_visibility_sql_functions(state.conn)
     view = state_visibility_view(state)
-    visibility_clause = entity_visibility_sql(view, "e")
-    subtype_visibility_clause = entity_subtype_visibility_sql(view, "e", "c")
+    visibility_clause, subtype_visibility_clause, world_setting_join, world_setting_visibility_clause = entity_visibility_parts(
+        state.conn,
+        view,
+    )
     row = state.conn.execute(
         f"""
         select e.*
         from entities e
         left join clocks c on c.entity_id = e.id
+        {world_setting_join}
         where e.id = ?
           and {entity_not_archived_sql("e")}
           {visibility_clause}
           {subtype_visibility_clause}
+          {world_setting_visibility_clause}
         """,
         (entity_id,),
     ).fetchone()
@@ -310,18 +395,21 @@ def resolve_exact_entity_label(
     stripped = label.strip()
     if not stripped:
         return rows
-    ensure_visibility_sql_functions(conn)
-    visibility_clause = entity_visibility_sql(view, "e")
-    subtype_visibility_clause = entity_subtype_visibility_sql(view, "e", "c")
+    visibility_clause, subtype_visibility_clause, world_setting_join, world_setting_visibility_clause = entity_visibility_parts(
+        conn,
+        view,
+    )
     rows.extend(
         conn.execute(
             f"""
             select e.*
             from entities e
             left join clocks c on c.entity_id = e.id
+            {world_setting_join}
             where {entity_not_archived_sql("e")}
               {visibility_clause}
               {subtype_visibility_clause}
+              {world_setting_visibility_clause}
               and (e.id = ? or e.name = ?)
             order by e.type, e.name
             limit 6
@@ -336,9 +424,11 @@ def resolve_exact_entity_label(
             from aliases a
             join entities e on e.id = a.entity_id
             left join clocks c on c.entity_id = e.id
+            {world_setting_join}
             where {entity_not_archived_sql("e")}
               {visibility_clause}
               {subtype_visibility_clause}
+              {world_setting_visibility_clause}
               and a.alias = ?
             order by e.type, e.name
             limit 6
@@ -357,31 +447,38 @@ def find_explicit_entity_matches(
 ) -> list[sqlite3.Row]:
     rows: list[sqlite3.Row] = []
     stripped = text.strip()
-    ensure_visibility_sql_functions(conn)
-    visibility_clause = entity_visibility_sql(view, "e")
-    subtype_visibility_clause = entity_subtype_visibility_sql(view, "e", "c")
+    if player_context_query_is_hidden(conn, stripped, view=view):
+        return []
+    visibility_clause, subtype_visibility_clause, world_setting_join, world_setting_visibility_clause = entity_visibility_parts(
+        conn,
+        view,
+    )
     exact = conn.execute(
         f"""
         select e.*, 'id exact' as _reason
         from entities e
         left join clocks c on c.entity_id = e.id
+        {world_setting_join}
         where e.id = ?
           and {entity_not_archived_sql("e")}
           {visibility_clause}
           {subtype_visibility_clause}
+          {world_setting_visibility_clause}
         limit 1
         """,
         (stripped,),
     ).fetchall()
-    rows.extend(exact)
+    rows.extend(filter_player_candidate_rows(conn, exact, stripped, view=view))
     names = conn.execute(
         f"""
         select e.*, 'name contains' as _reason
         from entities e
         left join clocks c on c.entity_id = e.id
+        {world_setting_join}
         where {entity_not_archived_sql("e")}
           {visibility_clause}
           {subtype_visibility_clause}
+          {world_setting_visibility_clause}
           and length(e.name) >= 2
           and instr(?, e.name) > 0
         order by length(e.name) desc, e.type, e.name
@@ -389,16 +486,24 @@ def find_explicit_entity_matches(
         """,
         (text,),
     ).fetchall()
-    rows.extend(names)
+    rows.extend(
+        [
+            row
+            for row in names
+            if can_read_hidden(view) or player_candidate_matches_redacted_text(conn, row, str(row["name"] or ""), view=view)
+        ]
+    )
     aliases = conn.execute(
         f"""
         select e.*, 'alias contains: ' || a.alias as _reason
         from aliases a
         join entities e on e.id = a.entity_id
         left join clocks c on c.entity_id = e.id
+        {world_setting_join}
         where {entity_not_archived_sql("e")}
           {visibility_clause}
           {subtype_visibility_clause}
+          {world_setting_visibility_clause}
           and (length(a.alias) >= 2 or a.alias = ?)
           and instr(?, a.alias) > 0
         order by length(a.alias) desc, e.type, e.name
@@ -406,16 +511,24 @@ def find_explicit_entity_matches(
         """,
         (stripped, text),
     ).fetchall()
-    rows.extend(aliases)
+    rows.extend(
+        [
+            row
+            for row in aliases
+            if can_read_hidden(view) or player_candidate_matches_redacted_text(conn, row, alias_from_reason(row), view=view)
+        ]
+    )
     short_aliases = conn.execute(
         f"""
         select e.*, 'short alias contains: ' || a.alias as _reason
         from aliases a
         join entities e on e.id = a.entity_id
         left join clocks c on c.entity_id = e.id
+        {world_setting_join}
         where {entity_not_archived_sql("e")}
           {visibility_clause}
           {subtype_visibility_clause}
+          {world_setting_visibility_clause}
           and length(a.alias) = 1
           and instr(?, a.alias) > 0
           and e.type in ('equipment', 'item', 'threat')
@@ -424,7 +537,13 @@ def find_explicit_entity_matches(
         """,
         (text,),
     ).fetchall()
-    rows.extend(short_aliases)
+    rows.extend(
+        [
+            row
+            for row in short_aliases
+            if can_read_hidden(view) or player_candidate_matches_redacted_text(conn, row, alias_from_reason(row), view=view)
+        ]
+    )
     return dedupe_rows(rows)
 
 
@@ -442,6 +561,8 @@ def find_candidate_entities(
         return []
     if not has_searchable_literal(query):
         return []
+    if player_context_query_is_hidden(conn, query, view=view):
+        return []
     tokens = candidate_search_tokens(query)
     significant_query = " ".join(tokens)
     public_view = "player"
@@ -455,25 +576,29 @@ def find_candidate_entities(
         broad_matches.extend(find_literal_candidate_entities(conn, query, limit=limit, view=public_view))
     safe_query = sanitize_fts_query(text)
     if safe_query:
-        ensure_visibility_sql_functions(conn)
-        visibility_clause = entity_visibility_sql(public_view, "e")
-        subtype_visibility_clause = entity_subtype_visibility_sql(public_view, "e", "c")
-        broad_matches.extend(
+        visibility_clause, subtype_visibility_clause, world_setting_join, world_setting_visibility_clause = entity_visibility_parts(
+            conn,
+            public_view,
+        )
+        fts_matches = (
             conn.execute(
                 f"""
                 select e.*
                 from fts_index f
                 join entities e on e.id = f.entity_id
                 left join clocks c on c.entity_id = e.id
+                {world_setting_join}
                 where fts_index match ?
                   and {entity_not_archived_sql("e")}
                   {visibility_clause}
                   {subtype_visibility_clause}
+                  {world_setting_visibility_clause}
                 limit ?
                 """,
                 (safe_query, limit),
             ).fetchall()
         )
+        broad_matches.extend(filter_player_candidate_rows_any(conn, fts_matches, [*tokens, significant_query, query], view=public_view))
     if significant_query and significant_query != query:
         broad_matches.extend(find_literal_candidate_entities(conn, query, limit=limit, view=public_view))
     trusted_exact_matches = (
@@ -500,18 +625,21 @@ def find_literal_candidate_entities(
     literal = text.strip()
     if not literal:
         return []
-    ensure_visibility_sql_functions(conn)
-    visibility_clause = entity_visibility_sql(view, "e")
-    subtype_visibility_clause = entity_subtype_visibility_sql(view, "e", "c")
+    visibility_clause, subtype_visibility_clause, world_setting_join, world_setting_visibility_clause = entity_visibility_parts(
+        conn,
+        view,
+    )
     if exact_only:
-        return conn.execute(
+        rows = conn.execute(
             f"""
             select e.*
             from entities e
             left join clocks c on c.entity_id = e.id
+            {world_setting_join}
             where {entity_not_archived_sql("e")}
               {visibility_clause}
               {subtype_visibility_clause}
+              {world_setting_visibility_clause}
               and lower(e.name) = lower(?)
             order by
               case e.status when 'active' then 0 when 'retired' then 1 else 2 end,
@@ -521,16 +649,19 @@ def find_literal_candidate_entities(
             """,
             (literal, limit),
         ).fetchall()
+        return filter_player_candidate_rows(conn, rows, literal, view=view)
 
     like = f"%{escape_like(literal)}%"
-    return conn.execute(
+    rows = conn.execute(
         f"""
         select e.*
         from entities e
         left join clocks c on c.entity_id = e.id
+        {world_setting_join}
         where {entity_not_archived_sql("e")}
           {visibility_clause}
           {subtype_visibility_clause}
+          {world_setting_visibility_clause}
           and (e.name like ? escape '\\' or e.summary like ? escape '\\')
         order by
           case
@@ -545,6 +676,7 @@ def find_literal_candidate_entities(
         """,
         (like, like, literal, like, limit),
     ).fetchall()
+    return filter_player_candidate_rows(conn, rows, literal, view=view)
 
 
 def find_trusted_token_candidate_entities(
@@ -567,6 +699,13 @@ def find_trusted_token_candidate_entities(
         return literal_matches
     ensure_visibility_sql_functions(conn)
     subtype_visibility_clause = entity_subtype_visibility_sql(view, "e", "c")
+    world_setting_join, _ = world_setting_entity_join_and_clause(
+        conn,
+        view,
+        entity_alias="e",
+        setting_alias="ws",
+    )
+    world_setting_hidden_clause = world_setting_hidden_condition(conn)
     clauses: list[str] = []
     params: list[str] = []
     for token in tokens[:8]:
@@ -584,12 +723,14 @@ def find_trusted_token_candidate_entities(
         select e.*
         from entities e
         left join clocks c on c.entity_id = e.id
+        {world_setting_join}
         where {entity_not_archived_sql("e")}
           {subtype_visibility_clause}
           and (
-            {normalized_text_sql("e.visibility")} = 'hidden'
+            {player_hidden_visibility_sql("e.visibility")}
             or ({normalized_text_sql("e.type")} = 'clock'
-                and {normalized_text_sql("coalesce(c.visibility, e.visibility)")} = 'hidden')
+                and {player_hidden_visibility_sql("coalesce(c.visibility, e.visibility)")})
+            or {world_setting_hidden_clause}
           )
           and ({token_clause})
         order by
@@ -618,18 +759,27 @@ def find_trusted_literal_candidate_entities(
         return []
     ensure_visibility_sql_functions(conn)
     subtype_visibility_clause = entity_subtype_visibility_sql(view, "e", "c")
+    world_setting_join, _ = world_setting_entity_join_and_clause(
+        conn,
+        view,
+        entity_alias="e",
+        setting_alias="ws",
+    )
+    world_setting_hidden_clause = world_setting_hidden_condition(conn)
     if exact_only:
         return conn.execute(
             f"""
             select e.*
             from entities e
             left join clocks c on c.entity_id = e.id
+            {world_setting_join}
             where {entity_not_archived_sql("e")}
               {subtype_visibility_clause}
               and (
-                {normalized_text_sql("e.visibility")} = 'hidden'
+                {player_hidden_visibility_sql("e.visibility")}
                 or ({normalized_text_sql("e.type")} = 'clock'
-                    and {normalized_text_sql("coalesce(c.visibility, e.visibility)")} = 'hidden')
+                    and {player_hidden_visibility_sql("coalesce(c.visibility, e.visibility)")})
+                or {world_setting_hidden_clause}
               )
               and lower(e.name) = lower(?)
             order by
@@ -647,12 +797,14 @@ def find_trusted_literal_candidate_entities(
         select e.*
         from entities e
         left join clocks c on c.entity_id = e.id
+        {world_setting_join}
         where {entity_not_archived_sql("e")}
           {subtype_visibility_clause}
           and (
-            {normalized_text_sql("e.visibility")} = 'hidden'
+            {player_hidden_visibility_sql("e.visibility")}
             or ({normalized_text_sql("e.type")} = 'clock'
-                and {normalized_text_sql("coalesce(c.visibility, e.visibility)")} = 'hidden')
+                and {player_hidden_visibility_sql("coalesce(c.visibility, e.visibility)")})
+            or {world_setting_hidden_clause}
           )
           and (
             e.name like ? escape '\\'
@@ -724,13 +876,16 @@ def significant_token_parts(token: str) -> list[str]:
 
 
 def ambiguous_candidates(conn: sqlite3.Connection, text: str, *, view: str = "player") -> list[EntityHit]:
+    if player_context_query_is_hidden(conn, text, view=view):
+        return []
     keywords = ambiguous_keywords(text)
     if not keywords:
         return salient_ambiguous_candidates(conn, view=view)
     clauses = " or ".join(["e.name like ? or e.summary like ? or e.details_json like ?" for _ in keywords])
-    ensure_visibility_sql_functions(conn)
-    visibility_clause = entity_visibility_sql(view, "e")
-    subtype_visibility_clause = entity_subtype_visibility_sql(view, "e", "c")
+    visibility_clause, subtype_visibility_clause, world_setting_join, world_setting_visibility_clause = entity_visibility_parts(
+        conn,
+        view,
+    )
     params: list[str] = []
     for keyword in keywords:
         like = f"%{keyword}%"
@@ -740,9 +895,11 @@ def ambiguous_candidates(conn: sqlite3.Connection, text: str, *, view: str = "pl
         select e.*
         from entities e
         left join clocks c on c.entity_id = e.id
+        {world_setting_join}
         where {entity_not_archived_sql("e")}
           {visibility_clause}
           {subtype_visibility_clause}
+          {world_setting_visibility_clause}
           and ({clauses})
         order by
           case e.type
@@ -759,6 +916,14 @@ def ambiguous_candidates(conn: sqlite3.Connection, text: str, *, view: str = "pl
     ).fetchall()
     if not rows:
         return salient_ambiguous_candidates(conn, view=view)
+    if not can_read_hidden(view):
+        rows = [
+            row
+            for row in rows
+            if any(player_candidate_matches_redacted_text(conn, row, keyword, view=view) for keyword in keywords)
+        ]
+    if not rows:
+        return []
     return entity_rows_to_hits(rows, reason="ambiguous pronoun candidate", priority=50)
 
 
@@ -784,9 +949,10 @@ def salient_ambiguous_candidates(conn: sqlite3.Connection, *, view: str = "playe
     meta = get_meta(conn)
     current_location_id = meta.get("current_location_id") or ""
     player_entity_id = get_player_entity_id(conn)
-    ensure_visibility_sql_functions(conn)
-    visibility_clause = entity_visibility_sql(view, "e")
-    subtype_visibility_clause = entity_subtype_visibility_sql(view, "e", "c")
+    visibility_clause, subtype_visibility_clause, world_setting_join, world_setting_visibility_clause = entity_visibility_parts(
+        conn,
+        view,
+    )
     rows = conn.execute(
         f"""
         select e.*,
@@ -799,9 +965,11 @@ def salient_ambiguous_candidates(conn: sqlite3.Connection, *, view: str = "playe
 	               end as _rank
         from entities e
         left join clocks c on c.entity_id = e.id
+        {world_setting_join}
         where {entity_not_archived_sql("e")}
           {visibility_clause}
           {subtype_visibility_clause}
+          {world_setting_visibility_clause}
           and e.id != ?
           and (
             (? != '' and e.location_id = ?)

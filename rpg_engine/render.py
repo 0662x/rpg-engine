@@ -8,9 +8,15 @@ from typing import Any
 from .atomic_io import write_text_atomic
 from .campaign import Campaign
 from .card_registry import CardRegistry, get_default_card_registry
-from .db import entity_subtype_visibility_sql, get_meta, get_player_entity_id, resolve_entity
+from .db import (
+    entity_subtype_visibility_sql,
+    get_meta,
+    get_player_entity_id,
+    resolve_entity,
+    world_setting_entity_join_and_clause,
+)
 from .player_resources import player_detail_items
-from .redaction import redact_hidden_entity_refs
+from .redaction import redact_hidden_entity_refs, redact_player_hidden_material
 from .time_weather import format_time_brief, format_weather_brief
 from .visibility import (
     PLAYER_VIEW,
@@ -489,7 +495,7 @@ def render_entity(conn: sqlite3.Connection, query: str, *, view: str = PLAYER_VI
     view = normalize_visibility_view(view)
     entity = resolve_entity(conn, query, view=view)
     if entity is None:
-        display_query = str(redact_hidden_entity_refs(conn, query, drop_empty=False)) if view == PLAYER_VIEW else query
+        display_query = str(redact_player_hidden_material(conn, query, drop_empty=False)) if view == PLAYER_VIEW else query
         return "\n".join(
             [
                 f"未找到实体：`{display_query}`",
@@ -502,12 +508,16 @@ def render_entity(conn: sqlite3.Connection, query: str, *, view: str = PLAYER_VI
         )
 
     spec = get_default_card_registry().by_entity_type(str(entity["type"]))
-    if spec and spec.render_query:
+    if str(entity["type"]) == "world_setting":
+        from .content_types.world_setting import render_world_setting_entity
+
+        text = render_world_setting_entity(conn, entity, view=view)
+    elif spec and spec.render_query:
         text = spec.render_query(conn, entity)
     else:
         text = render_generic_entity(entity)
     if view == PLAYER_VIEW:
-        return str(redact_hidden_entity_refs(conn, text))
+        return str(redact_player_hidden_material(conn, text, drop_empty=False))
     return text
 
 
@@ -764,13 +774,19 @@ def render_scene(conn: sqlite3.Connection, *, view: str = PLAYER_VIEW) -> str:
     should_redact = not can_read_hidden(view)
 
     def safe_value(value: Any) -> Any:
-        return redact_hidden_entity_refs(conn, value) if should_redact else value
+        return redact_player_hidden_material(conn, value, drop_empty=False) if should_redact else value
 
     registry = get_default_card_registry()
     meta = get_meta(conn)
     location_id = meta.get("current_location_id", "")
     entity_visibility_clause = entity_visibility_sql(view, "e")
     subtype_visibility_clause = entity_subtype_visibility_sql(view, "e", "c")
+    world_setting_join, world_setting_visibility_clause = world_setting_entity_join_and_clause(
+        conn,
+        view,
+        entity_alias="e",
+        setting_alias="ws",
+    )
     location = conn.execute(
         f"""
         select e.*
@@ -795,9 +811,11 @@ def render_scene(conn: sqlite3.Connection, *, view: str = PLAYER_VIEW) -> str:
         select e.id, e.type, e.name, e.summary
         from entities e
         left join clocks c on c.entity_id = e.id
+        {world_setting_join}
         where e.location_id = ? and {normalized_text_sql("e.status")} = 'active'
           {entity_visibility_clause}
           {subtype_visibility_clause}
+          {world_setting_visibility_clause}
         order by e.name
         """,
         (location_id,),
@@ -810,9 +828,11 @@ def render_scene(conn: sqlite3.Connection, *, view: str = PLAYER_VIEW) -> str:
         from entities e
         join items i on i.entity_id = e.id
         left join clocks c on c.entity_id = e.id
+        {world_setting_join}
         where e.owner_id = ? and {normalized_text_sql("e.status")} = 'active'
           {entity_visibility_clause}
           {subtype_visibility_clause}
+          {world_setting_visibility_clause}
         order by i.equipped_slot is null, i.equipped_slot, e.name
         limit 20
         """,
@@ -898,7 +918,8 @@ def render_scene(conn: sqlite3.Connection, *, view: str = PLAYER_VIEW) -> str:
     )
     for index, item in enumerate(scene_affordances(conn, location_id, present, view=view), start=1):
         lines.append(f"| {index} | {item[0]} | {item[1]} |")
-    return "\n".join(lines)
+    text = "\n".join(str(line) for line in lines)
+    return str(redact_player_hidden_material(conn, text, drop_empty=False)) if should_redact else text
 
 
 def current_location_display(conn: sqlite3.Connection, meta: dict[str, str], view: str) -> str:
@@ -998,8 +1019,8 @@ def render_current_snapshot(campaign: Campaign, conn: sqlite3.Connection, *, vie
     pc_details = parse_json(pc["details_json"], {}) if pc else {}
     pc_summary = pc["summary"] if pc else "未知"
     if view == PLAYER_VIEW:
-        pc_summary = redact_hidden_entity_refs(conn, pc_summary) or "未知"
-        pc_details = redact_hidden_entity_refs(conn, pc_details)
+        pc_summary = redact_player_hidden_material(conn, pc_summary, drop_empty=False) or "未知"
+        pc_details = redact_player_hidden_material(conn, pc_details, drop_empty=False)
     lines = [
         "# 当前局面",
         "",
@@ -1018,7 +1039,7 @@ def render_current_snapshot(campaign: Campaign, conn: sqlite3.Connection, *, vie
         lines.append(f"- {label}: {value}")
     lines.extend(["", scene])
     text = "\n".join(lines)
-    return str(redact_hidden_entity_refs(conn, text)) if view == PLAYER_VIEW else text
+    return str(redact_player_hidden_material(conn, text, drop_empty=False)) if view == PLAYER_VIEW else text
 
 
 def render_current_snapshot_json(
@@ -1036,6 +1057,12 @@ def render_current_snapshot_json(
     pc = conn.execute("select * from entities where id = ?", (player_entity_id,)).fetchone()
     entity_visibility_clause = entity_visibility_sql(view, "e")
     subtype_visibility_clause = entity_subtype_visibility_sql(view, "e", "c")
+    world_setting_join, world_setting_visibility_clause = world_setting_entity_join_and_clause(
+        conn,
+        view,
+        entity_alias="e",
+        setting_alias="ws",
+    )
     location = conn.execute(
         f"""
         select e.*
@@ -1058,9 +1085,11 @@ def render_current_snapshot_json(
             select e.id, e.type, e.name, e.summary
             from entities e
             left join clocks c on c.entity_id = e.id
+            {world_setting_join}
             where e.location_id = ? and {normalized_text_sql("e.status")} = 'active'
               {entity_visibility_clause}
               {subtype_visibility_clause}
+              {world_setting_visibility_clause}
             order by e.name
             limit 40
             """,
@@ -1073,9 +1102,11 @@ def render_current_snapshot_json(
         from entities e
         join items i on i.entity_id = e.id
         left join clocks c on c.entity_id = e.id
+        {world_setting_join}
         where e.owner_id = ? and {normalized_text_sql("e.status")} = 'active'
           {entity_visibility_clause}
           {subtype_visibility_clause}
+          {world_setting_visibility_clause}
         order by i.equipped_slot is null, i.equipped_slot, e.name
         limit 40
         """,
@@ -1099,12 +1130,12 @@ def render_current_snapshot_json(
     if should_redact and not location:
         snapshot_meta["current_location_id"] = "当前地点不可见或不存在"
     if should_redact:
-        snapshot_meta = redact_hidden_entity_refs(conn, snapshot_meta, drop_empty=False)
+        snapshot_meta = redact_player_hidden_material(conn, snapshot_meta, drop_empty=False)
     def safe_row(row: sqlite3.Row | None) -> dict[str, Any] | None:
         if row is None:
             return None
         value = dict(row)
-        return redact_hidden_entity_refs(conn, value, drop_empty=False) if should_redact else value
+        return redact_player_hidden_material(conn, value, drop_empty=False) if should_redact else value
 
     return {
         "campaign": {

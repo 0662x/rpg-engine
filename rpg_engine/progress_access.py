@@ -9,7 +9,13 @@ from dataclasses import dataclass
 from typing import Any, Sequence
 
 from .entity_access import EntityRecord, list_entities, read_entity
-from .visibility import PLAYER_VIEW, can_read_hidden, normalize_visibility_label, normalize_visibility_view
+from .visibility import (
+    PLAYER_VIEW,
+    can_read_hidden,
+    is_player_hidden_visibility,
+    normalize_visibility_label,
+    normalize_visibility_view,
+)
 
 
 CLOCK_ID_PREFIX = "clock:"
@@ -292,7 +298,7 @@ def normalize_visible_text(value: str) -> str:
 
 
 def _effective_progress_visibility(entity_visibility: Any, clock_visibility: Any) -> str:
-    if normalize_visibility_label(str(entity_visibility)) == "hidden":
+    if is_player_hidden_visibility(str(entity_visibility)):
         return "hidden"
     return str(clock_visibility)
 

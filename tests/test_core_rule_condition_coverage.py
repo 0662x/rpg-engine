@@ -710,6 +710,18 @@ class CoreRuleContentAndSaveValidationCoverageTests(unittest.TestCase):
                         "details": {"rarity": "rare"},
                     },
                 )
+                upsert_entity(
+                    conn,
+                    {
+                        "id": "species:gm-only-rare",
+                        "type": "species",
+                        "name": "GM 稀有物种",
+                        "status": "active",
+                        "visibility": "gm",
+                        "summary": "GM-only。",
+                        "details": {"rarity": "rare"},
+                    },
+                )
                 delta = {
                     "unknown": True,
                     "upsert_unknown": [],
@@ -753,6 +765,13 @@ class CoreRuleContentAndSaveValidationCoverageTests(unittest.TestCase):
                             "visibility": "known",
                             "summary": "公开。",
                             "details": {"resource_profile": {"rarity": "legendary"}},
+                        },
+                        {
+                            "id": "species:gm-only-rare",
+                            "type": "species",
+                            "name": "公开 GM 稀有",
+                            "visibility": "known",
+                            "summary": "公开。",
                         },
                         {"id": "fstate:new", "type": "faction_state", "name": "新势力", "summary": "高影响。"},
                     ],
@@ -803,6 +822,7 @@ class CoreRuleContentAndSaveValidationCoverageTests(unittest.TestCase):
         self.assertTrue(any(".linked_clocks" in item for item in result.errors))
         self.assertTrue(any(".linked_entities" in item for item in result.errors))
         self.assertTrue(any("review marker present" in item for item in result.warnings))
+        self.assertTrue(any("promotes species:gm-only-rare from gm to known" in item for item in result.warnings))
         self.assertIn("FAILED", rendered)
         self.assertIn("warning", rendered)
         self.assertTrue(any("world_settings.yaml.world_settings: must be array" in item for item in sources_result.errors))

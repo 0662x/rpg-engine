@@ -69,6 +69,7 @@ from rpg_engine.actions.social import (
 )
 from rpg_engine.backup import create_backup, list_backups, render_backup_list, restore_backup
 from rpg_engine.campaign import Campaign, load_campaign
+from rpg_engine.cards import write_cards
 from rpg_engine.content_types.base import ContentRuntime
 from rpg_engine.content_types.world_setting import (
     append_world_setting_card_sections,
@@ -118,6 +119,7 @@ from rpg_engine.reflection import (
     trim,
     validate_reflection_draft,
 )
+from rpg_engine.render import render_current_snapshot_json, render_scene
 from rpg_engine.save import save_turn_delta
 from rpg_engine.save_patch import (
     SavePatchResult,
@@ -143,7 +145,7 @@ from rpg_engine.turn_assistant import (
     run_save_pipeline,
 )
 
-from tests.helpers import copy_initialized_minimal, current_turn
+from tests.helpers import ENGINE_ROOT, copy_initialized_minimal, current_turn
 
 
 def minimal_context(mode: str = "action", submode: str = "rest", *, allow: bool = True) -> dict[str, object]:
@@ -685,7 +687,23 @@ class SavePatchAndTurnAssistantToolingTests(unittest.TestCase):
         self.assertIn("$.patch_schema_version: unsupported version 2", errors)
         self.assertIn("$.operations[0]: must be object", errors)
         self.assertIn("$.operations[2].entity_id: required non-empty string", errors)
-        self.assertIn("$.operations[4].visibility: must be known/hinted/hidden", errors)
+        self.assertTrue(
+            any(error.startswith("$.operations[4].visibility: must be ") and "gm" in error for error in errors),
+            errors,
+        )
+        for schema_path in (
+            ENGINE_ROOT / "schemas" / "save_patch.schema.json",
+            ENGINE_ROOT / "rpg_engine" / "resources" / "schemas" / "save_patch.schema.json",
+        ):
+            schema = json.loads(schema_path.read_text(encoding="utf-8"))
+            visibility_branch = next(
+                branch
+                for branch in schema["properties"]["operations"]["items"]["oneOf"]
+                if branch["properties"]["op"].get("const") == "set_entity_visibility"
+            )
+            visibility_enum = visibility_branch["properties"]["visibility"]["enum"]
+            self.assertIn("gm", visibility_enum)
+            self.assertIn("gm-only", visibility_enum)
         self.assertIn("$.operations[6].key: protected gameplay field cannot be patched through details", errors)
         self.assertIn("$.operations[8].field: must be attitude/trust/health_state", errors)
         self.assertIn("$.operations[9].value: trust must be integer", errors)
@@ -759,6 +777,30 @@ class SavePatchAndTurnAssistantToolingTests(unittest.TestCase):
         self.assertIn("FAILED", failed.render())
         self.assertIn("error_details", failed.to_dict())
 
+    def test_apply_save_patch_visibility_tolerates_missing_world_settings_table(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                conn.execute("drop table world_settings")
+                conn.commit()
+
+            result = apply_save_patch(
+                campaign,
+                {
+                    "patch_schema_version": "1",
+                    "reason": "missing world_settings table visibility sync",
+                    "operations": [
+                        {"op": "set_entity_visibility", "entity_id": "pc:traveler", "visibility": "hinted"},
+                    ],
+                },
+                backup=False,
+            )
+            with connect(campaign) as conn:
+                row = conn.execute("select visibility from entities where id='pc:traveler'").fetchone()
+
+        self.assertTrue(result.ok, result.render())
+        self.assertEqual(row["visibility"], "hinted")
+
     def test_turn_assistant_branch_helpers_and_save_pipeline(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             campaign = load_campaign(copy_initialized_minimal(tmp))
@@ -829,6 +871,21 @@ class SavePatchAndTurnAssistantToolingTests(unittest.TestCase):
 
 
 class MemoryBackupAndWorldSettingCoverageTests(unittest.TestCase):
+    def test_player_renderers_tolerate_missing_world_settings_side_table(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                conn.execute("drop table world_settings")
+                conn.commit()
+
+                scene = render_scene(conn, view="player")
+                snapshot = render_current_snapshot_json(campaign, conn, view="player")
+                written = write_cards(campaign, conn, index_view="player")
+
+        self.assertIsInstance(scene, str)
+        self.assertIsInstance(snapshot, dict)
+        self.assertTrue(written)
+
     def test_memory_rebuild_finds_subjects_filters_hidden_and_renders_reports(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             campaign = load_campaign(copy_initialized_minimal(tmp))
@@ -1220,9 +1277,26 @@ class MemoryBackupAndWorldSettingCoverageTests(unittest.TestCase):
                 }
                 upsert_world_setting(runtime, record)
                 upsert_world_setting(runtime, {**record, "id": "world:hidden", "visibility": "hidden"})
+                upsert_world_setting(
+                    runtime,
+                    {
+                        **record,
+                        "id": "world:gm-only",
+                        "visibility": "gm",
+                        "summary": "GM-only 世界设定摘要",
+                        "content": {"secret": "GM-only 世界设定真相"},
+                    },
+                )
+                gm_only = conn.execute("select details_json from entities where id='world:gm-only'").fetchone()
+                conn.execute(
+                    "update entities set visibility='known', summary=?, details_json=? where id='world:gm-only'",
+                    ("玩家可见外壳摘要", json.dumps({"content": "GM-only 世界设定真相"}, ensure_ascii=False)),
+                )
                 entity = conn.execute("select * from entities where id='world:rain-law'").fetchone()
                 hidden = conn.execute("select details_json from entities where id='world:hidden'").fetchone()
+                gm_only_entity = conn.execute("select * from entities where id='world:gm-only'").fetchone()
                 rendered = render_world_setting_entity(conn, entity)
+                gm_only_rendered = render_world_setting_entity(conn, gm_only_entity)
                 lines: list[str] = []
                 append_world_setting_card_sections(conn, lines, entity)
                 generic = render_world_setting_entity(conn, conn.execute("select * from entities where id='loc:river'").fetchone())
@@ -1249,6 +1323,11 @@ class MemoryBackupAndWorldSettingCoverageTests(unittest.TestCase):
         self.assertEqual(missing_lines, ["before"])
         self.assertEqual(db_errors, [])
         self.assertNotIn("content", json.loads(hidden["details_json"]))
+        self.assertNotIn("content", json.loads(gm_only["details_json"]))
+        self.assertIn("此设定摘要对玩家不可见", gm_only_rendered)
+        self.assertNotIn("玩家可见外壳摘要", gm_only_rendered)
+        self.assertNotIn("GM-only 世界设定真相", gm_only_rendered)
+        self.assertNotIn("GM-only 世界设定摘要", gm_only_rendered)
 
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row

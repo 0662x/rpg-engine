@@ -6,6 +6,7 @@ from typing import Any
 
 from .base import ContentRuntime, ContentTypeSpec, MergePolicy
 from .registry import ContentRegistry
+from ..visibility import ENTITY_VISIBILITY_LABELS, PLAYER_VIEW, can_read_hidden, is_player_hidden_visibility
 
 
 WORLD_SETTING_CATEGORIES = {
@@ -19,7 +20,7 @@ WORLD_SETTING_CATEGORIES = {
     "technology",
     "truth",
 }
-WORLD_SETTING_VISIBILITIES = {"known", "hinted", "hidden"}
+WORLD_SETTING_VISIBILITIES = set(ENTITY_VISIBILITY_LABELS)
 
 
 def validate_world_setting_record(record: dict[str, Any]) -> list[str]:
@@ -68,7 +69,7 @@ def upsert_world_setting(runtime: ContentRuntime, record: dict[str, Any]) -> Non
         "applies_when": applies_when,
         "source": record.get("source", "content"),
     }
-    if visibility != "hidden":
+    if not is_player_hidden_visibility(visibility):
         details["content"] = content
     entity = {
         "id": setting_id,
@@ -118,12 +119,22 @@ def upsert_world_setting(runtime: ContentRuntime, record: dict[str, Any]) -> Non
     )
 
 
-def render_world_setting_entity(conn: sqlite3.Connection, entity: sqlite3.Row) -> str:
+def render_world_setting_entity(conn: sqlite3.Connection, entity: sqlite3.Row, *, view: str = PLAYER_VIEW) -> str:
     from ..render import bullet_list, display_key, display_label, format_value, parse_json, render_generic_entity
 
+    if str(entity["type"]) != "world_setting":
+        return render_generic_entity(entity)
+    if not table_exists(conn, "world_settings"):
+        return _player_hidden_world_setting_placeholder() if not can_read_hidden(view) else render_generic_entity(entity)
     row = conn.execute("select * from world_settings where entity_id = ?", (entity["id"],)).fetchone()
     if not row:
-        return render_generic_entity(entity)
+        return _player_hidden_world_setting_placeholder() if not can_read_hidden(view) else render_generic_entity(entity)
+    if (
+        not can_read_hidden(view)
+        and is_player_hidden_visibility(str(row["visibility"]))
+        and not is_player_hidden_visibility(str(entity["visibility"]))
+    ):
+        return _player_hidden_world_setting_placeholder()
     content = parse_json(row["content_json"], {})
     linked_rules = parse_json(row["linked_rules_json"], [])
     linked_clocks = parse_json(row["linked_clocks_json"], [])
@@ -161,12 +172,28 @@ def render_world_setting_entity(conn: sqlite3.Connection, entity: sqlite3.Row) -
     return "\n".join(lines)
 
 
+def _player_hidden_world_setting_placeholder() -> str:
+    return "\n".join(
+        [
+            "## 大世界设定",
+            "",
+            "### 摘要",
+            "此设定摘要对玩家不可见。",
+            "",
+            "### 内容",
+            "此设定内容对玩家不可见。",
+        ]
+    )
+
+
 def append_world_setting_card_sections(conn: sqlite3.Connection, lines: list[str], entity: sqlite3.Row) -> None:
     from ..cards import append_mapping, append_sequence
     from ..render import display_label, parse_json
 
     row = conn.execute("select * from world_settings where entity_id = ?", (entity["id"],)).fetchone()
     if not row:
+        return
+    if is_player_hidden_visibility(str(row["visibility"])) and not is_player_hidden_visibility(str(entity["visibility"])):
         return
     lines.extend(
         [

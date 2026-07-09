@@ -9,6 +9,11 @@ PLAYER_VIEW = "player"
 GM_VIEW = "gm"
 MAINTENANCE_VIEW = "maintenance"
 VISIBILITY_VIEWS = {PLAYER_VIEW, GM_VIEW, MAINTENANCE_VIEW}
+PLAYER_HIDDEN_VISIBILITY_LABELS = frozenset({"hidden", "gm", "gm-only", "gm_only", "gm only"})
+PUBLIC_ENTITY_VISIBILITY_LABELS = frozenset({"known", "hinted"})
+PUBLIC_CLOCK_VISIBILITY_LABELS = frozenset({"visible", "hinted"})
+ENTITY_VISIBILITY_LABELS = PUBLIC_ENTITY_VISIBILITY_LABELS | PLAYER_HIDDEN_VISIBILITY_LABELS
+CLOCK_VISIBILITY_LABELS = PUBLIC_CLOCK_VISIBILITY_LABELS | PLAYER_HIDDEN_VISIBILITY_LABELS
 EDGE_WHITESPACE_CODEPOINTS = (
     0x0009,
     0x000A,
@@ -60,7 +65,11 @@ def can_read_hidden(view: str | None) -> bool:
 
 
 def can_read_entity_visibility(visibility: str | None, view: str | None = PLAYER_VIEW) -> bool:
-    return can_read_hidden(view) or normalize_visibility_label(visibility) != "hidden"
+    return can_read_hidden(view) or not is_player_hidden_visibility(visibility)
+
+
+def is_player_hidden_visibility(visibility: str | None) -> bool:
+    return normalize_visibility_label(visibility) in PLAYER_HIDDEN_VISIBILITY_LABELS
 
 
 def normalize_visibility_label(value: str | None) -> str:
@@ -82,6 +91,16 @@ def normalized_text_sql(expression: str) -> str:
     return f"nfkc_label({expression})"
 
 
+def player_hidden_visibility_sql(expression: str) -> str:
+    labels = ", ".join(f"'{label}'" for label in sorted(PLAYER_HIDDEN_VISIBILITY_LABELS))
+    return f"{normalized_text_sql(expression)} in ({labels})"
+
+
+def player_visible_visibility_sql(expression: str) -> str:
+    labels = ", ".join(f"'{label}'" for label in sorted(PLAYER_HIDDEN_VISIBILITY_LABELS))
+    return f"{normalized_text_sql(expression)} not in ({labels})"
+
+
 def entity_status_sql(alias: str = "e") -> str:
     return normalized_text_sql(f"{alias}.status")
 
@@ -93,13 +112,13 @@ def entity_not_archived_sql(alias: str = "e") -> str:
 def entity_visibility_sql(view: str | None = PLAYER_VIEW, alias: str = "e") -> str:
     if can_read_hidden(view):
         return ""
-    return f"and {normalized_text_sql(f'{alias}.visibility')} != 'hidden'"
+    return f"and {player_visible_visibility_sql(f'{alias}.visibility')}"
 
 
 def clock_visibility_sql(view: str | None = PLAYER_VIEW, alias: str = "c") -> str:
     if can_read_hidden(view):
         return ""
-    return f"and {normalized_text_sql(f'{alias}.visibility')} != 'hidden'"
+    return f"and {player_visible_visibility_sql(f'{alias}.visibility')}"
 
 
 def world_setting_visibility_sql(
@@ -112,7 +131,25 @@ def world_setting_visibility_sql(
         return ""
     return (
         f"and {normalized_text_sql(f'{setting_alias}.visibility')} in ('known', 'hinted') "
-        f"and {normalized_text_sql(f'{entity_alias}.visibility')} != 'hidden'"
+        f"and {player_visible_visibility_sql(f'{entity_alias}.visibility')}"
+    )
+
+
+def world_setting_entity_visibility_sql(
+    view: str | None = PLAYER_VIEW,
+    *,
+    entity_alias: str = "e",
+    setting_alias: str = "ws",
+    has_world_settings: bool = True,
+) -> str:
+    if can_read_hidden(view):
+        return ""
+    if not has_world_settings:
+        return f"and {normalized_text_sql(f'{entity_alias}.type')} != 'world_setting'"
+    return (
+        f"and ({normalized_text_sql(f'{entity_alias}.type')} != 'world_setting' "
+        f"or ({setting_alias}.entity_id is not null "
+        f"and {normalized_text_sql(f'{setting_alias}.visibility')} in ('known', 'hinted')))"
     )
 
 

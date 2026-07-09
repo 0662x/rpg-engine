@@ -5,6 +5,7 @@ from typing import Any
 from .base import ContentRuntime, ContentTypeSpec, MergePolicy
 from .registry import ContentRegistry
 from ..progress_access import is_valid_clock_id
+from ..visibility import ENTITY_VISIBILITY_LABELS
 
 
 def _require_strings(record: dict[str, Any], keys: tuple[str, ...]) -> list[str]:
@@ -98,8 +99,8 @@ def validate_relationship_record(record: dict[str, Any]) -> list[str]:
     errors = _require_strings(record, ("id", "name", "summary", "source_id", "target_id"))
     if record.get("id") and not str(record["id"]).startswith("rel:"):
         errors.append("id: relationship id must start with rel:")
-    if "visibility" in record and str(record.get("visibility")) not in {"known", "hinted", "hidden"}:
-        errors.append("visibility: must be known/hinted/hidden")
+    if "visibility" in record and str(record.get("visibility")) not in ENTITY_VISIBILITY_LABELS:
+        errors.append(f"visibility: must be {'/'.join(sorted(ENTITY_VISIBILITY_LABELS))}")
     if "details" in record and not isinstance(record.get("details"), dict):
         errors.append("details: must be object")
     return [*errors, *_validate_aliases(record)]
