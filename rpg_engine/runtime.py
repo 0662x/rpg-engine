@@ -328,6 +328,8 @@ def context_to_dict(context: ContextBuildResult | None) -> dict[str, Any] | None
     if context is None:
         return None
     return {
+        "contract": context.contract,
+        "scope": context.scope,
         "request": context.request,
         "budget": context.budget,
         "completeness": context.completeness,

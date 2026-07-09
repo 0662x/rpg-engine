@@ -49,8 +49,19 @@ from .actions import get_default_action_registry
 from .ai.defaults import DEFAULT_AI_MODEL, DEFAULT_AI_PROVIDER, DEFAULT_INTENT_TIMEOUT_SECONDS, DEFAULT_SEMANTIC_TIMEOUT_SECONDS
 
 
+COLLECTOR_SECTION_ALIASES = {
+    "palettes": {"palette_candidates"},
+}
+
+SOURCE_SECTION_ALIASES = {
+    "world_settings": {"world_settings_core"},
+}
+
+
 @dataclass
 class ContextBuildResult:
+    contract: dict[str, Any]
+    scope: dict[str, Any]
     request: dict[str, Any]
     budget: dict[str, Any]
     completeness: dict[str, Any]
@@ -61,12 +72,15 @@ class ContextBuildResult:
 
     def to_json_text(self) -> str:
         data = {
+            "contract": self.contract,
+            "scope": self.scope,
             "request": self.request,
             "budget": self.budget,
             "completeness": self.completeness,
             "loaded_items": self.loaded_items,
             "omitted_items": self.omitted_items,
             "sections": self.sections,
+            "markdown": self.markdown,
         }
         return json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True)
 
@@ -415,6 +429,8 @@ def render_context_result(state: BuildState) -> ContextBuildResult:
     semantic_alias_gaps = state.semantic_alias_gaps
     semantic_error = state.semantic_error
     semantic_audit = state.semantic_audit
+    contract = context_contract_metadata(state, context_view)
+    scope = context_scope_metadata(state, context_view)
     if should_redact:
         semantic_suggestion = redact_hidden_entity_refs(state.conn, semantic_suggestion, drop_empty=False)
         semantic_alias_gaps = redact_hidden_entity_refs(state.conn, semantic_alias_gaps, drop_empty=False)
@@ -475,11 +491,16 @@ def render_context_result(state: BuildState) -> ContextBuildResult:
         "confidence": confidence,
         "allow_proceed": allow_proceed,
         "missing_required": state.missing_required,
+        "missing_signal_evidence": missing_signal_evidence(state),
         "needs_user_confirmation": state.needs_user_confirmation,
         "clarification": clarification,
         "assumptions": state.assumptions,
     }
-    loaded_items = [
+    selected_section_keys = {section.key for section in selected}
+    omitted_section_keys = {section.key for section in omitted}
+    loaded_items = [section_item_evidence(section, context_view, included=True) for section in selected]
+    loaded_items.extend(
+        [
         {
             "id": hit.id,
             "kind": hit.type,
@@ -487,21 +508,58 @@ def render_context_result(state: BuildState) -> ContextBuildResult:
             "reason": hit.reason,
             "priority": hit.priority,
             "depth": hit.depth,
+            "source": "entity_resolution",
+            "provenance": {
+                "collector": "entity_resolution",
+                "source": "collect_entity_hits",
+                "match_reason": hit.reason,
+            },
+            "visibility": item_visibility_evidence(context_view),
+            "budget": {
+                "included": True,
+                "behavior": "entity hits are item evidence; rendered sections remain token-budgeted",
+                "priority": hit.priority,
+                "estimated_tokens": None,
+            },
         }
         for hit in state.entity_hits
-    ]
-    loaded_items.extend(collect_loaded_items(state, DEFAULT_CONTEXT_COLLECTORS))
-    omitted_items = [
+        ]
+    )
+    omitted_items = [section_item_evidence(section, context_view, included=False) for section in omitted]
+    for item in collect_loaded_items(state, DEFAULT_CONTEXT_COLLECTORS):
+        if collector_item_omitted_by_budget(item, selected_section_keys):
+            omitted_items.append(
+                collector_item_omission_evidence(
+                    item,
+                    selected_section_keys=selected_section_keys,
+                    omitted_section_keys=omitted_section_keys,
+                )
+            )
+        else:
+            loaded_items.append(item)
+    omitted_items.append(
         {
-            "id": section.key,
-            "kind": "section",
-            "reason": section.omitted_reason or "budget",
-            "priority": section.priority,
-            "estimated_tokens": section.estimated_tokens,
+            "id": "archive_v1/journal.md",
+            "kind": "archive",
+            "reason": "forbidden by default",
+            "priority": 0,
+            "estimated_tokens": None,
+            "depth": None,
+            "source": "default_policy",
+            "provenance": {
+                "policy": "archive_forbidden_by_default",
+                "source": "render_context_result",
+            },
+            "visibility": item_visibility_evidence(context_view),
+            "budget": {
+                "included": False,
+                "behavior": "default forbidden source, not token budget",
+                "priority": 0,
+                "estimated_tokens": None,
+                "reason": "forbidden by default",
+            },
         }
-        for section in omitted
-    ]
-    omitted_items.append({"id": "archive_v1/journal.md", "kind": "archive", "reason": "forbidden by default"})
+    )
     budget = {
         "limit": state.budget_limit,
         "requested": state.requested_budget,
@@ -513,6 +571,8 @@ def render_context_result(state: BuildState) -> ContextBuildResult:
         "trimmed": bool(omitted),
     }
     if should_redact:
+        contract = redact_hidden_entity_refs(state.conn, contract, drop_empty=False)
+        scope = redact_hidden_entity_refs(state.conn, scope, drop_empty=False)
         request = redact_hidden_entity_refs(state.conn, request, drop_empty=False)
         completeness = redact_hidden_entity_refs(state.conn, completeness, drop_empty=False)
         loaded_items = redact_hidden_entity_refs(state.conn, loaded_items, drop_empty=False)
@@ -523,6 +583,8 @@ def render_context_result(state: BuildState) -> ContextBuildResult:
         section_texts = redact_hidden_entity_refs(state.conn, section_texts, drop_empty=False)
         markdown = str(redact_hidden_entity_refs(state.conn, markdown, drop_empty=False))
     return ContextBuildResult(
+        contract=contract,
+        scope=scope,
         request=request,
         budget=budget,
         completeness=completeness,
@@ -531,6 +593,236 @@ def render_context_result(state: BuildState) -> ContextBuildResult:
         sections=section_texts,
         markdown=markdown,
     )
+
+
+def context_contract_metadata(state: BuildState, context_view: str) -> dict[str, Any]:
+    return {
+        "id": "ContextBuildResult",
+        "version": "1.0",
+        "visibility_mode": context_view,
+        "audit_tables": ["context_runs", "context_items"],
+        "rendering_source": "ContextBuildResult",
+        "pipeline_steps": [step.name for step in default_context_pipeline().steps],
+        "collector_sources": [collector.name for collector in DEFAULT_CONTEXT_COLLECTORS],
+        "authority": {
+            "fact_source": "save_sqlite",
+            "audit_is_fact_authority": False,
+            "ai_advisory_only": state.semantic_ai != "off" or state.intent_ai != "off",
+        },
+    }
+
+
+def context_scope_metadata(state: BuildState, context_view: str) -> dict[str, Any]:
+    return {
+        "user_text": state.user_text,
+        "mode": state.mode,
+        "submode": state.submode,
+        "visibility_mode": context_view,
+        "budget_limit": state.budget_limit,
+        "requested_budget": state.requested_budget,
+        "max_events": state.max_events,
+        "max_depth": state.max_depth,
+        "include_palettes": state.include_palettes,
+        "semantic_ai": state.semantic_ai,
+        "intent_ai": state.intent_ai,
+        "source": "build_context",
+    }
+
+
+def item_visibility_evidence(context_view: str) -> dict[str, Any]:
+    return {
+        "mode": context_view,
+        "hidden_allowed": can_read_hidden(context_view),
+        "policy": "context_visibility_view",
+    }
+
+
+def missing_signal_evidence(state: BuildState) -> list[dict[str, Any]]:
+    evidence: list[dict[str, Any]] = []
+    for item in state.missing_required:
+        evidence.append(
+            {
+                "signal": str(item),
+                "source": "context_validation",
+                "severity": "blocking",
+            }
+        )
+    for item in state.needs_user_confirmation:
+        evidence.append(
+            {
+                "signal": str(item),
+                "source": "intent_or_context_confirmation",
+                "severity": "confirmation",
+            }
+        )
+    return evidence
+
+
+def section_source_metadata(section: ContextSection) -> dict[str, Any]:
+    collectors = {collector.name: collector for collector in DEFAULT_CONTEXT_COLLECTORS}
+    collector_name = collector_name_for_section(section.key)
+    collector = collectors.get(collector_name)
+    if collector:
+        return {
+            "source": collector.source or collector.name,
+            "provenance": {
+                "collector": collector.name,
+                "source": collector.source or collector.name,
+                "detail": collector.provenance,
+            },
+            "visibility_policy": collector.visibility,
+            "budget_behavior": collector.budget_behavior,
+        }
+    core_sources = {
+        "current_scene": {
+            "source": "scene_renderer",
+            "detail": "render_scene",
+            "visibility_policy": "render_scene receives context visibility view",
+            "budget_behavior": "required section priority 100",
+        },
+        "player_state": {
+            "source": "player_state_renderer",
+            "detail": "render_player_state",
+            "visibility_policy": "render_player_state receives context visibility view",
+            "budget_behavior": "required section priority 100",
+        },
+        "relevant_entities": {
+            "source": "entity_resolution",
+            "detail": "render_relevant_entities from entity hits",
+            "visibility_policy": "entity hits are collected and redacted by context visibility view",
+            "budget_behavior": "required for entity query or missing required signals, otherwise priority 90",
+        },
+        "ambiguous_candidates": {
+            "source": "entity_resolution",
+            "detail": "render_ambiguous_candidates",
+            "visibility_policy": "entity candidates are collected under context visibility view",
+            "budget_behavior": "required section priority 95",
+        },
+        "semantic_ai": {
+            "source": "semantic_ai",
+            "detail": "render_semantic_suggestion",
+            "visibility_policy": "semantic suggestions are redacted for player view",
+            "budget_behavior": "optional section priority 78",
+        },
+        "required_procedure": {
+            "source": "procedure_template",
+            "detail": "render_required_procedure",
+            "visibility_policy": "procedure text is selected from route/template metadata",
+            "budget_behavior": "required section priority 95",
+        },
+        "response_template": {
+            "source": "response_template",
+            "detail": "render_template_text",
+            "visibility_policy": "template text is selected from action/query mode",
+            "budget_behavior": "optional section priority 65",
+        },
+    }
+    metadata = core_sources.get(
+        section.key,
+        {
+            "source": section.key,
+            "detail": "context section",
+            "visibility_policy": "inherits context visibility view",
+            "budget_behavior": "section priority token budget",
+        },
+    )
+    return {
+        "source": metadata["source"],
+        "provenance": {
+            "section": section.key,
+            "source": metadata["source"],
+            "detail": metadata["detail"],
+        },
+        "visibility_policy": metadata["visibility_policy"],
+        "budget_behavior": metadata["budget_behavior"],
+    }
+
+
+def section_item_evidence(
+    section: ContextSection,
+    context_view: str,
+    *,
+    included: bool,
+) -> dict[str, Any]:
+    metadata = section_source_metadata(section)
+    return {
+        "id": f"section:{section.key}",
+        "kind": "section",
+        "name": section.title,
+        "reason": "selected for context output" if included else section.omitted_reason or "budget",
+        "priority": section.priority,
+        "depth": None,
+        "estimated_tokens": section.estimated_tokens,
+        "source": metadata["source"],
+        "provenance": metadata["provenance"] | {"section": section.key},
+        "visibility": item_visibility_evidence(context_view) | {"policy": metadata["visibility_policy"]},
+        "budget": {
+            "included": included,
+            "behavior": metadata["budget_behavior"],
+            "priority": section.priority,
+            "estimated_tokens": section.estimated_tokens,
+            "reason": None if included else section.omitted_reason or "budget",
+        },
+    }
+
+
+def collector_name_for_section(section_key: str) -> str:
+    for collector in DEFAULT_CONTEXT_COLLECTORS:
+        keys = {collector.name} | COLLECTOR_SECTION_ALIASES.get(collector.name, set())
+        if section_key in keys:
+            return collector.name
+    return section_key
+
+
+def section_keys_for_context_source(source: str) -> set[str]:
+    keys: set[str] = set()
+    for collector in DEFAULT_CONTEXT_COLLECTORS:
+        collector_source = collector.source or collector.name
+        if source in {collector_source, collector.name}:
+            keys.add(collector.name)
+            keys.update(COLLECTOR_SECTION_ALIASES.get(collector.name, set()))
+            keys.update(SOURCE_SECTION_ALIASES.get(collector_source, set()))
+    return keys
+
+
+def collector_item_omitted_by_budget(item: dict[str, Any], selected_section_keys: set[str]) -> bool:
+    source = str(item.get("source", ""))
+    section_keys = section_keys_for_context_source(source)
+    return bool(section_keys and section_keys.isdisjoint(selected_section_keys))
+
+
+def collector_item_omission_evidence(
+    item: dict[str, Any],
+    *,
+    selected_section_keys: set[str],
+    omitted_section_keys: set[str],
+) -> dict[str, Any]:
+    evidence = dict(item)
+    section_keys = section_keys_for_context_source(str(evidence.get("source", "")))
+    omitted_sections = sorted(section_keys & omitted_section_keys)
+    budget = dict(evidence.get("budget") or {})
+    budget.update(
+        {
+            "included": False,
+            "reason": "source section omitted by token budget",
+            "section_keys": sorted(section_keys),
+            "selected_sections": sorted(selected_section_keys),
+        }
+    )
+    if omitted_sections:
+        budget["omitted_sections"] = omitted_sections
+    provenance = dict(evidence.get("provenance") or {})
+    provenance["omission_stage"] = "apply_budget"
+    evidence.update(
+        {
+            "reason": "source section omitted by token budget",
+            "provenance": provenance,
+            "budget": budget,
+            "estimated_tokens": evidence.get("estimated_tokens"),
+            "depth": evidence.get("depth"),
+        }
+    )
+    return evidence
 
 
 def build_sections(state: BuildState) -> list[ContextSection]:

@@ -345,6 +345,38 @@ Typed side tables 增加结构化字段，但不替代 entity row：
 
 Cards 和 scene/query 输出必须遵循同一 player-view 原则。GM 或 maintenance 视图必须显式选择。
 
+### ContextBuildResult And Context Audit
+
+`rpg_engine.context_builder.ContextBuildResult` 是当前 Context Slice 合同。`build_context()` 先产出该结构，
+再由 CLI、runtime query、start-turn result、prompt/render path 消费它；不要在下游重新查询事实来拼另一套
+prompt context。
+
+当前稳定输出字段：
+
+| 字段 | 说明 |
+| --- | --- |
+| `contract` | Context contract metadata：`id=ContextBuildResult`、版本、visibility mode、audit tables、pipeline steps、collector sources 和 authority note。 |
+| `scope` | 本次 request scope：玩家文本、mode/submode、visibility mode、预算、event/depth 限制、AI helper 设置和来源。 |
+| `request` | 路由、intent、turn contract、decision trace、visibility 和 helper trace。 |
+| `budget` | 请求预算、策略 profile/reason、section token evidence 和 trimmed 状态。 |
+| `completeness` | allow/confidence、missing required、missing-signal evidence、confirmation needs、clarification 和 assumptions。 |
+| `loaded_items` | included item evidence；每项包含 `id`、`kind`、`source`、`provenance`、`reason`、`visibility`、`priority`、`depth` 和 budget evidence。 |
+| `omitted_items` | omitted/default-forbidden evidence；每项同样包含 source/provenance/visibility/budget reason。 |
+| `sections` | 已选 context sections 的 render text。 |
+| `markdown` | 面向人类或 prompt 消费的渲染结果。 |
+
+`context_runs.output_json` 保存完整 `ContextBuildResult.to_json_text()`，用于解释某次 context 为什么包含或省略内容。
+`context_items` 保存 item-level audit rows；`included` 表示 included/omitted，`source` 保存真实来源
+（例如 `entity_resolution`、collector source 或 `default_policy`），不是事实权威。Section evidence 使用
+`section:<key>` item id，避免与真实事实 item id 冲突；token budget omission 的原因保存在 item budget
+evidence 中。如果合法内容 id 与同 run 内其他 evidence 的 `(item_id, source)` 仍然相同，`context_items.item_id`
+会使用 audit-only disambiguation；原始 evidence id 保留在 `context_runs.output_json`。Context audit 是
+opt-in 诊断证据：默认 `build_context()`、`GMRuntime.start_turn()` 和普通 query 不写 audit rows；启用
+`audit_context=True` 也不能推进 turn、event 或 gameplay facts。
+
+新增 context source 必须声明 visibility、provenance 和 budget behavior，并通过 `ContextBuildResult`
+输出和 audit 记录，不得绕过 `visibility.py`、context pipeline 或 access contracts。
+
 ## Turn And Event Model
 
 ### Turn

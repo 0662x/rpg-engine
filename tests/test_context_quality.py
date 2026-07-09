@@ -4,13 +4,15 @@ import unittest
 from types import SimpleNamespace
 from typing import Any
 
-from rpg_engine.context import DEFAULT_CONTEXT_COLLECTORS, ContextPipeline, ContextPipelineStep
+from rpg_engine.context import DEFAULT_CONTEXT_COLLECTORS, ContextCollector, ContextPipeline, ContextPipelineStep
 from rpg_engine.context.resolution import dedupe_texts, extract_entity_ids, sanitize_fts_query
 from rpg_engine.context.sections import ContextSection, apply_budget, estimate_tokens
 from rpg_engine.context.semantic import normalize_semantic_suggestion, parse_semantic_json
 from rpg_engine.context_builder import (
     apply_semantic_request_decision,
     default_context_pipeline,
+    section_item_evidence,
+    section_source_metadata,
     semantic_request_decision,
     template_for,
 )
@@ -169,6 +171,50 @@ class ContextBuilderUnitTests(unittest.TestCase):
                 "memory_summaries",
             ],
         )
+
+    def test_default_context_collectors_declare_contract_metadata(self) -> None:
+        default = ContextCollector(name="placeholder")
+        self.assertEqual(default.source, "")
+        self.assertEqual(default.visibility, "")
+        self.assertEqual(default.provenance, "")
+        self.assertEqual(default.budget_behavior, "")
+        for collector in DEFAULT_CONTEXT_COLLECTORS:
+            with self.subTest(collector=collector.name):
+                self.assertTrue(collector.source)
+                self.assertTrue(collector.visibility)
+                self.assertTrue(collector.provenance)
+                self.assertTrue(collector.budget_behavior)
+
+    def test_context_collector_positional_callbacks_remain_compatible(self) -> None:
+        def collect(state: Any) -> None:
+            state.collected = True
+
+        def section(state: Any) -> ContextSection | None:
+            return ContextSection(key="legacy", title="Legacy", content="legacy", priority=1)
+
+        def loaded_items(state: Any) -> list[dict[str, Any]]:
+            return [{"id": "legacy:item", "kind": "legacy", "reason": "legacy", "priority": 1}]
+
+        collector = ContextCollector("legacy", collect, section, loaded_items)
+
+        self.assertIs(collector.collect, collect)
+        self.assertIs(collector.section, section)
+        self.assertIs(collector.loaded_items, loaded_items)
+        self.assertEqual(collector.source, "")
+        self.assertEqual(collector.visibility, "")
+        self.assertEqual(collector.provenance, "")
+        self.assertEqual(collector.budget_behavior, "")
+
+    def test_section_evidence_uses_stable_section_identity_and_alias_metadata(self) -> None:
+        palette = ContextSection(key="palette_candidates", title="Palette", content="x", priority=82)
+        metadata = section_source_metadata(palette)
+        self.assertEqual(metadata["source"], "palettes")
+        self.assertEqual(metadata["provenance"]["collector"], "palettes")
+
+        route_section = ContextSection(key="routes", title="Routes", content="x", priority=72)
+        evidence = section_item_evidence(route_section, "player", included=True)
+        self.assertEqual(evidence["id"], "section:routes")
+        self.assertEqual(evidence["source"], "routes")
 
     def test_context_pipeline_runs_steps_in_order_and_writes_audit_id(self) -> None:
         calls: list[str] = []

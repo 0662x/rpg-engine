@@ -33,6 +33,10 @@ class ContextCollector:
     collect: Callable[[Any], None] | None = None
     section: Callable[[Any], ContextSection | None] | None = None
     loaded_items: Callable[[Any], Iterable[dict[str, Any]]] | None = None
+    source: str = ""
+    visibility: str = ""
+    provenance: str = ""
+    budget_behavior: str = ""
 
 
 def run_context_collectors(state: Any, collectors: list[ContextCollector]) -> None:
@@ -58,7 +62,34 @@ def collect_loaded_items(state: Any, collectors: list[ContextCollector]) -> list
     items: list[dict[str, Any]] = []
     for collector in collectors:
         if collector.loaded_items:
-            items.extend(collector.loaded_items(state))
+            for item in collector.loaded_items(state):
+                enriched = dict(item)
+                enriched.setdefault("source", collector.source or collector.name)
+                enriched.setdefault(
+                    "provenance",
+                    {
+                        "collector": collector.name,
+                        "source": collector.source or collector.name,
+                        "detail": collector.provenance or collector.name,
+                    },
+                )
+                enriched.setdefault(
+                    "visibility",
+                    {
+                        "mode": state_visibility_view(state),
+                        "policy": collector.visibility,
+                    },
+                )
+                enriched.setdefault(
+                    "budget",
+                    {
+                        "included": True,
+                        "behavior": collector.budget_behavior,
+                        "priority": enriched.get("priority", 0),
+                        "estimated_tokens": enriched.get("estimated_tokens"),
+                    },
+                )
+                items.append(enriched)
     return items
 
 
@@ -486,43 +517,75 @@ def memory_loaded_items(state: Any) -> list[dict[str, Any]]:
 DEFAULT_CONTEXT_COLLECTORS = [
     ContextCollector(
         name="active_clocks",
+        source="active_clocks",
+        visibility="query filters clocks and entity rows by context view",
+        provenance="clocks joined to entities via render_active_clocks",
+        budget_behavior="required for action mode, otherwise section priority 75",
         section=active_clocks_section,
     ),
     ContextCollector(
         name="routes",
+        source="routes",
+        visibility="route endpoint entities filtered by context view",
+        provenance="routes joined through visible current and destination locations",
+        budget_behavior="optional section priority 72",
         collect=collect_routes,
         section=routes_section,
         loaded_items=route_loaded_items,
     ),
     ContextCollector(
         name="palettes",
+        source="palettes",
+        visibility="palette context redacts hidden entity references in player view",
+        provenance="campaign palette suggestions scoped by action and location",
+        budget_behavior="optional section priority 82, promoted when palette preservation is required",
         collect=collect_palettes,
         section=palettes_section,
     ),
     ContextCollector(
         name="discovery_states",
+        source="discovery_states",
+        visibility="only hinted or known non-archived discovery rows in player view",
+        provenance="discovery_states table filtered by action/query targets",
+        budget_behavior="optional section priority 76, promoted when palette preservation is required",
         collect=collect_discovery_states,
         section=discovery_states_section,
         loaded_items=discovery_loaded_items,
     ),
     ContextCollector(
         name="world_settings",
+        source="world_settings",
+        visibility="world setting and backing entity visibility filtered by context view",
+        provenance="world_settings joined to entities and related clocks",
+        budget_behavior="required only for direct world-setting query, otherwise priority 68/80",
         collect=collect_world_settings,
         section=world_settings_section,
         loaded_items=world_setting_loaded_items,
     ),
     ContextCollector(
         name="world_settings_core",
+        source="world_settings_core",
+        visibility="inherits filtered world_settings selection",
+        provenance="compact summary derived from selected world_settings rows",
+        budget_behavior="required for action mode when world settings are selected",
         section=world_settings_compact_section,
     ),
     ContextCollector(
         name="recent_events",
+        source="recent_events",
+        visibility="event text is redacted for player view before rendering",
+        provenance="events table selected by loaded context targets and recency",
+        budget_behavior="optional section priority 56/70",
         collect=collect_related_history,
         section=recent_events_section,
         loaded_items=event_loaded_items,
     ),
     ContextCollector(
         name="memory_summaries",
+        source="memory_summaries",
+        visibility="memory lookup receives context visibility view",
+        provenance="memory_summaries selected by loaded context targets",
+        budget_behavior="optional section priority 64",
         collect=collect_memory_summaries,
         section=memory_summaries_section,
         loaded_items=memory_loaded_items,

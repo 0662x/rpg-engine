@@ -54,6 +54,7 @@ def write_context_audit(
     ensure_context_audit_tables(conn)
     created_at = utc_now()
     audit_id = run_id or f"context:{created_at.replace(':', '').replace('-', '').replace('.', '')}"
+    result.request["context_audit_run_id"] = audit_id
     request = result.request
     completeness = result.completeness
     budget = result.budget
@@ -93,7 +94,10 @@ def write_context_audit(
         ),
     )
     conn.execute("delete from context_items where context_run_id = ?", (audit_id,))
+    seen_item_keys: set[tuple[str, str]] = set()
     for item in result.loaded_items:
+        source = str(item.get("source", "loaded"))
+        item_id = context_item_audit_id(item, source, seen_item_keys)
         conn.execute(
             """
             insert into context_items
@@ -103,9 +107,9 @@ def write_context_audit(
             """,
             (
                 audit_id,
-                str(item.get("id")),
+                item_id,
                 str(item.get("kind", "")),
-                "loaded",
+                source,
                 str(item.get("reason", "")),
                 int(item.get("priority", 0)),
                 None,
@@ -115,6 +119,8 @@ def write_context_audit(
             ),
         )
     for item in result.omitted_items:
+        source = str(item.get("source", "omitted"))
+        item_id = context_item_audit_id(item, source, seen_item_keys)
         conn.execute(
             """
             insert into context_items
@@ -124,9 +130,9 @@ def write_context_audit(
             """,
             (
                 audit_id,
-                str(item.get("id")),
+                item_id,
                 str(item.get("kind", "")),
-                "omitted",
+                source,
                 str(item.get("reason", "")),
                 int(item.get("priority", 0)),
                 item.get("estimated_tokens"),
@@ -137,3 +143,25 @@ def write_context_audit(
         )
     conn.commit()
     return audit_id
+
+
+def context_item_audit_id(
+    item: dict[str, Any],
+    source: str,
+    seen_item_keys: set[tuple[str, str]],
+) -> str:
+    item_id = str(item.get("id"))
+    key = (item_id, source)
+    if key not in seen_item_keys:
+        seen_item_keys.add(key)
+        return item_id
+
+    kind = str(item.get("kind") or "item")
+    base = f"audit:{kind}:{item_id}"
+    candidate = base
+    index = 2
+    while (candidate, source) in seen_item_keys:
+        candidate = f"{base}:{index}"
+        index += 1
+    seen_item_keys.add((candidate, source))
+    return candidate

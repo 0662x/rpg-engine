@@ -52,6 +52,17 @@ Round 7 本地基线（2026-07-04）：`python3 -m pytest -q` 通过，`450 pass
 python3 -m pytest tests/test_current_native_*.py tests/test_cross_layer_regression.py
 ```
 
+Context contract / audit gate：
+
+```bash
+python3 -m pytest -q tests/test_context_quality.py tests/test_current_native_context.py tests/test_runtime.py
+```
+
+该 gate 适用于触碰 `ContextBuildResult`、context collectors、budget / omission evidence、
+`context_runs` / `context_items` audit、`GMRuntime.query("context")`、CLI `context build` 或 prompt/render
+context 消费路径的变更。新增 context source 必须声明 visibility、provenance 和 budget behavior，并证明
+player-safe view 下不会通过新增 evidence 字段泄露 hidden / GM-only 内容。
+
 写入安全和 validation cluster：
 
 ```bash

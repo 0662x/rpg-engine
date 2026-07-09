@@ -129,8 +129,12 @@ class GMRuntimeTests(unittest.TestCase):
             self.assertIn("current_scene", result.context.sections if result.context else {})
             self.assertIn("Context Packet", result.markdown)
             self.assertEqual(data["campaign_id"], "minimal-campaign")
+            self.assertEqual(data["context"]["contract"]["id"], "ContextBuildResult")
+            self.assertEqual(data["context"]["scope"]["mode"], "query")
             self.assertEqual(data["context"]["request"]["mode"], "query")
             self.assertEqual(json_data["submode"], "scene")
+            self.assertEqual(json_data["context"]["contract"]["version"], "1.0")
+            self.assertIn("Context Packet", json_data["context"]["markdown"])
 
     def test_query_scene_and_entity_do_not_mutate_save(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -140,10 +144,15 @@ class GMRuntimeTests(unittest.TestCase):
 
             scene = runtime.query("scene")
             entity = runtime.query("entity", "Traveler")
+            context = runtime.query("context", "查看周围")
+            context_json = json.loads(context.to_json_text())
 
             self.assertIn("Start", scene.text)
             self.assertNotIn("找 Traveler 谈谈", scene.text)
             self.assertIn("Traveler", entity.text)
+            self.assertEqual(context_json["context"]["contract"]["id"], "ContextBuildResult")
+            self.assertEqual(context_json["context"]["scope"]["mode"], "query")
+            self.assertIn("Context Packet", context_json["context"]["markdown"])
             self.assertEqual(current_turn(campaign), before)
 
     def test_preview_action_uses_registered_resolver_without_saving(self) -> None:
