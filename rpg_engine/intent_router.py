@@ -16,7 +16,7 @@ from .ai_intent.types import ClarificationChoice, ClarificationQuestion, IntentC
 from .campaign import Campaign
 from .db import entity_subtype_visibility_sql
 from .ux import PlanStep, RepairOption, UxStatus
-from .visibility import ensure_visibility_sql_functions, entity_visibility_sql, normalized_text_sql
+from .visibility import PLAYER_VIEW, ensure_visibility_sql_functions, entity_visibility_sql, normalized_text_sql
 
 
 QUERY_KEYWORDS = [
@@ -234,6 +234,7 @@ def route_intent(
     session_key: str | None = None,
     source_user_text_hash: str | None = None,
     preflight_pending_wait_ms: int = 0,
+    view: str = PLAYER_VIEW,
 ) -> ActionIntent:
     """Return the single intent contract shared by context, CLI and MCP flows."""
     del semantic_ai, semantic_provider, semantic_model, semantic_timeout
@@ -261,6 +262,7 @@ def route_intent(
         mode=mode,
         submode=submode,
         external_candidate_input=ExternalCandidateInput(external_intent_candidate),
+        view=view,
     )
     text = prepared.text
     explicit_mode = prepared.explicit_mode
@@ -315,6 +317,7 @@ def route_intent(
         session_key=request_meta.session_key,
         source_user_text_hash=request_meta.source_user_text_hash,
         preflight_pending_wait_ms=request_meta.preflight_pending_wait_ms,
+        view=view,
     )
     guards.extend(intent_route.guards)
     intent_ai_trace = intent_route.trace
@@ -428,6 +431,7 @@ def prepare_intent_candidates(
     mode: str = "auto",
     submode: str | None = None,
     external_candidate_input: ExternalCandidateInput | None = None,
+    view: str = PLAYER_VIEW,
 ) -> PreparedIntentCandidates:
     text = normalize_player_text(user_text).strip()
     external_payload = external_candidate_input.payload if external_candidate_input is not None else None
@@ -443,6 +447,7 @@ def prepare_intent_candidates(
         text,
         explicit_mode=explicit_mode,
         explicit_submode=explicit_submode,
+        view=view,
     )
     outcome = legacy_route.outcome
     rules_candidate = build_rules_intent_candidate(
@@ -472,6 +477,7 @@ def build_legacy_rule_route(
     *,
     explicit_mode: str | None,
     explicit_submode: str | None,
+    view: str = PLAYER_VIEW,
 ) -> LegacyRuleRoute:
     action_names = set(get_default_action_registry().names())
     rule_submode = explicit_submode or infer_submode(text)
@@ -485,7 +491,7 @@ def build_legacy_rule_route(
     if rule_mode == "maintenance":
         rule_submode = "maintenance"
 
-    inferred = infer_player_action(conn, text)
+    inferred = infer_player_action(conn, text, view=view)
     alternatives: list[ActionAlternative] = [
         ActionAlternative(
             mode=rule_mode,
@@ -1190,7 +1196,7 @@ def looks_like_noise_text(text: str) -> bool:
     return meaningful_chars < 3 and len(stripped) >= 8
 
 
-def infer_player_action(conn: sqlite3.Connection, user_text: str) -> dict[str, Any]:
+def infer_player_action(conn: sqlite3.Connection, user_text: str, *, view: str = PLAYER_VIEW) -> dict[str, Any]:
     text = user_text.strip()
     if is_meta_or_override_text(text):
         return unresolved_act(
@@ -1220,9 +1226,15 @@ def infer_player_action(conn: sqlite3.Connection, user_text: str) -> dict[str, A
             missing_required=("user_text",),
         )
 
-    location = first_visible_entity_in_text(conn, text, "location")
-    character = first_visible_entity_in_text(conn, text, "character")
-    gather_target = first_visible_entity_in_text(conn, text, None, preferred_types=("plant", "item", "material", "crop_plot"))
+    location = first_visible_entity_in_text(conn, text, "location", view=view)
+    character = first_visible_entity_in_text(conn, text, "character", view=view)
+    gather_target = first_visible_entity_in_text(
+        conn,
+        text,
+        None,
+        preferred_types=("plant", "item", "material", "crop_plot"),
+        view=view,
+    )
     if gather_target and gather_target["type"] not in {"plant", "item", "material", "crop_plot"}:
         gather_target = None
     explore_target = first_visible_entity_in_text(
@@ -1230,6 +1242,7 @@ def infer_player_action(conn: sqlite3.Connection, user_text: str) -> dict[str, A
         text,
         None,
         preferred_types=("reference", "location", "threat", "project", "faction_state", "world_setting"),
+        view=view,
     )
     has_inventory_intent = text_has_any(text, ("盘点", "整理库存", "查看库存", "看看物资", "清点", "inventory", "audit"))
     has_routine_intent = has_inventory_intent or text_has_any(text, ROUTINE_INTENT_TERMS)
@@ -1612,10 +1625,11 @@ def first_visible_entity_in_text(
     entity_type: str | None,
     *,
     preferred_types: tuple[str, ...] = (),
+    view: str = PLAYER_VIEW,
 ) -> sqlite3.Row | None:
     ensure_visibility_sql_functions(conn)
-    visibility_clause = entity_visibility_sql("player", "e")
-    subtype_visibility_clause = entity_subtype_visibility_sql("player", "e", "c")
+    visibility_clause = entity_visibility_sql(view, "e")
+    subtype_visibility_clause = entity_subtype_visibility_sql(view, "e", "c")
     rows = conn.execute(
         f"""
         select e.id, e.type, e.name, e.summary, e.location_id

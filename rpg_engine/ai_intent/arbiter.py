@@ -4,6 +4,7 @@ import sqlite3
 from typing import Any
 
 from ..actions import ActionResolverRegistry
+from ..visibility import PLAYER_VIEW
 from .binder import bind_intent_candidate
 from .normalization import normalize_intent_candidate
 from .risk import ACTION_BASE_RISK, YELLOW_FAST
@@ -28,6 +29,7 @@ def arbitrate_intent_candidates(
     rule_candidate: IntentCandidate | dict[str, Any] | None = None,
     internal_review_metadata: dict[str, Any] | None = None,
     registry: ActionResolverRegistry | None = None,
+    view: str = PLAYER_VIEW,
 ) -> ConsensusDecision:
     external = coerce_candidate(external_candidate, source="external_ai")
     internal = coerce_candidate(internal_candidate, source="internal_ai")
@@ -61,18 +63,20 @@ def arbitrate_intent_candidates(
             external,
             internal,
             registry=registry,
+            view=view,
             trace=trace,
             internal_review_metadata=internal_review_metadata,
         )
 
     if internal:
-        bound = bind_intent_candidate(conn, internal, registry=registry)
+        bound = bind_intent_candidate(conn, internal, registry=registry, view=view)
         single_source = single_source_internal_fast_path(
             conn,
             internal,
             bound,
             rules,
             registry=registry,
+            view=view,
         )
         if single_source is not None:
             trace["rules_binding"] = single_source.to_dict() if isinstance(single_source, BoundIntent) else None
@@ -107,7 +111,7 @@ def arbitrate_intent_candidates(
         )
 
     if rules:
-        bound = bind_intent_candidate(conn, rules, registry=registry)
+        bound = bind_intent_candidate(conn, rules, registry=registry, view=view)
         trace["consensus"] = {
             "status": "fallback",
             "source": "rules_fallback",
@@ -139,6 +143,7 @@ def arbitrate_external_internal(
     internal: IntentCandidate,
     *,
     registry: ActionResolverRegistry | None,
+    view: str,
     trace: dict[str, Any],
     internal_review_metadata: dict[str, Any] | None = None,
 ) -> ConsensusDecision:
@@ -163,7 +168,7 @@ def arbitrate_external_internal(
         )
 
     if external.kind == "composite" and internal.kind == "composite":
-        bound = bind_intent_candidate(conn, internal, registry=registry) if internal.mode == "action" else None
+        bound = bind_intent_candidate(conn, internal, registry=registry, view=view) if internal.mode == "action" else None
         trace["consensus"] = {
             "status": "clarify",
             "source": "ai_consensus_unbound",
@@ -192,8 +197,8 @@ def arbitrate_external_internal(
             decision_trace=trace,
         )
 
-    external_bound = bind_intent_candidate(conn, external, registry=registry)
-    internal_bound = bind_intent_candidate(conn, internal, registry=registry)
+    external_bound = bind_intent_candidate(conn, external, registry=registry, view=view)
+    internal_bound = bind_intent_candidate(conn, internal, registry=registry, view=view)
     trace["external_binding"] = external_bound.to_dict()
     trace["internal_binding"] = internal_bound.to_dict()
 
@@ -370,6 +375,7 @@ def single_source_internal_fast_path(
     rules: IntentCandidate | None,
     *,
     registry: ActionResolverRegistry | None,
+    view: str,
 ) -> BoundIntent | bool | None:
     if rules is None:
         return None
@@ -389,7 +395,7 @@ def single_source_internal_fast_path(
         return None
     if internal_bound.binding_status != "bound":
         return None
-    rules_bound = bind_intent_candidate(conn, rules, registry=registry)
+    rules_bound = bind_intent_candidate(conn, rules, registry=registry, view=view)
     if rules_bound.binding_status != "bound":
         return None
     if binding_disagreements(rules_bound, internal_bound):

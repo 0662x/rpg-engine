@@ -42,7 +42,7 @@ from .intent_router import (
     turn_contract_for_intent,
     turn_contract_to_dict,
 )
-from .redaction import redact_hidden_entity_refs
+from .redaction import redact_hidden_entity_id_substrings, redact_hidden_entity_refs
 from .render import render_scene
 from .visibility import can_read_hidden, context_visibility_view, normalize_visibility_view
 from .actions import get_default_action_registry
@@ -329,8 +329,13 @@ def classify_request(state: BuildState) -> None:
         session_key=state.request_meta.session_key,
         source_user_text_hash=state.request_meta.source_user_text_hash,
         preflight_pending_wait_ms=state.request_meta.preflight_pending_wait_ms,
+        view=classification_visibility_view(state),
     )
     apply_intent_classification(state, intent)
+
+
+def classification_visibility_view(state: BuildState) -> str:
+    return state.visibility_view or context_visibility_view(state.mode_arg)
 
 
 def apply_intent_classification(state: BuildState, intent: ActionIntent) -> None:
@@ -432,14 +437,14 @@ def render_context_result(state: BuildState) -> ContextBuildResult:
     contract = context_contract_metadata(state, context_view)
     scope = context_scope_metadata(state, context_view)
     if should_redact:
-        semantic_suggestion = redact_hidden_entity_refs(state.conn, semantic_suggestion, drop_empty=False)
-        semantic_alias_gaps = redact_hidden_entity_refs(state.conn, semantic_alias_gaps, drop_empty=False)
+        semantic_suggestion = redact_player_context_value(state.conn, semantic_suggestion)
+        semantic_alias_gaps = redact_player_context_value(state.conn, semantic_alias_gaps)
         semantic_error = (
-            str(redact_hidden_entity_refs(state.conn, semantic_error, drop_empty=False))
+            str(redact_player_context_value(state.conn, semantic_error))
             if semantic_error
             else None
         )
-        semantic_audit = redact_hidden_entity_refs(state.conn, semantic_audit, drop_empty=False)
+        semantic_audit = redact_player_context_value(state.conn, semantic_audit)
     request = {
         "user_text": state.user_text,
         "mode": state.mode,
@@ -571,17 +576,17 @@ def render_context_result(state: BuildState) -> ContextBuildResult:
         "trimmed": bool(omitted),
     }
     if should_redact:
-        contract = redact_hidden_entity_refs(state.conn, contract, drop_empty=False)
-        scope = redact_hidden_entity_refs(state.conn, scope, drop_empty=False)
-        request = redact_hidden_entity_refs(state.conn, request, drop_empty=False)
-        completeness = redact_hidden_entity_refs(state.conn, completeness, drop_empty=False)
-        loaded_items = redact_hidden_entity_refs(state.conn, loaded_items, drop_empty=False)
-        omitted_items = redact_hidden_entity_refs(state.conn, omitted_items, drop_empty=False)
+        contract = redact_player_context_value(state.conn, contract)
+        scope = redact_player_context_value(state.conn, scope)
+        request = redact_player_context_value(state.conn, request)
+        completeness = redact_player_context_value(state.conn, completeness)
+        loaded_items = redact_player_context_value(state.conn, loaded_items)
+        omitted_items = redact_player_context_value(state.conn, omitted_items)
     section_texts = {section.key: section.content for section in selected}
     markdown = render_markdown(state, request, completeness, budget, selected, omitted, loaded_items, omitted_items)
     if should_redact:
-        section_texts = redact_hidden_entity_refs(state.conn, section_texts, drop_empty=False)
-        markdown = str(redact_hidden_entity_refs(state.conn, markdown, drop_empty=False))
+        section_texts = redact_player_context_value(state.conn, section_texts)
+        markdown = str(redact_player_context_value(state.conn, markdown))
     return ContextBuildResult(
         contract=contract,
         scope=scope,
@@ -595,6 +600,11 @@ def render_context_result(state: BuildState) -> ContextBuildResult:
     )
 
 
+def redact_player_context_value(conn: sqlite3.Connection, value: Any) -> Any:
+    redacted = redact_hidden_entity_refs(conn, value, drop_empty=False)
+    return redact_hidden_entity_id_substrings(conn, redacted, drop_empty=False)
+
+
 def context_contract_metadata(state: BuildState, context_view: str) -> dict[str, Any]:
     return {
         "id": "ContextBuildResult",
@@ -604,12 +614,30 @@ def context_contract_metadata(state: BuildState, context_view: str) -> dict[str,
         "rendering_source": "ContextBuildResult",
         "pipeline_steps": [step.name for step in default_context_pipeline().steps],
         "collector_sources": [collector.name for collector in DEFAULT_CONTEXT_COLLECTORS],
+        "visibility_invariants": context_visibility_invariants(context_view),
         "authority": {
             "fact_source": "save_sqlite",
             "audit_is_fact_authority": False,
             "ai_advisory_only": state.semantic_ai != "off" or state.intent_ai != "off",
         },
     }
+
+
+def context_visibility_invariants(context_view: str) -> list[dict[str, Any]]:
+    return [
+        {
+            "source": "events",
+            "structured_visibility": "not_applicable",
+            "hidden_allowed": can_read_hidden(context_view),
+            "policy": "player view omits rows containing hidden entity refs before rendering; events do not carry standalone hidden authority in the current schema",
+        },
+        {
+            "source": "memory_summaries",
+            "structured_visibility": "not_applicable",
+            "hidden_allowed": can_read_hidden(context_view),
+            "policy": "player view omits rows containing hidden entity refs before rendering; memory summaries do not carry standalone hidden authority in the current schema",
+        },
+    ]
 
 
 def context_scope_metadata(state: BuildState, context_view: str) -> dict[str, Any]:

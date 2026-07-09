@@ -1263,6 +1263,7 @@ class GMRuntime:
                 **intent_ai_config_kwargs(intent_config),
                 external_intent_candidate=external_intent_candidate,
                 **intent_request_meta_kwargs(request_meta),
+                view=view,
             )
         return self.preview_intent(intent, view=view)
 

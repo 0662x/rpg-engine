@@ -324,10 +324,8 @@ class AIIntentTests(unittest.TestCase):
         self.assertTrue(result.no_direct_writes)
 
     def test_internal_prompt_marks_external_candidate_as_low_trust(self) -> None:
-        conn = sqlite3.connect(":memory:")
-        conn.row_factory = sqlite3.Row
-        conn.execute("create table meta (key text primary key, value text)")
-        conn.execute("insert into meta (key, value) values ('current_location_id', 'loc:home')")
+        conn = self.make_entity_db()
+        conn.execute("insert or replace into meta (key, value) values ('current_location_id', 'loc:home')")
 
         prompt = build_internal_intent_review_prompt(
             conn,
@@ -350,6 +348,50 @@ class AIIntentTests(unittest.TestCase):
         self.assertIn('"player_confirmation_required": true', prompt)
         self.assertIn("允许 mode: action, query, unknown", prompt)
         self.assertNotIn("允许 mode: action, query, maintenance", prompt)
+
+    def test_internal_prompt_fails_closed_when_redaction_schema_is_missing(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.execute("create table meta (key text primary key, value text)")
+        conn.execute("insert into meta (key, value) values ('current_location_id', 'loc:hidden')")
+
+        prompt = build_internal_intent_review_prompt(conn, "查看 秘者", view="player")
+
+        self.assertIn("[player-safe input unavailable]", prompt)
+        self.assertNotIn("查看 秘者", prompt)
+        self.assertNotIn("loc:hidden", prompt)
+
+    def test_collect_internal_intent_candidate_redacts_hidden_source_user_text(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_hermes = Path(tmp) / "hermes"
+            fake_hermes.write_text(
+                "#!/bin/sh\n"
+                "printf '%s\\n' '{\"kind\":\"query\",\"mode\":\"query\",\"action\":\"\",\"slots\":{\"query_kind\":\"entity\",\"query_text\":\"[hidden]\"},\"plan\":[],\"confidence\":\"high\",\"missing_slots\":[],\"needs_confirmation\":[],\"safety_flags\":[],\"reason\":\"玩家查询\",\"agreement_with_external\":\"no_external\",\"disagreements\":[],\"external_candidate_quality\":\"no_external\"}'\n",
+                encoding="utf-8",
+            )
+            fake_hermes.chmod(0o755)
+            old_path = os.environ.get("PATH", "")
+            os.environ["PATH"] = f"{tmp}{os.pathsep}{old_path}"
+            try:
+                conn = self.make_entity_db()
+                conn.execute("insert or replace into meta (key, value) values ('current_location_id', 'loc:home')")
+                result = collect_internal_intent_candidate(
+                    SimpleNamespace(campaign_id="test"),
+                    conn,
+                    "查看 秘者",
+                    rule_candidate={"kind": "query", "mode": "query", "slots": {"query_kind": "entity"}},
+                    backend="hermes",
+                    provider=DEFAULT_AI_PROVIDER,
+                    model=DEFAULT_AI_MODEL,
+                    timeout=3,
+                )
+            finally:
+                os.environ["PATH"] = old_path
+
+        self.assertTrue(result.ok, result.error)
+        assert result.parsed is not None
+        self.assertNotIn("秘者", result.parsed["source_user_text"])
+        self.assertNotIn("秘者", result.audit["output_summary"])
 
     def test_binder_binds_social_slots_to_visible_entity_ids(self) -> None:
         conn = self.make_entity_db()

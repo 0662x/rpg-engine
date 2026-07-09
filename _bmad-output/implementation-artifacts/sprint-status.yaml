@@ -70,7 +70,7 @@ development_status:
 
   epic-3: in-progress
   3-1-contextbuildresult-contract-and-audit: done
-  3-2-player-safe-context-query-与-prompt-隐藏信息边界: backlog
+  3-2-player-safe-context-query-与-prompt-隐藏信息边界: done
   3-3-派生玩家视图与检索产物的隐藏信息边界: backlog
   3-4-relationship-progress-and-plot-signal-context: backlog
   3-5-long-term-memory-summary-provenance: backlog

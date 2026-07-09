@@ -7,7 +7,7 @@ from ..ai.provider import AIHelperResult, run_ai_helper_json
 from ..ai.tasks import AIHelperTask
 from ..campaign import Campaign
 from .normalization import normalize_internal_intent_review
-from .prompts import build_internal_intent_review_prompt
+from .prompts import build_internal_intent_review_prompt, prompt_safe_value
 from .types import IntentCandidate
 
 
@@ -27,8 +27,10 @@ def collect_internal_intent_candidate(
     base_url: str = "",
     api_key_env: str = "",
     fallback_backend: str = "off",
+    view: str = "player",
 ) -> AIHelperResult:
     del campaign
+    parser_user_text = str(prompt_safe_value(conn, user_text, view=view))
     prompt = build_internal_intent_review_prompt(
         conn,
         user_text,
@@ -36,12 +38,13 @@ def collect_internal_intent_candidate(
         rule_candidate=rule_candidate,
         safety_notes=safety_notes,
         visible_entities=visible_entities,
+        view=view,
     )
     task = AIHelperTask(
         name="internal_intent_review",
         prompt=prompt,
         output_schema="internal_intent_review.schema.json",
-        parser=lambda value: normalize_internal_intent_review(value, user_text=user_text),
+        parser=lambda value: normalize_internal_intent_review(value, user_text=parser_user_text),
     )
     return run_ai_helper_json(
         task,

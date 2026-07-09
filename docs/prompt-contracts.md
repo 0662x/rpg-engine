@@ -28,6 +28,12 @@ Prompt 是操作指导，不是权限授予。
 - MCP / CLI 暴露什么能力，由当前 profile gate、path gate 和 kernel service 决定。
 - Prompt 不能让 AI 跳过 preview、validation、confirm 或 commit。
 - Prompt 不能把 AI 生成文本变成已保存事实。
+- Player-safe AI/helper prompt 输入必须来自 player-view context 或等价 player-safe state；prompt builder
+  不得重新查询 hidden facts，也不得把 hidden current location、hidden entity refs、GM notes 或 maintenance
+  evidence 放入普通玩家 prompt。
+- Semantic / internal intent helper prompt 在 player view 下必须 redaction 玩家原文、candidate、visible entity
+  hints 和 current meta 中命中的 hidden entity refs；可信 GM / maintenance prompt 必须通过显式 view
+  选择 hidden-read 行为。
 - Prompt 中的示例命令必须与 [CLI 合同](cli-contracts.md) 和
   [MCP 合同](mcp-contracts.md) 保持一致。
 
@@ -46,6 +52,9 @@ Prompt 是操作指导，不是权限授予。
 - 普通玩家 prompt 不要求 hidden、admin、maintenance、repair、migration、package、plugin、
   arbitrary-file、import、export 或 patch 工具。
 - 低层 `play` / `preview` / `commit` 工具只属于 developer/trusted profile 或诊断流程。
+- Semantic / intent helper prompt 如果服务普通玩家路径，只能看到 player-safe `ContextBuildResult`
+  或已按 player view 过滤的字段；GM / maintenance context 不能通过 cache、audit upsert 或 prompt reuse
+  泄漏到 player-safe mode。
 
 相关权威文档：
 

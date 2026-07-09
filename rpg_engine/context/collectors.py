@@ -8,7 +8,7 @@ from typing import Any, Callable, Iterable
 from ..db import entity_subtype_visibility_sql, get_meta
 from ..memory import find_relevant_memories, render_memory_section
 from ..palette import render_compact_palette_table, suggest_palette_entries
-from ..redaction import redact_hidden_entity_refs
+from ..redaction import find_hidden_entity_id_substrings, find_hidden_entity_ref_tokens, redact_hidden_entity_refs
 from ..render import parse_json
 from ..visibility import (
     can_read_hidden,
@@ -25,6 +25,8 @@ from .sections import ContextSection, estimate_tokens
 
 EXPLORATION_TERMS = ["附近", "周围", "有没有", "看看", "探索", "找找"]
 PALETTE_ACTION_SUBMODES = {"explore", "gather", "travel", "craft"}
+DISCOVERY_VISIBILITIES_FOR_TRUSTED = ("known", "hinted", "hidden", "gm", "maintenance")
+DISCOVERY_VISIBILITIES_FOR_PLAYER = ("known", "hinted")
 
 
 @dataclass(frozen=True)
@@ -267,12 +269,15 @@ def collect_world_settings(state: Any) -> None:
 def collect_related_history(state: Any) -> None:
     if state.max_events <= 0:
         return
-    related = find_related_events(state)
+    related = player_safe_history_events(state, find_related_events(state))
     state.related_events = related[: state.max_events]
     remaining = max(0, state.max_events - len(state.related_events))
     if remaining:
         related_ids = {row["id"] for row in state.related_events}
-        state.general_events = find_general_recent_events(state, remaining, exclude_ids=related_ids)
+        state.general_events = player_safe_history_events(
+            state,
+            find_general_recent_events(state, remaining, exclude_ids=related_ids),
+        )[:remaining]
 
 
 def collect_memory_summaries(state: Any) -> None:
@@ -331,7 +336,9 @@ def collect_discovery_states(state: Any) -> None:
     if not should_include:
         return
 
+    ensure_visibility_sql_functions(state.conn)
     targets = discovery_targets(state)
+    view = state_visibility_view(state)
     rows: list[sqlite3.Row] = []
     if targets:
         clauses = []
@@ -339,37 +346,22 @@ def collect_discovery_states(state: Any) -> None:
         for target in targets[:12]:
             clauses.append("(subject_id = ? or palette_id = ? or notes like ?)")
             params.extend([target, target, f"%{target}%"])
-        rows = state.conn.execute(
-            f"""
-            select *
-            from discovery_states
-            where stage != 'archived'
-              and visibility in ('hinted', 'known')
-              and ({' or '.join(clauses)})
-            order by
-              case stage when 'confirmed' then 0 when 'observed' then 1 when 'clue' then 2 else 3 end,
-              evidence_count desc,
-              updated_at desc
-            limit 6
-            """,
-            params,
-        ).fetchall()
+        rows = fetch_discovery_state_rows(
+            state,
+            view=view,
+            where_suffix=f"and ({' or '.join(clauses)})",
+            params=params,
+            limit=6,
+        )
     if len(rows) < 6:
         existing = {row["id"] for row in rows}
-        extra = state.conn.execute(
-            """
-            select *
-            from discovery_states
-            where stage != 'archived'
-              and visibility in ('hinted', 'known')
-            order by
-              case stage when 'confirmed' then 0 when 'observed' then 1 when 'clue' then 2 else 3 end,
-              evidence_count desc,
-              updated_at desc
-            limit ?
-            """,
-            (6,),
-        ).fetchall()
+        extra = fetch_discovery_state_rows(
+            state,
+            view=view,
+            where_suffix="",
+            params=[],
+            limit=6,
+        )
         for row in extra:
             if row["id"] in existing:
                 continue
@@ -378,6 +370,118 @@ def collect_discovery_states(state: Any) -> None:
             if len(rows) >= 6:
                 break
     state.discovery_states = rows[:6]
+
+
+def discovery_visibility_clause(view: str) -> str:
+    allowed = DISCOVERY_VISIBILITIES_FOR_TRUSTED if can_read_hidden(view) else DISCOVERY_VISIBILITIES_FOR_PLAYER
+    values = ", ".join(f"'{item}'" for item in allowed)
+    return f"and {normalized_text_sql('visibility')} in ({values})"
+
+
+def discovery_fetch_limit(view: str, limit: int) -> int:
+    return limit if can_read_hidden(view) else max(limit * 4, 25)
+
+
+def fetch_discovery_state_rows(
+    state: Any,
+    *,
+    view: str,
+    where_suffix: str,
+    params: list[Any],
+    limit: int,
+) -> list[sqlite3.Row]:
+    page_size = discovery_fetch_limit(view, limit)
+    offset = 0
+    rows: list[sqlite3.Row] = []
+    seen: set[str] = set()
+    while len(rows) < limit:
+        page = state.conn.execute(
+            f"""
+            select *
+            from discovery_states
+            where stage != 'archived'
+              {discovery_visibility_clause(view)}
+              {where_suffix}
+            order by
+              case stage when 'confirmed' then 0 when 'observed' then 1 when 'clue' then 2 else 3 end,
+              evidence_count desc,
+              updated_at desc,
+              id desc
+            limit ? offset ?
+            """,
+            [*params, page_size, offset],
+        ).fetchall()
+        if not page:
+            break
+        offset += len(page)
+        for row in player_safe_discovery_states(state, page):
+            if row["id"] in seen:
+                continue
+            seen.add(row["id"])
+            rows.append(row)
+            if len(rows) >= limit:
+                break
+        if can_read_hidden(view):
+            break
+    return rows[:limit]
+
+
+def player_safe_discovery_states(state: Any, rows: list[sqlite3.Row]) -> list[sqlite3.Row]:
+    if can_read_hidden(state_visibility_view(state)):
+        return rows
+    return [row for row in rows if not discovery_state_has_hidden_refs(state.conn, row)]
+
+
+def discovery_state_has_hidden_refs(conn: sqlite3.Connection, row: sqlite3.Row) -> bool:
+    payload = {
+        "id": row["id"],
+        "subject_id": row["subject_id"],
+        "palette_id": row["palette_id"],
+        "notes": row["notes"],
+        "confirmation_methods": row["confirmation_methods_json"],
+        "source_event_ids": row["source_event_ids_json"],
+    }
+    identifiers = {"id": row["id"], "subject_id": row["subject_id"], "palette_id": row["palette_id"]}
+    return (
+        bool(find_hidden_entity_ref_tokens(conn, payload))
+        or bool(find_hidden_entity_id_substrings(conn, payload))
+        or bool(find_hidden_entity_id_substrings(conn, identifiers))
+        or discovery_state_has_hidden_subject(conn, row)
+    )
+
+
+def discovery_state_has_hidden_subject(conn: sqlite3.Connection, row: sqlite3.Row) -> bool:
+    if not table_exists(conn, "entities"):
+        return False
+    candidates: set[str] = set()
+    for value in (row["subject_id"], row["palette_id"]):
+        text = str(value or "").strip()
+        if not text:
+            continue
+        candidates.add(text)
+        if text.startswith("pal:"):
+            candidates.add(text.removeprefix("pal:"))
+    if not candidates:
+        return False
+    ensure_visibility_sql_functions(conn)
+    placeholders = ",".join("?" for _ in candidates)
+    hidden = conn.execute(
+        f"""
+        select 1
+        from entities e
+        left join clocks c on c.entity_id = e.id
+        where e.id in ({placeholders})
+          and (
+            {normalized_text_sql("e.status")} = 'archived'
+            or {normalized_text_sql("e.visibility")} = 'hidden'
+            or ({normalized_text_sql("e.type")} = 'clock'
+                and {normalized_text_sql("coalesce(c.visibility, e.visibility)")} = 'hidden')
+          )
+        limit 1
+        """,
+        sorted(candidates),
+    ).fetchone()
+    return hidden is not None
 
 
 def discovery_states_section(state: Any) -> ContextSection | None:
@@ -767,6 +871,9 @@ def find_related_events(state: Any) -> list[sqlite3.Row]:
         clauses.append("(payload_json like ? or summary like ? or title like ? or game_time like ?)")
         like = f"%{target}%"
         params.extend([like, like, like, like])
+    view = state_visibility_view(state)
+    if not can_read_hidden(view):
+        return find_player_safe_related_events(state, clauses=clauses, params=params)
     rows = state.conn.execute(
         f"""
         select id, turn_id, type, title, summary, game_time, payload_json, created_at
@@ -783,12 +890,57 @@ def find_related_events(state: Any) -> list[sqlite3.Row]:
     return rows
 
 
+def find_player_safe_related_events(
+    state: Any,
+    *,
+    clauses: list[str],
+    params: list[str],
+) -> list[sqlite3.Row]:
+    limit = max(state.max_events, 0)
+    if limit <= 0:
+        return []
+    page_size = max(limit * 4, 25)
+    offset = 0
+    result: list[sqlite3.Row] = []
+    seen: set[str] = set()
+    while len(result) < limit:
+        rows = state.conn.execute(
+            f"""
+            select id, turn_id, type, title, summary, game_time, payload_json, created_at
+            from events
+            where ({' or '.join(clauses)})
+            order by
+              case type when 'import' then 1 else 0 end,
+              created_at desc,
+              id desc
+            limit ? offset ?
+            """,
+            [*params, page_size, offset],
+        ).fetchall()
+        if not rows:
+            break
+        offset += len(rows)
+        for row in rows:
+            if row["id"] in seen:
+                continue
+            seen.add(row["id"])
+            if history_event_has_hidden_refs(state.conn, row):
+                continue
+            result.append(row)
+            if len(result) >= limit:
+                break
+    return result[:limit]
+
+
 def find_general_recent_events(
     state: Any,
     limit: int,
     *,
     exclude_ids: set[str],
 ) -> list[sqlite3.Row]:
+    if not can_read_hidden(state_visibility_view(state)):
+        return find_player_safe_general_recent_events(state, limit, exclude_ids=exclude_ids)
+    fetch_limit = max(limit + len(exclude_ids), (limit + len(exclude_ids)) * 4)
     rows = state.conn.execute(
         """
         select id, turn_id, type, title, summary, game_time, payload_json, created_at
@@ -798,10 +950,73 @@ def find_general_recent_events(
         order by created_at desc, id desc
         limit ?
         """,
-        (limit + len(exclude_ids),),
+        (fetch_limit,),
     ).fetchall()
     result = [row for row in rows if row["id"] not in exclude_ids]
     return result[:limit]
+
+
+def find_player_safe_general_recent_events(
+    state: Any,
+    limit: int,
+    *,
+    exclude_ids: set[str],
+) -> list[sqlite3.Row]:
+    if limit <= 0:
+        return []
+    page_size = max(limit * 4, 25)
+    offset = 0
+    result: list[sqlite3.Row] = []
+    seen: set[str] = set(exclude_ids)
+    while len(result) < limit:
+        rows = state.conn.execute(
+            """
+            select id, turn_id, type, title, summary, game_time, payload_json, created_at
+            from events
+            where type not in ('import', 'campaign_seeded')
+              and id != 'event:seed'
+            order by created_at desc, id desc
+            limit ? offset ?
+            """,
+            (page_size, offset),
+        ).fetchall()
+        if not rows:
+            break
+        offset += len(rows)
+        for row in rows:
+            if row["id"] in seen:
+                continue
+            seen.add(row["id"])
+            if history_event_has_hidden_refs(state.conn, row):
+                continue
+            result.append(row)
+            if len(result) >= limit:
+                break
+    return result[:limit]
+
+
+def player_safe_history_events(state: Any, rows: list[sqlite3.Row]) -> list[sqlite3.Row]:
+    if can_read_hidden(state_visibility_view(state)):
+        return rows
+    return [row for row in rows if not history_event_has_hidden_refs(state.conn, row)]
+
+
+def history_event_has_hidden_refs(conn: sqlite3.Connection, row: sqlite3.Row) -> bool:
+    payload = {
+        "title": row["title"],
+        "summary": row["summary"],
+        "payload": row["payload_json"],
+    }
+    identifiers = {
+        "id": row["id"],
+        "turn_id": row["turn_id"],
+        "game_time": row["game_time"],
+    }
+    return (
+        bool(find_hidden_entity_ref_tokens(conn, payload))
+        or bool(find_hidden_entity_id_substrings(conn, payload))
+        or bool(find_hidden_entity_id_substrings(conn, identifiers))
+    )
 
 
 def history_targets(state: Any) -> list[str]:

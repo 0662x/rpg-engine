@@ -9,7 +9,7 @@ from typing import Any
 
 from .campaign import Campaign
 from .db import entity_subtype_visibility_sql, get_meta, get_player_entity_id, utc_now
-from .redaction import redact_hidden_entity_refs
+from .redaction import find_hidden_entity_id_substrings, find_hidden_entity_ref_tokens, redact_hidden_entity_refs
 from .render import parse_json
 from .time_weather import format_time_brief, format_weather_brief
 from .visibility import (
@@ -409,6 +409,14 @@ def find_relevant_memories(
         clauses.append("(m.subject_id = ? or m.title like ? or m.summary like ? or m.key_points_json like ?)")
         like = f"%{target}%"
         params.extend([target, like, like, like])
+    if not can_read_hidden(view):
+        return find_player_safe_relevant_memories(
+            conn,
+            clauses=clauses,
+            params=params,
+            limit=limit,
+            view=view,
+        )
     rows = conn.execute(
         f"""
         select m.*
@@ -432,9 +440,71 @@ def find_relevant_memories(
         """,
         [*params, limit],
     ).fetchall()
-    if can_read_hidden(view):
-        return rows
-    return [redact_memory_row_for_view(conn, row, view=view) for row in rows]
+    return rows[:limit]
+
+
+def find_player_safe_relevant_memories(
+    conn: sqlite3.Connection,
+    *,
+    clauses: list[str],
+    params: list[str],
+    limit: int,
+    view: str,
+) -> list[sqlite3.Row]:
+    page_size = max(limit * 4, limit + 12)
+    offset = 0
+    result: list[sqlite3.Row] = []
+    while len(result) < limit:
+        rows = conn.execute(
+            f"""
+            select m.*
+            from memory_summaries m
+            left join entities e on e.id = m.subject_id
+            left join clocks c on c.entity_id = e.id
+            where (e.id is null or ({entity_not_archived_sql("e")} {entity_visibility_sql(view, "e")} {entity_subtype_visibility_sql(view, "e", "c")}))
+              and ({' or '.join(clauses)})
+            order by
+              case m.kind
+                when 'world' then 0
+                when 'character' then 1
+                when 'project' then 2
+                when 'faction' then 3
+                when 'day' then 4
+                else 5
+              end,
+              m.updated_at desc,
+              m.id
+            limit ? offset ?
+            """,
+            [*params, page_size, offset],
+        ).fetchall()
+        if not rows:
+            break
+        offset += len(rows)
+        for row in rows:
+            if memory_row_has_hidden_refs(conn, row):
+                continue
+            result.append(redact_memory_row_for_view(conn, row, view=view))
+            if len(result) >= limit:
+                break
+    return result[:limit]
+
+
+def memory_row_has_hidden_refs(conn: sqlite3.Connection, row: sqlite3.Row) -> bool:
+    payload = {
+        "title": row["title"],
+        "summary": row["summary"],
+        "key_points": row["key_points_json"],
+    }
+    identifiers = {
+        "id": row["id"],
+        "subject_id": row["subject_id"],
+    }
+    return (
+        bool(find_hidden_entity_ref_tokens(conn, payload))
+        or bool(find_hidden_entity_id_substrings(conn, payload))
+        or bool(find_hidden_entity_id_substrings(conn, identifiers))
+    )
 
 
 def render_memory_section(rows: list[sqlite3.Row], conn: sqlite3.Connection | None = None, *, view: str = "player") -> str:

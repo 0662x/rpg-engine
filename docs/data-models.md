@@ -377,6 +377,17 @@ opt-in 诊断证据：默认 `build_context()`、`GMRuntime.start_turn()` 和普
 新增 context source 必须声明 visibility、provenance 和 budget behavior，并通过 `ContextBuildResult`
 输出和 audit 记录，不得绕过 `visibility.py`、context pipeline 或 access contracts。
 
+Player-safe context、ordinary query、scene output 和 player-safe AI/helper prompts 必须在 collection
+或 query 阶段排除 hidden / GM-only material。最终 render redaction 只能作为 defense-in-depth，不能成为
+唯一防线。GM / maintenance reads 必须显式选择 `gm` 或 `maintenance` view；同一 save 上的 trusted
+context、audit upsert 或 helper result 不能被复用到 player view。没有独立 visibility 字段的 event 或
+memory material 不承载独立 hidden 权限；hidden / GM-only 事实必须通过 hidden 或 archived entity refs
+表达。Player view collection 必须跳过包含 hidden entity refs 的 event / memory rows，且
+`ContextBuildResult.contract.visibility_invariants` 必须记录 `events` / `memory_summaries` 的
+`structured_visibility: not_applicable` 证据。若后续要让 event / memory summary 承载不绑定实体的
+GM-only 自由文本，必须先新增结构化 visibility / sensitivity 字段和迁移，不能静默混入当前 player-safe
+context 或 prompt。
+
 ## Turn And Event Model
 
 ### Turn

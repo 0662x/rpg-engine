@@ -14,6 +14,7 @@ from ..preflight_cache import (
     consume_intent_preflight_by_message,
 )
 from ..ux import UxStatus
+from ..visibility import PLAYER_VIEW
 from .adapters import route_outcome_from_consensus_decision
 from .arbiter import arbitrate_intent_candidates
 from .binder import bind_intent_candidate
@@ -50,8 +51,8 @@ class AIIntentRouter:
         self.conn = conn
         self.registry = registry
 
-    def bind(self, candidate: IntentCandidate | dict[str, Any]) -> BoundIntent:
-        return bind_intent_candidate(self.conn, candidate, registry=self.registry)
+    def bind(self, candidate: IntentCandidate | dict[str, Any], *, view: str = PLAYER_VIEW) -> BoundIntent:
+        return bind_intent_candidate(self.conn, candidate, registry=self.registry, view=view)
 
     def decide(
         self,
@@ -60,6 +61,7 @@ class AIIntentRouter:
         internal_candidate: IntentCandidate | dict[str, Any] | None = None,
         rule_candidate: IntentCandidate | dict[str, Any] | None = None,
         internal_review_metadata: dict[str, Any] | None = None,
+        view: str = PLAYER_VIEW,
     ) -> ConsensusDecision:
         return arbitrate_intent_candidates(
             self.conn,
@@ -68,6 +70,7 @@ class AIIntentRouter:
             rule_candidate=rule_candidate,
             internal_review_metadata=internal_review_metadata,
             registry=self.registry,
+            view=view,
         )
 
     def route_candidates(
@@ -92,6 +95,7 @@ class AIIntentRouter:
         session_key: str = "",
         source_user_text_hash: str = "",
         preflight_pending_wait_ms: int = 0,
+        view: str = PLAYER_VIEW,
     ) -> AIIntentRouteResult:
         internal_candidate: IntentCandidate | None = None
         internal_helper: AIHelperResult | None = None
@@ -149,6 +153,7 @@ class AIIntentRouter:
                     base_url=base_url,
                     api_key_env=api_key_env,
                     fallback_backend=fallback_backend,
+                    view=view,
                 )
             if internal_helper.ok and internal_helper.parsed:
                 internal_review_metadata = internal_helper.parsed
@@ -169,6 +174,7 @@ class AIIntentRouter:
             internal_candidate=internal_candidate,
             rule_candidate=rule,
             internal_review_metadata=internal_review_metadata,
+            view=view,
         )
         if intent_ai_mode == "consensus" and internal_helper is not None and not internal_helper.ok:
             decision, fallback_guard = self.apply_unavailable_internal_policy(

@@ -63,6 +63,15 @@ python3 -m pytest -q tests/test_context_quality.py tests/test_current_native_con
 context 消费路径的变更。新增 context source 必须声明 visibility、provenance 和 budget behavior，并证明
 player-safe view 下不会通过新增 evidence 字段泄露 hidden / GM-only 内容。
 
+Player-safe context / query / prompt hidden-boundary 变更还应覆盖 `tests/test_current_native_visibility.py`。
+测试需要证明 hidden entities、relationships、world settings、discovery states、memory summaries、events、
+scene output、ordinary query 和 player-safe helper prompt 输入都不会泄露 hidden material；trusted
+GM / maintenance view 应保留 explicit hidden read 能力，并证明 `gm -> player` 或 `maintenance -> player`
+的连续 context/audit 构建不会复用 hidden 内容。Events / memory summaries 目前没有独立
+visibility 字段；hidden / GM-only 内容必须通过 hidden entity refs 表达，测试应覆盖含 hidden refs 的
+rows 被 player collection 跳过、不会因 SQL top-N filtering 饿死后续 safe recall，并检查
+`ContextBuildResult.contract.visibility_invariants` 记录 not-applicable 证据。
+
 写入安全和 validation cluster：
 
 ```bash

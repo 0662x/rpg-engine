@@ -6,7 +6,16 @@ from typing import Any
 
 from ..ai.tasks import AIHelperTask
 from ..ai.provider import run_ai_helper_json
-from ..db import get_meta
+from ..db import entity_subtype_visibility_sql, get_meta
+from ..redaction import redact_hidden_entity_id_substrings, redact_hidden_entity_refs
+from ..visibility import (
+    can_read_hidden,
+    context_visibility_view,
+    ensure_visibility_sql_functions,
+    entity_not_archived_sql,
+    entity_visibility_sql,
+    normalized_text_sql,
+)
 from .rendering import trim_inline
 from .resolution import apply_semantic_entity_hints
 from ..actions import get_default_action_registry
@@ -40,11 +49,39 @@ def collect_semantic_suggestion(state: Any) -> None:
 
 def build_semantic_prompt(state: Any) -> str:
     meta = get_meta(state.conn)
-    hit_lines = [
-        f"- {hit.id} | {hit.type} | {hit.name} | {hit.reason}"
+    view = getattr(state, "visibility_view", None) or context_visibility_view(getattr(state, "mode", None))
+    should_redact = not can_read_hidden(view)
+    user_text = (
+        str(
+            redact_hidden_entity_id_substrings(
+                state.conn,
+                redact_hidden_entity_refs(state.conn, state.user_text, drop_empty=False),
+                drop_empty=False,
+            )
+        )
+        if should_redact
+        else state.user_text
+    )
+    hit_rows = [
+        {
+            "id": hit.id,
+            "type": hit.type,
+            "name": hit.name,
+            "reason": hit.reason,
+        }
         for hit in state.entity_hits[:8]
     ]
-    current_location = meta.get("current_location_id", "unknown")
+    if should_redact:
+        hit_rows = redact_hidden_entity_id_substrings(
+            state.conn,
+            redact_hidden_entity_refs(state.conn, hit_rows, drop_empty=False) or [],
+            drop_empty=False,
+        )
+    hit_lines = [
+        f"- {hit['id']} | {hit['type']} | {hit['name']} | {hit['reason']}"
+        for hit in hit_rows
+    ]
+    current_location = semantic_current_location_label(state, meta.get("current_location_id", "unknown"))
     action_registry = get_default_action_registry()
     action_names = action_registry.names()
     action_lines = [
@@ -65,7 +102,7 @@ def build_semantic_prompt(state: Any) -> str:
             "输出格式：",
             f'{{"mode":"query|action|unknown","submode":"{submode_union}","targets":["目标名"],"entities_mentioned":["实体名或ID"],"missing_confirmations":["需要玩家补充的短句"],"notes":["短句"],"confidence":"high|medium|low"}}',
             "",
-            f"玩家输入：{state.user_text}",
+            f"玩家输入：{user_text}",
             f"规则初判：{state.mode}:{state.submode}",
             f"当前位置：{current_location}",
             "已注册行动类型：",
@@ -74,6 +111,29 @@ def build_semantic_prompt(state: Any) -> str:
             "\n".join(hit_lines) if hit_lines else "- 无",
         ]
     )
+
+
+def semantic_current_location_label(state: Any, location_id: str) -> str:
+    view = getattr(state, "visibility_view", None) or context_visibility_view(getattr(state, "mode", None))
+    if can_read_hidden(view):
+        return location_id
+    ensure_visibility_sql_functions(state.conn)
+    visibility_clause = entity_visibility_sql(view, "e")
+    subtype_visibility_clause = entity_subtype_visibility_sql(view, "e", "c")
+    row = state.conn.execute(
+        f"""
+        select e.id
+        from entities e
+        left join clocks c on c.entity_id = e.id
+        where e.id = ?
+          and {normalized_text_sql("e.type")} = 'location'
+          and {entity_not_archived_sql("e")}
+          {visibility_clause}
+          {subtype_visibility_clause}
+        """,
+        (location_id,),
+    ).fetchone()
+    return location_id if row else "当前地点不可见或不存在"
 
 
 def parse_semantic_json(text: str) -> Any:

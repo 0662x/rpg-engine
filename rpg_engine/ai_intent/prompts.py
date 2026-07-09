@@ -1,10 +1,20 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from typing import Any
 
 from ..db import get_meta
 from ..intent_manifest import build_intent_manifest
+from ..redaction import redact_hidden_entity_id_substrings, redact_hidden_entity_refs
+from ..visibility import (
+    can_read_hidden,
+    ensure_visibility_sql_functions,
+    entity_not_archived_sql,
+    entity_visibility_sql,
+    normalize_visibility_view,
+    normalized_text_sql,
+)
 from .types import IntentCandidate
 
 
@@ -16,8 +26,10 @@ def build_internal_intent_review_prompt(
     rule_candidate: IntentCandidate | dict[str, Any] | None = None,
     safety_notes: tuple[str, ...] = (),
     visible_entities: list[dict[str, Any]] | None = None,
+    view: str = "player",
 ) -> str:
     manifest = build_intent_manifest()
+    prompt_view = normalize_visibility_view(view)
     action_lines = [
         json.dumps(internal_prompt_action_contract(action), ensure_ascii=False, sort_keys=True)
         for action in manifest["actions"]
@@ -27,6 +39,16 @@ def build_internal_intent_review_prompt(
         for query in manifest["queries"]
     ]
     meta = get_meta(conn) if conn is not None else {}
+    prompt_user_text = prompt_safe_value(conn, user_text, view=prompt_view)
+    prompt_location = prompt_current_location_label(
+        conn,
+        str(meta.get("current_location_id", "unknown")),
+        view=prompt_view,
+    )
+    prompt_external_candidate = prompt_safe_value(conn, external_candidate, view=prompt_view)
+    prompt_rule_candidate = prompt_safe_value(conn, rule_candidate, view=prompt_view)
+    prompt_safety_notes = prompt_safe_value(conn, list(safety_notes), view=prompt_view)
+    prompt_visible_entities = prompt_safe_value(conn, visible_entities or [], view=prompt_view)
     return "\n".join(
         [
             "你是 AIGM 内核的内部意图复核 AI。只输出一个 JSON 对象，不要 Markdown，不要解释。",
@@ -55,8 +77,8 @@ def build_internal_intent_review_prompt(
             "如果外部候选与玩家原文不一致，必须写 disagreements，并将 external_candidate_quality 标为 wrong_action/wrong_mode/incomplete/unsafe。",
             "如果行动缺少必需槽位或实体无法确定，把字段写进 missing_slots 或 needs_confirmation，不要凭空补全。",
             "",
-            f"玩家原文：{user_text}",
-            f"当前位置：{meta.get('current_location_id', 'unknown')}",
+            f"玩家原文：{prompt_user_text}",
+            f"当前位置：{prompt_location}",
             f"Intent manifest schema_version：{manifest['schema_version']}",
             "",
             "Manifest action 合同摘录：",
@@ -66,18 +88,90 @@ def build_internal_intent_review_prompt(
             "\n".join(query_lines) if query_lines else "- none",
             "",
             "外部候选：",
-            candidate_json(external_candidate),
+            candidate_json(prompt_external_candidate),
             "",
             "规则候选：",
-            candidate_json(rule_candidate),
+            candidate_json(prompt_rule_candidate),
             "",
             "安全护栏初判：",
-            "\n".join(f"- {item}" for item in safety_notes) if safety_notes else "- none",
+            "\n".join(f"- {item}" for item in prompt_safety_notes) if prompt_safety_notes else "- none",
             "",
             "可见实体提示：",
-            visible_entities_json(visible_entities or []),
+            visible_entities_json(prompt_visible_entities),
         ]
     )
+
+
+def prompt_safe_value(conn: Any, value: Any, *, view: str) -> Any:
+    if can_read_hidden(view):
+        return value
+    if not prompt_redaction_schema_available(conn):
+        return player_safe_redaction_unavailable(value)
+    try:
+        redacted = redact_hidden_entity_refs(conn, value, drop_empty=False)
+        return redact_hidden_entity_id_substrings(conn, redacted, drop_empty=False)
+    except sqlite3.Error:
+        return player_safe_redaction_unavailable(value)
+
+
+def player_safe_redaction_unavailable(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return "[player-safe input unavailable]"
+    if isinstance(value, IntentCandidate):
+        return {}
+    if isinstance(value, dict):
+        return {}
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return []
+    return None
+
+
+def prompt_current_location_label(conn: Any, location_id: str, *, view: str) -> str:
+    if can_read_hidden(view):
+        return location_id
+    if not location_id or location_id == "unknown" or not prompt_redaction_schema_available(conn):
+        value = prompt_safe_value(conn, location_id, view=view)
+        return str(value or "unknown")
+    try:
+        ensure_visibility_sql_functions(conn)
+        visibility_clause = entity_visibility_sql(view, "e")
+        row = conn.execute(
+            f"""
+            select e.id
+            from entities e
+            where e.id = ?
+              and {normalized_text_sql("e.type")} = 'location'
+              and {entity_not_archived_sql("e")}
+              {visibility_clause}
+            """,
+            (location_id,),
+        ).fetchone()
+    except sqlite3.Error:
+        value = prompt_safe_value(conn, location_id, view=view)
+        return str(value or "unknown")
+    return location_id if row else "当前地点不可见或不存在"
+
+
+def prompt_redaction_schema_available(conn: Any) -> bool:
+    if conn is None:
+        return False
+    try:
+        rows = conn.execute(
+            """
+            select name
+            from sqlite_master
+            where type='table' and name in ('entities', 'aliases', 'clocks')
+            """
+        ).fetchall()
+    except sqlite3.Error:
+        return False
+    return {str(row["name"] if isinstance(row, sqlite3.Row) else row[0]) for row in rows} == {
+        "entities",
+        "aliases",
+        "clocks",
+    }
 
 
 def internal_prompt_action_contract(action: dict[str, Any]) -> dict[str, Any]:

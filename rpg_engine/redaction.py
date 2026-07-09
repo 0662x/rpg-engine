@@ -74,8 +74,24 @@ def redact_hidden_entity_refs(conn: sqlite3.Connection, value: Any, *, drop_empt
     return redact_entity_refs(value, hidden_entity_refs(conn), drop_empty=drop_empty)
 
 
+def redact_hidden_entity_id_substrings(conn: sqlite3.Connection, value: Any, *, drop_empty: bool = True) -> Any:
+    refs = hidden_entity_refs(conn)
+    tokens = set(refs.keys()) | {f"pal:{entity_id}" for entity_id in refs}
+    return redact_entity_substrings(value, tokens, drop_empty=drop_empty)
+
+
 def find_hidden_entity_ref_tokens(conn: sqlite3.Connection, value: Any) -> list[str]:
     return find_entity_ref_tokens(value, hidden_entity_refs(conn))
+
+
+def find_hidden_entity_ref_substrings(conn: sqlite3.Connection, value: Any) -> list[str]:
+    return find_entity_ref_substrings(value, hidden_entity_refs(conn))
+
+
+def find_hidden_entity_id_substrings(conn: sqlite3.Connection, value: Any) -> list[str]:
+    refs = hidden_entity_refs(conn)
+    tokens = set(refs.keys()) | {f"pal:{entity_id}" for entity_id in refs}
+    return find_entity_ref_substrings(value, tokens)
 
 
 def redact_entity_refs(value: Any, refs: dict[str, set[str]] | set[str], *, drop_empty: bool = True) -> Any:
@@ -85,12 +101,28 @@ def redact_entity_refs(value: Any, refs: dict[str, set[str]] | set[str], *, drop
     return _redact_value(value, tokens, drop_empty=drop_empty)
 
 
+def redact_entity_substrings(value: Any, refs: dict[str, set[str]] | set[str], *, drop_empty: bool = True) -> Any:
+    tokens = _redaction_tokens(refs)
+    if not tokens:
+        return value
+    return _redact_value_substrings(value, tokens, drop_empty=drop_empty)
+
+
 def find_entity_ref_tokens(value: Any, refs: dict[str, set[str]] | set[str]) -> list[str]:
     tokens = _redaction_tokens(refs)
     if not tokens:
         return []
     found: set[str] = set()
     _collect_ref_tokens(value, tokens, found)
+    return sorted(found, key=lambda item: (len(item), item))
+
+
+def find_entity_ref_substrings(value: Any, refs: dict[str, set[str]] | set[str]) -> list[str]:
+    tokens = _redaction_tokens(refs)
+    if not tokens:
+        return []
+    found: set[str] = set()
+    _collect_substring_tokens(value, tokens, found)
     return sorted(found, key=lambda item: (len(item), item))
 
 
@@ -136,6 +168,45 @@ def _redact_value(value: Any, tokens: list[str], *, drop_empty: bool) -> Any:
         return {key: item for key, item in redacted_items.items() if not _should_drop(key) and not _should_drop(item)}
     if is_dataclass(value) and not isinstance(value, type):
         return _redact_value(asdict(value), tokens, drop_empty=drop_empty)
+    return value
+
+
+def _redact_value_substrings(value: Any, tokens: list[str], *, drop_empty: bool) -> Any:
+    if isinstance(value, str):
+        redacted = value
+        for token in tokens:
+            redacted = redacted.replace(token, "[hidden]")
+        return redacted
+    if isinstance(value, list):
+        items = [_redact_value_substrings(item, tokens, drop_empty=drop_empty) for item in value]
+        if not drop_empty:
+            return items
+        return [item for item in items if not _should_drop(item)]
+    if isinstance(value, tuple):
+        items = tuple(_redact_value_substrings(item, tokens, drop_empty=drop_empty) for item in value)
+        if not drop_empty:
+            return items
+        return tuple(item for item in items if not _should_drop(item))
+    if isinstance(value, (set, frozenset)):
+        items = [_redact_value_substrings(item, tokens, drop_empty=drop_empty) for item in value]
+        if not drop_empty:
+            return _redacted_set_value(items, as_frozenset=isinstance(value, frozenset))
+        kept_items = [item for item in items if not _should_drop(item)]
+        return _redacted_set_value(kept_items, as_frozenset=isinstance(value, frozenset))
+    if isinstance(value, dict):
+        redacted_items = {
+            _redact_value_substrings(str(key), tokens, drop_empty=drop_empty): _redact_value_substrings(
+                item,
+                tokens,
+                drop_empty=drop_empty,
+            )
+            for key, item in value.items()
+        }
+        if not drop_empty:
+            return redacted_items
+        return {key: item for key, item in redacted_items.items() if not _should_drop(key) and not _should_drop(item)}
+    if is_dataclass(value) and not isinstance(value, type):
+        return _redact_value_substrings(asdict(value), tokens, drop_empty=drop_empty)
     return value
 
 
@@ -196,6 +267,25 @@ def _collect_ref_tokens(value: Any, tokens: list[str], found: set[str]) -> None:
     if isinstance(value, (list, tuple, set, frozenset)):
         for item in value:
             _collect_ref_tokens(item, tokens, found)
+
+
+def _collect_substring_tokens(value: Any, tokens: list[str], found: set[str]) -> None:
+    if isinstance(value, str):
+        for token in tokens:
+            if token and token in value:
+                found.add(token)
+        return
+    if is_dataclass(value) and not isinstance(value, type):
+        _collect_substring_tokens(asdict(value), tokens, found)
+        return
+    if isinstance(value, dict):
+        for key, item in value.items():
+            _collect_substring_tokens(str(key), tokens, found)
+            _collect_substring_tokens(item, tokens, found)
+        return
+    if isinstance(value, (list, tuple, set, frozenset)):
+        for item in value:
+            _collect_substring_tokens(item, tokens, found)
 
 
 def _replace_token(text: str, token: str) -> str:
