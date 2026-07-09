@@ -142,7 +142,9 @@ preflight cache 只能作为候选来源，不能替代最终 preview、validati
 上下文链路负责把 Save DB 中的事实转换为 AI/玩家可见材料：
 
 - `context_builder.py`：主构建入口。
-- `context/collectors.py`：事实收集。
+- `context/collectors.py`：事实收集，包括 entities、relationships、progress/clocks、routes、
+  palettes、discovery states、world settings、recent events、memory summaries 和 advisory-only
+  plot progression signals。
 - `context/resolution.py`：引用和冲突解析。
 - `context/budget.py`：上下文预算。
 - `context/semantic.py`：语义建议。
@@ -152,6 +154,9 @@ preflight cache 只能作为候选来源，不能替代最终 preview、validati
 任何新增上下文来源都必须标明 visibility，不能把 hidden / GM-only 内容泄露到玩家视图、
 FTS/search、scene output、普通 query、snapshots、cards 或 onboarding。最终 render redaction
 只能作为防御层；玩家派生 read model 应在 collection / projection 阶段排除 player-hidden facts。
+Relationship / progress context 必须复用 `relationship_access.py` 和 `progress_access.py` 的 access
+contract，不直接依赖表结构细节。Plot progression signal 只能作为可见 context evidence / advisory input，
+不能要求 storylet、自动导演命令或状态写入。
 
 ## 数据与包边界
 

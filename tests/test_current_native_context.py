@@ -3,11 +3,13 @@ from __future__ import annotations
 import json
 import sqlite3
 import tempfile
+from types import SimpleNamespace
 from typing import Any
 
 from rpg_engine.campaign import load_campaign
+from rpg_engine.context.collectors import recent_activity_progress_ids
 from rpg_engine.context_builder import build_context
-from rpg_engine.db import connect
+from rpg_engine.db import connect, upsert_clock, upsert_entity
 from rpg_engine.runtime import GMRuntime
 
 from tests.helpers import (
@@ -326,6 +328,467 @@ class CurrentNativeContextTests(FormalCurrentSaveReadOnlyTestCase):
                     self.assertTrue(packet.completeness["allow_proceed"])
                     self.assertLessEqual(packet.budget["limit"], 2600)
                     self.assertTrue(expected_ids.issubset(loaded_ids(packet)), loaded_ids(packet))
+
+    def test_relationship_progress_and_plot_signals_include_auditable_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            save = copy_current_packages(tmp)
+            campaign = load_campaign(save)
+            with connect(campaign) as conn:
+                player_id = conn.execute("select value from meta where key='player_entity_id'").fetchone()[0]
+                upsert_entity(
+                    conn,
+                    {
+                        "id": "char:test-context-ally",
+                        "type": "character",
+                        "name": "证据伙伴",
+                        "summary": "可见伙伴，用于 relationship context regression。",
+                    },
+                )
+                upsert_entity(
+                    conn,
+                    {
+                        "id": "char:test-context-secret",
+                        "type": "character",
+                        "name": "隐秘关系对象SECRET_REL_CONTEXT",
+                        "visibility": "hidden",
+                        "summary": "SECRET_REL_CONTEXT hidden endpoint",
+                    },
+                )
+                upsert_entity(
+                    conn,
+                    {
+                        "id": "rel:test-context-ally",
+                        "type": "relationship",
+                        "name": "主角与证据伙伴",
+                        "summary": "证据伙伴信任谨慎证明。",
+                        "details": {
+                            "source_id": player_id,
+                            "target_id": "char:test-context-ally",
+                            "kind": "social",
+                            "state": "cautious ally",
+                            "attitude": "guarded",
+                            "trust": 2,
+                        },
+                    },
+                )
+                upsert_entity(
+                    conn,
+                    {
+                        "id": "rel:test-context-hidden-endpoint",
+                        "type": "relationship",
+                        "name": "隐藏端点关系SECRET_REL_CONTEXT",
+                        "summary": "hidden endpoint relationship SECRET_REL_CONTEXT",
+                        "details": {
+                            "source_id": player_id,
+                            "target_id": "char:test-context-secret",
+                            "kind": "secret",
+                        },
+                    },
+                )
+                upsert_entity(
+                    conn,
+                    {
+                        "id": "rel:test-context-missing-endpoint",
+                        "type": "relationship",
+                        "name": "缺失端点关系",
+                        "summary": "missing endpoint relationship",
+                        "details": {
+                            "source_id": player_id,
+                            "target_id": "char:test-context-missing",
+                            "kind": "broken",
+                        },
+                    },
+                )
+                upsert_entity(
+                    conn,
+                    {
+                        "id": "rel:test-context-archived",
+                        "type": "relationship",
+                        "name": "归档证据关系",
+                        "status": "archived",
+                        "summary": "archived relationship",
+                        "details": {
+                            "source_id": player_id,
+                            "target_id": "char:test-context-ally",
+                            "kind": "archived",
+                        },
+                    },
+                )
+                upsert_clock(
+                    conn,
+                    {
+                        "id": "clock:test-context-goal",
+                        "name": "证据计划",
+                        "summary": "证据计划正在推进。",
+                        "clock_type": "project",
+                        "segments_total": 6,
+                        "segments_filled": 2,
+                        "visibility": "visible",
+                        "trigger_when_full": "证据计划成为稳定方案。",
+                        "tick_rules": {"scope": ["char:test-context-ally"], "tick_when": ["完成共同验证"]},
+                    },
+                )
+                upsert_clock(
+                    conn,
+                    {
+                        "id": "clock:test-context-hidden",
+                        "name": "隐秘进度SECRET_PROGRESS_CONTEXT",
+                        "summary": "SECRET_PROGRESS_CONTEXT hidden progress",
+                        "clock_type": "threat",
+                        "segments_total": 4,
+                        "segments_filled": 1,
+                        "visibility": "hidden",
+                        "trigger_when_full": "hidden consequence",
+                        "tick_rules": {"scope": ["char:test-context-ally"]},
+                    },
+                )
+                upsert_clock(
+                    conn,
+                    {
+                        "id": "clock:test-context-complete",
+                        "name": "已完成证据计划",
+                        "summary": "这个计划已经完成，不应作为 active progress loaded。",
+                        "clock_type": "project",
+                        "segments_total": 4,
+                        "segments_filled": 4,
+                        "visibility": "visible",
+                        "trigger_when_full": "已完成。",
+                        "tick_rules": {"scope": ["char:test-context-ally"]},
+                    },
+                )
+                upsert_clock(
+                    conn,
+                    {
+                        "id": "clock:test-context-missing-ref",
+                        "name": "缺失引用证据计划",
+                        "summary": "这个计划引用缺失实体，不应作为 progress loaded。",
+                        "clock_type": "project",
+                        "segments_total": 4,
+                        "segments_filled": 1,
+                        "visibility": "visible",
+                        "trigger_when_full": "引用缺失实体。",
+                        "tick_rules": {"scope": ["char:test-context-missing"]},
+                    },
+                )
+                upsert_clock(
+                    conn,
+                    {
+                        "id": "clock:test-context-archived",
+                        "name": "归档证据计划",
+                        "summary": "这个计划已经归档，不应作为 active progress loaded。",
+                        "clock_type": "project",
+                        "segments_total": 4,
+                        "segments_filled": 1,
+                        "visibility": "visible",
+                        "trigger_when_full": "归档计划完成。",
+                        "tick_rules": {"scope": ["char:test-context-ally"]},
+                    },
+                )
+                conn.execute("update entities set status = 'archived' where id = 'clock:test-context-archived'")
+                upsert_clock(
+                    conn,
+                    {
+                        "id": "clock:test-context-event-only",
+                        "name": "隐秘事件提到的可见计划",
+                        "summary": "只有隐秘事件引用的可见计划。",
+                        "clock_type": "project",
+                        "segments_total": 4,
+                        "segments_filled": 1,
+                        "visibility": "visible",
+                        "trigger_when_full": "事件计划完成。",
+                        "tick_rules": {},
+                    },
+                )
+                conn.execute(
+                    """
+                    insert into events(id, turn_id, game_time, type, title, summary, payload_json, source, created_at)
+                    values(?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "event:test-hidden-progress-boost",
+                        "turn:seed",
+                        "test",
+                        "gm_note",
+                        "hidden progress boost",
+                        "hidden event mentions clock:test-context-event-only and char:test-context-secret",
+                        json.dumps({"clock": "clock:test-context-event-only", "secret": "char:test-context-secret"}),
+                        "test",
+                        "2026-07-10T00:00:00+00:00",
+                    ),
+                )
+                conn.commit()
+
+                event_state = SimpleNamespace(conn=conn)
+                self.assertNotIn(
+                    "clock:test-context-event-only",
+                    recent_activity_progress_ids(event_state, view="player"),
+                )
+                self.assertIn(
+                    "clock:test-context-event-only",
+                    recent_activity_progress_ids(event_state, view="maintenance"),
+                )
+
+                packet = build_context(
+                    campaign,
+                    conn,
+                    user_text="询问证据伙伴并推进证据计划",
+                    mode="auto",
+                    budget=4200,
+                    audit_context=True,
+                    audit_context_run_id="context:relationship-progress-plot",
+                )
+
+                loaded_sources = {(item["source"], item["kind"], item["id"]) for item in packet.loaded_items}
+                self.assertIn(("relationships", "relationship", "rel:test-context-ally"), loaded_sources)
+                self.assertIn(("progress_context", "progress", "clock:test-context-goal"), loaded_sources)
+                self.assertTrue(
+                    any(item["source"] == "plot_signals" and item["kind"] == "plot_signal" for item in packet.loaded_items),
+                    packet.loaded_items,
+                )
+                self.assertIn("relationships", packet.sections)
+                self.assertIn("progress_context", packet.sections)
+                self.assertIn("plot_signals", packet.sections)
+                plot_item = next(
+                    item
+                    for item in packet.loaded_items
+                    if item["source"] == "plot_signals" and item["kind"] == "plot_signal"
+                )
+                self.assertTrue(plot_item["provenance"]["advisory_only"])
+                self.assertFalse(plot_item["provenance"]["requires_storylet"])
+                serialized = packet.to_json_text()
+                self.assertNotIn("SECRET_REL_CONTEXT", serialized)
+                self.assertNotIn("SECRET_PROGRESS_CONTEXT", serialized)
+                self.assertFalse(
+                    any(str(item.get("id", "")).startswith("relationships:unavailable") for item in packet.omitted_items),
+                    packet.omitted_items,
+                )
+                self.assertFalse(
+                    any(str(item.get("id", "")).startswith("progress:unavailable") for item in packet.omitted_items),
+                    packet.omitted_items,
+                )
+                self.assertNotIn(("progress_context", "progress", "clock:test-context-complete"), loaded_sources)
+                self.assertNotIn("clock:test-context-complete", packet.sections.get("active_clocks", ""))
+                self.assertNotIn("clock:test-context-missing-ref", packet.sections.get("active_clocks", ""))
+                self.assertNotIn("clock:test-context-archived", packet.sections.get("active_clocks", ""))
+
+                audit_rows = conn.execute(
+                    """
+                    select item_id, item_kind, source, included
+                    from context_items
+                    where context_run_id='context:relationship-progress-plot'
+                    """
+                ).fetchall()
+                audit_keys = {(row["source"], row["item_kind"], row["item_id"], row["included"]) for row in audit_rows}
+                self.assertIn(("relationships", "relationship", "rel:test-context-ally", 1), audit_keys)
+                self.assertIn(("progress_context", "progress", "clock:test-context-goal", 1), audit_keys)
+                self.assertTrue(any(key[0] == "plot_signals" and key[1] == "plot_signal" and key[3] == 1 for key in audit_keys))
+
+                missing_ref_player_packet = build_context(
+                    campaign,
+                    conn,
+                    user_text="检查 clock:test-context-missing-ref",
+                    mode="query",
+                    submode="context",
+                    budget=4200,
+                )
+                self.assertFalse(
+                    any(
+                        item.get("source") == "progress_context"
+                        and item.get("id") == "clock:test-context-missing-ref"
+                        for item in missing_ref_player_packet.loaded_items
+                    ),
+                    missing_ref_player_packet.loaded_items,
+                )
+                self.assertFalse(
+                    any(
+                        item.get("source") == "progress_context"
+                        and item.get("id") == "clock:test-context-missing-ref"
+                        for item in missing_ref_player_packet.omitted_items
+                    ),
+                    missing_ref_player_packet.omitted_items,
+                )
+
+                maintenance_packet = build_context(
+                    campaign,
+                    conn,
+                    user_text=(
+                        "系统维护：检查证据伙伴关系 rel:test-context-archived "
+                        "clock:test-context-complete clock:test-context-missing-ref clock:test-context-archived"
+                    ),
+                    mode="maintenance",
+                    view="maintenance",
+                    budget=4200,
+                )
+                maintenance_omissions = {
+                    (item.get("source"), item.get("id")): item
+                    for item in maintenance_packet.omitted_items
+                    if item.get("source") in {"relationships", "progress_context"}
+                }
+                self.assertEqual(
+                    maintenance_omissions[("relationships", "rel:test-context-missing-endpoint")]["reason_code"],
+                    "missing_reference",
+                )
+                self.assertEqual(
+                    maintenance_omissions[("relationships", "rel:test-context-archived")]["reason_code"],
+                    "archived",
+                )
+                self.assertEqual(
+                    maintenance_omissions[("progress_context", "clock:test-context-complete")]["reason_code"],
+                    "conflict",
+                )
+                self.assertEqual(
+                    maintenance_omissions[("progress_context", "clock:test-context-missing-ref")]["reason_code"],
+                    "missing_reference",
+                )
+                self.assertEqual(
+                    maintenance_omissions[("progress_context", "clock:test-context-archived")]["reason_code"],
+                    "archived",
+                )
+                maintenance_keys = [
+                    (item.get("source"), item.get("id"), item.get("reason_code"))
+                    for item in maintenance_packet.omitted_items
+                    if item.get("source") in {"relationships", "progress_context"}
+                ]
+                self.assertEqual(len(maintenance_keys), len(set(maintenance_keys)), maintenance_packet.omitted_items)
+
+    def test_relationship_and_progress_items_move_to_omitted_when_sections_exceed_budget(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            save = copy_current_packages(tmp)
+            campaign = load_campaign(save)
+            with connect(campaign) as conn:
+                player_id = conn.execute("select value from meta where key='player_entity_id'").fetchone()[0]
+                upsert_entity(
+                    conn,
+                    {
+                        "id": "char:test-budget-ally",
+                        "type": "character",
+                        "name": "预算伙伴",
+                        "summary": "可见伙伴，用于 budget omission regression。",
+                    },
+                )
+                upsert_entity(
+                    conn,
+                    {
+                        "id": "rel:test-budget-ally",
+                        "type": "relationship",
+                        "name": "主角与预算伙伴",
+                        "summary": "预算伙伴关系。",
+                        "details": {"source_id": player_id, "target_id": "char:test-budget-ally", "kind": "social"},
+                    },
+                )
+                upsert_clock(
+                    conn,
+                    {
+                        "id": "clock:test-budget-goal",
+                        "name": "预算计划",
+                        "summary": "预算计划进度。",
+                        "clock_type": "project",
+                        "segments_total": 6,
+                        "segments_filled": 1,
+                        "visibility": "visible",
+                        "trigger_when_full": "预算计划完成。",
+                        "tick_rules": {"scope": ["char:test-budget-ally"]},
+                    },
+                )
+                conn.commit()
+
+                packet = build_context(campaign, conn, user_text="询问预算伙伴和预算计划", mode="auto", budget=500)
+
+                self.assertNotIn("relationships", packet.sections)
+                self.assertNotIn("progress_context", packet.sections)
+                self.assertFalse(
+                    any(item.get("source") == "relationships" and item.get("kind") == "relationship" for item in packet.loaded_items),
+                    packet.loaded_items,
+                )
+                self.assertFalse(
+                    any(item.get("source") == "progress_context" and item.get("kind") == "progress" for item in packet.loaded_items),
+                    packet.loaded_items,
+                )
+                relationship_omissions = [
+                    item
+                    for item in packet.omitted_items
+                    if item.get("source") == "relationships" and item.get("kind") == "relationship"
+                ]
+                progress_omissions = [
+                    item
+                    for item in packet.omitted_items
+                    if item.get("source") == "progress_context" and item.get("kind") == "progress"
+                ]
+                self.assertTrue(relationship_omissions, packet.omitted_items)
+                self.assertTrue(progress_omissions, packet.omitted_items)
+                target_relationship = next(item for item in relationship_omissions if item["id"] == "rel:test-budget-ally")
+                target_progress = next(item for item in progress_omissions if item["id"] == "clock:test-budget-goal")
+                self.assertEqual(target_relationship["budget"]["reason"], "source section omitted by token budget")
+                self.assertEqual(target_progress["budget"]["reason"], "source section omitted by token budget")
+                self.assertFalse(
+                    any(
+                        item.get("source") == "plot_signals"
+                        and item.get("kind") == "plot_signal"
+                        and "clock:test-budget-goal" in item.get("source_refs", [])
+                        for item in packet.loaded_items
+                    ),
+                    packet.loaded_items,
+                )
+                self.assertTrue(
+                    any(
+                        item.get("source") == "plot_signals"
+                        and item.get("kind") == "plot_signal"
+                        and "clock:test-budget-goal" in item.get("source_refs", [])
+                        and item["budget"]["reason"] == "source section omitted by token budget"
+                        for item in packet.omitted_items
+                    ),
+                    packet.omitted_items,
+                )
+
+    def test_plot_signal_omission_does_not_render_campaign_hint_body(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            save = copy_current_packages(tmp)
+            campaign = load_campaign(save)
+            campaign.config["plot_hints"] = [
+                {
+                    "id": f"visible-hint-{index}",
+                    "name": f"Visible hint {index}",
+                    "text": f"VISIBLE_HINT_BODY_{index} 证据伙伴 optional continuity detail",
+                    "visibility": "known",
+                }
+                for index in range(12)
+            ]
+            with connect(campaign) as conn:
+                packet = build_context(
+                    campaign,
+                    conn,
+                    user_text="询问证据伙伴 optional continuity detail",
+                    mode="auto",
+                    budget=4200,
+                )
+
+            omitted_plot_signals = [
+                item
+                for item in packet.omitted_items
+                if item.get("source") == "plot_signals" and item.get("kind") == "plot_signal"
+            ]
+            self.assertTrue(omitted_plot_signals, packet.omitted_items)
+            serialized = json.dumps(omitted_plot_signals, ensure_ascii=False, sort_keys=True)
+            self.assertNotIn("VISIBLE_HINT_BODY_", serialized)
+            self.assertNotIn("VISIBLE_HINT_BODY_", packet.markdown)
+
+            with connect(campaign) as conn:
+                low_budget_packet = build_context(
+                    campaign,
+                    conn,
+                    user_text="询问证据伙伴 optional continuity detail",
+                    mode="auto",
+                    budget=500,
+                )
+            low_budget_omitted_plot_signals = [
+                item
+                for item in low_budget_packet.omitted_items
+                if item.get("source") == "plot_signals" and item.get("kind") == "plot_signal"
+            ]
+            self.assertTrue(low_budget_omitted_plot_signals, low_budget_packet.omitted_items)
+            low_budget_serialized = json.dumps(low_budget_omitted_plot_signals, ensure_ascii=False, sort_keys=True)
+            self.assertNotIn("VISIBLE_HINT_BODY_", low_budget_serialized)
+            self.assertNotIn("VISIBLE_HINT_BODY_", low_budget_packet.markdown)
 
 
 if __name__ == "__main__":

@@ -62,6 +62,12 @@ python3 -m pytest -q tests/test_context_quality.py tests/test_current_native_con
 `context_runs` / `context_items` audit、`GMRuntime.query("context")`、CLI `context build` 或 prompt/render
 context 消费路径的变更。新增 context source 必须声明 visibility、provenance 和 budget behavior，并证明
 player-safe view 下不会通过新增 evidence 字段泄露 hidden / GM-only 内容。
+Relationship、progress/clock 或 plot progression signal context 变更还应覆盖
+`tests/test_relationship_access.py`、`tests/test_progress_access.py` 和 current-native context/audit regression。
+测试需要证明 included item evidence、budget omission、player-safe hidden-count non-disclosure、
+GM / maintenance sanitized omission categories、context audit rows 和 `advisory_only` plot signal authority
+都可检查，且 plot signals 不变成 facts、clock ticks、proposal approval 或 mandatory storylets，也不会引用
+budget-omitted relationship / progress source。
 
 Player-safe context / query / prompt hidden-boundary 变更还应覆盖 `tests/test_current_native_visibility.py`。
 测试需要证明 hidden entities、relationships、world settings、discovery states、memory summaries、events、

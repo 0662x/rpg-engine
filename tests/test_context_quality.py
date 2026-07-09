@@ -5,11 +5,18 @@ from types import SimpleNamespace
 from typing import Any
 
 from rpg_engine.context import DEFAULT_CONTEXT_COLLECTORS, ContextCollector, ContextPipeline, ContextPipelineStep
+from rpg_engine.context.collectors import (
+    collect_plot_hints_from_value,
+    enrich_collector_item,
+    plot_signal_omission_item,
+    progress_is_active,
+)
 from rpg_engine.context.resolution import dedupe_texts, extract_entity_ids, sanitize_fts_query
 from rpg_engine.context.sections import ContextSection, apply_budget, estimate_tokens
 from rpg_engine.context.semantic import normalize_semantic_suggestion, parse_semantic_json
 from rpg_engine.context_builder import (
     apply_semantic_request_decision,
+    collector_item_omitted_by_budget,
     default_context_pipeline,
     section_item_evidence,
     section_source_metadata,
@@ -162,6 +169,8 @@ class ContextBuilderUnitTests(unittest.TestCase):
             [collector.name for collector in DEFAULT_CONTEXT_COLLECTORS],
             [
                 "active_clocks",
+                "relationships",
+                "progress_context",
                 "routes",
                 "palettes",
                 "discovery_states",
@@ -169,6 +178,7 @@ class ContextBuilderUnitTests(unittest.TestCase):
                 "world_settings_core",
                 "recent_events",
                 "memory_summaries",
+                "plot_signals",
             ],
         )
 
@@ -195,15 +205,91 @@ class ContextBuilderUnitTests(unittest.TestCase):
         def loaded_items(state: Any) -> list[dict[str, Any]]:
             return [{"id": "legacy:item", "kind": "legacy", "reason": "legacy", "priority": 1}]
 
+        def omitted_items(state: Any) -> list[dict[str, Any]]:
+            return [{"id": "legacy:omitted", "kind": "legacy", "reason": "legacy omitted", "priority": 0}]
+
         collector = ContextCollector("legacy", collect, section, loaded_items)
+        collector_with_omissions = ContextCollector("legacy2", collect, section, loaded_items, omitted_items=omitted_items)
+        collector_with_source = ContextCollector("legacy3", collect, section, loaded_items, "legacy-source")
 
         self.assertIs(collector.collect, collect)
         self.assertIs(collector.section, section)
         self.assertIs(collector.loaded_items, loaded_items)
+        self.assertIs(collector_with_omissions.omitted_items, omitted_items)
+        self.assertEqual(collector_with_source.source, "legacy-source")
+        self.assertIsNone(collector_with_source.omitted_items)
         self.assertEqual(collector.source, "")
         self.assertEqual(collector.visibility, "")
         self.assertEqual(collector.provenance, "")
         self.assertEqual(collector.budget_behavior, "")
+
+    def test_enrich_collector_item_merges_partial_budget_evidence(self) -> None:
+        collector = ContextCollector(
+            name="plot_signals",
+            source="plot_signals",
+            budget_behavior="optional advisory signal section",
+        )
+        item = {
+            "id": "plot:test",
+            "kind": "plot_signal",
+            "priority": 42,
+            "budget": {"included": False, "reason": "source section omitted by token budget"},
+        }
+
+        enriched = enrich_collector_item(SimpleNamespace(mode="query"), collector, item, included=False)
+
+        self.assertEqual(enriched["budget"]["included"], False)
+        self.assertEqual(enriched["budget"]["reason"], "source section omitted by token budget")
+        self.assertEqual(enriched["budget"]["behavior"], "optional advisory signal section")
+        self.assertEqual(enriched["budget"]["priority"], 42)
+        self.assertIn("estimated_tokens", enriched["budget"])
+
+    def test_campaign_hint_fallback_identity_does_not_use_body_text(self) -> None:
+        hints: list[dict[str, str]] = []
+        collect_plot_hints_from_value(hints, ["VISIBLE_SCALAR_HINT_BODY"], "hint", "campaign.yaml")
+        collect_plot_hints_from_value(
+            hints,
+            [{"text": "VISIBLE_DICT_HINT_BODY", "visibility": "known"}],
+            "hint",
+            "campaign.yaml",
+        )
+        collect_plot_hints_from_value(
+            hints,
+            {"id": "hidden-single", "text": "SECRET_SINGLE_HINT_BODY", "visibility": "hidden"},
+            "hint",
+            "campaign.yaml",
+        )
+
+        self.assertEqual(
+            [hint["text"] for hint in hints],
+            ["VISIBLE_SCALAR_HINT_BODY", "VISIBLE_DICT_HINT_BODY", "SECRET_SINGLE_HINT_BODY"],
+        )
+        self.assertEqual(hints[-1]["id"], "hidden-single")
+        self.assertEqual(hints[-1]["visibility"], "hidden")
+        for hint in hints[:2]:
+            omitted = plot_signal_omission_item(
+                {"id": f"plot:campaign:hint:{hint['id']}", "name": hint["name"]},
+                reason_code="over_budget",
+            )
+            serialized_identity = f"{omitted['id']} {omitted['name']}"
+            self.assertNotIn("VISIBLE_SCALAR_HINT_BODY", serialized_identity)
+            self.assertNotIn("VISIBLE_DICT_HINT_BODY", serialized_identity)
+            self.assertNotIn("SECRET_SINGLE_HINT_BODY", serialized_identity)
+
+    def test_progress_active_check_normalizes_status_label(self) -> None:
+        progress = SimpleNamespace(status="Active", segments_filled=1, segments_total=4)
+
+        self.assertTrue(progress_is_active(progress))
+
+    def test_world_settings_core_satisfies_world_setting_plot_signal_source(self) -> None:
+        item = {
+            "source": "plot_signals",
+            "kind": "plot_signal",
+            "required_section_keys": ["world_settings"],
+        }
+
+        self.assertFalse(collector_item_omitted_by_budget(item, {"plot_signals", "world_settings_core"}))
+        self.assertTrue(collector_item_omitted_by_budget(item, {"plot_signals"}))
 
     def test_section_evidence_uses_stable_section_identity_and_alias_metadata(self) -> None:
         palette = ContextSection(key="palette_candidates", title="Palette", content="x", priority=82)

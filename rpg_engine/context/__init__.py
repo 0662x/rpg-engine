@@ -3,6 +3,7 @@ from .collectors import (
     ContextCollector,
     build_collector_sections,
     collect_loaded_items,
+    collect_omitted_items,
     run_context_collectors,
 )
 from .pipeline import ContextPipeline, ContextPipelineStep
@@ -29,6 +30,7 @@ __all__ = [
     "build_collector_sections",
     "collect_entity_hits",
     "collect_loaded_items",
+    "collect_omitted_items",
     "collect_semantic_suggestion",
     "estimate_tokens",
     "expand_related_entities",

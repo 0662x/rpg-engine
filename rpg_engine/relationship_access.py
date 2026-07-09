@@ -24,6 +24,7 @@ class RelationshipRecord:
     stance: Any
     trust: Any
     visibility: str
+    status: str
     summary: str
     details: dict[str, Any]
     updated_turn_id: str
@@ -43,6 +44,7 @@ class RelationshipRecord:
             "stance": self.stance,
             "trust": self.trust,
             "visibility": self.visibility,
+            "status": self.status,
             "summary": self.summary,
             "details": self.details,
             "updated_turn_id": self.updated_turn_id,
@@ -161,6 +163,7 @@ def _relationship_from_entity(
         stance=details.get("stance"),
         trust=details.get("trust"),
         visibility=entity.visibility,
+        status=entity.status,
         summary=entity.summary,
         details=details,
         updated_turn_id=entity.updated_turn_id,

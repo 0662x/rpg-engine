@@ -10,6 +10,8 @@ from .context.collectors import (
     DEFAULT_CONTEXT_COLLECTORS,
     build_collector_sections,
     collect_loaded_items,
+    collect_omitted_items,
+    plot_signals_section,
     run_context_collectors,
 )
 from .context.budget import context_budget_policy
@@ -54,6 +56,10 @@ COLLECTOR_SECTION_ALIASES = {
 }
 
 SOURCE_SECTION_ALIASES = {
+    "world_settings": {"world_settings_core"},
+}
+
+REQUIRED_SECTION_ALIASES = {
     "world_settings": {"world_settings_core"},
 }
 
@@ -136,7 +142,14 @@ class BuildState:
     needs_user_confirmation: list[str] = field(default_factory=list)
     assumptions: list[str] = field(default_factory=list)
     routes: list[sqlite3.Row] = field(default_factory=list)
+    relationships: list[dict[str, Any]] = field(default_factory=list)
+    relationship_omissions: list[dict[str, Any]] = field(default_factory=list)
+    progress_context: list[dict[str, Any]] = field(default_factory=list)
+    progress_omissions: list[dict[str, Any]] = field(default_factory=list)
+    plot_signals: list[dict[str, Any]] = field(default_factory=list)
+    plot_signal_omissions: list[dict[str, Any]] = field(default_factory=list)
     palette_lines: list[str] = field(default_factory=list)
+    palette_candidates: list[dict[str, Any]] = field(default_factory=list)
     discovery_states: list[sqlite3.Row] = field(default_factory=list)
     world_settings: list[dict[str, Any]] = field(default_factory=list)
     related_events: list[sqlite3.Row] = field(default_factory=list)
@@ -412,9 +425,67 @@ def template_for(mode: str, submode: str) -> str:
     return spec.response_template if spec else "action_turn.md"
 
 
+def filter_plot_signals_for_selected_sections(
+    state: BuildState,
+    selected: list[ContextSection],
+    selected_section_keys: set[str],
+) -> None:
+    if not getattr(state, "plot_signals", None):
+        return
+    kept: list[dict[str, Any]] = []
+    omitted: list[dict[str, Any]] = []
+    for signal in state.plot_signals:
+        required = {
+            str(value)
+            for value in signal.get("required_section_keys", [])
+            if str(value).strip()
+        }
+        missing_required = missing_required_section_keys(required, selected_section_keys)
+        if missing_required:
+            evidence = dict(signal)
+            evidence.update(
+                {
+                    "reason": "plot signal omitted because source section was omitted by token budget",
+                    "reason_code": "over_budget",
+                }
+            )
+            evidence.pop("detail_text", None)
+            budget = dict(evidence.get("budget") or {})
+            budget.update(
+                {
+                    "included": False,
+                    "reason": "source section omitted by token budget",
+                    "required_sections": sorted(required),
+                    "selected_sections": sorted(selected_section_keys),
+                    "missing_required_sections": missing_required,
+                }
+            )
+            evidence["budget"] = budget
+            omitted.append(evidence)
+        else:
+            kept.append(signal)
+    if len(kept) == len(state.plot_signals):
+        return
+    state.plot_signals = kept
+    state.plot_signal_omissions.extend(omitted)
+    for section in selected:
+        if section.key != "plot_signals":
+            continue
+        replacement = plot_signals_section(state)
+        if replacement is None:
+            selected[:] = [item for item in selected if item.key != "plot_signals"]
+            selected_section_keys.discard("plot_signals")
+        else:
+            section.content = replacement.content
+            section.estimated_tokens = estimate_tokens(section.content)
+        break
+
+
 def render_context_result(state: BuildState) -> ContextBuildResult:
     sections = build_sections(state)
     selected, omitted = apply_budget(sections, state.budget_limit)
+    selected_section_keys = {section.key for section in selected}
+    filter_plot_signals_for_selected_sections(state, selected, selected_section_keys)
     included_tokens = sum(section.estimated_tokens for section in selected)
     section_token_map = {section.key: section.estimated_tokens for section in selected}
     intent_blocked = bool(
@@ -501,7 +572,6 @@ def render_context_result(state: BuildState) -> ContextBuildResult:
         "clarification": clarification,
         "assumptions": state.assumptions,
     }
-    selected_section_keys = {section.key for section in selected}
     omitted_section_keys = {section.key for section in omitted}
     loaded_items = [section_item_evidence(section, context_view, included=True) for section in selected]
     loaded_items.extend(
@@ -531,6 +601,7 @@ def render_context_result(state: BuildState) -> ContextBuildResult:
         ]
     )
     omitted_items = [section_item_evidence(section, context_view, included=False) for section in omitted]
+    omitted_items.extend(collect_omitted_items(state, DEFAULT_CONTEXT_COLLECTORS))
     for item in collect_loaded_items(state, DEFAULT_CONTEXT_COLLECTORS):
         if collector_item_omitted_by_budget(item, selected_section_keys):
             omitted_items.append(
@@ -816,7 +887,28 @@ def section_keys_for_context_source(source: str) -> set[str]:
 def collector_item_omitted_by_budget(item: dict[str, Any], selected_section_keys: set[str]) -> bool:
     source = str(item.get("source", ""))
     section_keys = section_keys_for_context_source(source)
-    return bool(section_keys and section_keys.isdisjoint(selected_section_keys))
+    if section_keys and section_keys.isdisjoint(selected_section_keys):
+        return True
+    required_section_keys = {
+        str(value)
+        for value in item.get("required_section_keys", [])
+        if str(value).strip()
+    }
+    return bool(missing_required_section_keys(required_section_keys, selected_section_keys))
+
+
+def missing_required_section_keys(required_section_keys: set[str], selected_section_keys: set[str]) -> list[str]:
+    return sorted(
+        section_key
+        for section_key in required_section_keys
+        if not section_requirement_satisfied(section_key, selected_section_keys)
+    )
+
+
+def section_requirement_satisfied(section_key: str, selected_section_keys: set[str]) -> bool:
+    if section_key in selected_section_keys:
+        return True
+    return bool(REQUIRED_SECTION_ALIASES.get(section_key, set()) & selected_section_keys)
 
 
 def collector_item_omission_evidence(
@@ -826,8 +918,16 @@ def collector_item_omission_evidence(
     omitted_section_keys: set[str],
 ) -> dict[str, Any]:
     evidence = dict(item)
+    if evidence.get("kind") == "plot_signal":
+        evidence.pop("detail_text", None)
     section_keys = section_keys_for_context_source(str(evidence.get("source", "")))
+    required_section_keys = {
+        str(value)
+        for value in evidence.get("required_section_keys", [])
+        if str(value).strip()
+    }
     omitted_sections = sorted(section_keys & omitted_section_keys)
+    missing_required_sections = missing_required_section_keys(required_section_keys, selected_section_keys)
     budget = dict(evidence.get("budget") or {})
     budget.update(
         {
@@ -839,6 +939,10 @@ def collector_item_omission_evidence(
     )
     if omitted_sections:
         budget["omitted_sections"] = omitted_sections
+    if required_section_keys:
+        budget["required_sections"] = sorted(required_section_keys)
+    if missing_required_sections:
+        budget["missing_required_sections"] = missing_required_sections
     provenance = dict(evidence.get("provenance") or {})
     provenance["omission_stage"] = "apply_budget"
     evidence.update(
@@ -999,27 +1103,28 @@ def render_markdown(
     loaded_items: list[dict[str, Any]],
     omitted_items: list[dict[str, Any]],
 ) -> str:
+    mode_label = f"{request['mode']}:{request['submode']}"
     lines = [
         "# Context Packet",
         "",
         "## Request",
         "| 字段 | 值 |",
         "|------|----|",
-        f"| 玩家输入 | {request['user_text']} |",
-        f"| 模式 | `{request['mode']}:{request['submode']}` |",
+        f"| 玩家输入 | {markdown_table_cell(request['user_text'])} |",
+        f"| 模式 | `{markdown_code_text(mode_label)}` |",
         f"| 是否推进时间 | {'是' if request['will_advance_time'] else '否'} |",
         f"| 是否需要保存 | {'是' if request['must_save'] else '否'} |",
-        f"| 回复模板 | `{request['required_template']}` |",
+        f"| 回复模板 | `{markdown_code_text(request['required_template'])}` |",
         f"| 预算 | {budget['estimated']} / {budget['limit']} |",
         "",
         "## Context Completeness",
         "| 项目 | 状态 |",
         "|------|------|",
-        f"| 置信度 | {completeness['confidence']} |",
+        f"| 置信度 | {markdown_table_cell(completeness['confidence'])} |",
         f"| 是否允许推进 | {'是' if completeness['allow_proceed'] else '否'} |",
-        f"| 缺失关键信息 | {join_list(completeness['missing_required'])} |",
-        f"| 需要玩家确认 | {join_list(completeness['needs_user_confirmation'])} |",
-        f"| 假设 | {join_list(completeness['assumptions'])} |",
+        f"| 缺失关键信息 | {markdown_table_cell(join_list(completeness['missing_required']))} |",
+        f"| 需要玩家确认 | {markdown_table_cell(join_list(completeness['needs_user_confirmation']))} |",
+        f"| 假设 | {markdown_table_cell(join_list(completeness['assumptions']))} |",
         "",
     ]
     for section in selected:
@@ -1034,12 +1139,15 @@ def render_markdown(
         ]
     )
     for item in loaded_items[:24]:
-        lines.append(f"| `{item['id']}` | {item['kind']} | {item['reason']} | {item['priority']} |")
+        lines.append(
+            f"| `{markdown_code_text(item['id'])}` | {markdown_table_cell(item['kind'])} | "
+            f"{markdown_table_cell(item['reason'])} | {markdown_table_cell(item['priority'])} |"
+        )
     if len(loaded_items) > 24:
         lines.append(f"| ... | ... | 另有 {len(loaded_items) - 24} 项 | ... |")
     lines.extend(["", "### 已省略/默认禁止"])
     for item in omitted_items:
-        lines.append(f"- `{item['id']}`：{item['reason']}")
+        lines.append(f"- `{markdown_code_text(item['id'])}`：{markdown_inline_text(item['reason'])}")
     if omitted and state.debug:
         lines.extend(["", "### 省略分区"])
         for section in omitted:
@@ -1049,3 +1157,24 @@ def render_markdown(
 
 def join_list(items: list[str]) -> str:
     return "无" if not items else "；".join(items)
+
+
+def markdown_table_cell(value: Any, limit_chars: int = 180) -> str:
+    text = str(value or "")
+    text = " ".join(text.split())
+    if len(text) > limit_chars:
+        text = text[: max(0, limit_chars - 1)] + "…"
+    text = text.replace("\\", "\\\\").replace("|", "\\|").replace("`", "\\`")
+    return text or "无"
+
+
+def markdown_inline_text(value: Any, limit_chars: int = 240) -> str:
+    text = str(value or "")
+    text = " ".join(text.split())
+    if len(text) > limit_chars:
+        text = text[: max(0, limit_chars - 1)] + "…"
+    return text.replace("`", "\\`")
+
+
+def markdown_code_text(value: Any) -> str:
+    return str(value or "").replace("`", "\\`").replace("|", "\\|").replace("\n", " ")
