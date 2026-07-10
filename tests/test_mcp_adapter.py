@@ -221,6 +221,11 @@ class MCPAdapterTests(unittest.TestCase):
                 text_preview["interpretation"]["intent"]["decision_trace"]["intent_ai"]["external_candidate"]["action"],
                 "rest",
             )
+            self.assertEqual(text_preview["interpretation"]["intent"]["source"], "external_primary")
+            self.assertEqual(
+                text_preview["interpretation"]["intent"]["decision_trace"]["intent_ai"]["route_authority"],
+                "external_primary",
+            )
             self.assertEqual(text_preview["turn_proposal"]["delta_source"], "resolver_proposed")
             self.assertTrue(preview["ok"], preview)
             self.assertEqual(preview["turn_proposal"]["delta_source"], "resolver_proposed")
@@ -228,6 +233,39 @@ class MCPAdapterTests(unittest.TestCase):
             self.assertEqual(commit["turn_id"], "turn:000001")
             self.assertEqual(commit["state_audit"]["risk"], "low")
             self.assertTrue(health["ok"], health)
+
+    def test_mcp_preview_returns_structured_error_for_malformed_external_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            campaign_dir = root / "campaigns" / "minimal"
+            save_dir = root / "saves" / "run"
+            shutil.copytree(MINIMAL_FIXTURE, campaign_dir)
+            init_v1_save(campaign_dir, save_dir)
+            adapter = AIGMMCPAdapter(
+                MCPAdapterConfig.from_values(
+                    root,
+                    default_campaign="campaigns/minimal",
+                    default_save="saves/run",
+                    mcp_profile="developer",
+                )
+            )
+            before_counts = sqlite_counts(save_dir)
+
+            result = adapter.preview_from_text(
+                "休息到早上",
+                external_intent_candidate={
+                    "kind": "single",
+                    "mode": "action",
+                    "action": "rest",
+                    "slots": {"until": "morning"},
+                },
+            )
+
+            self.assertFalse(result["ok"], result)
+            self.assertTrue(any("external_intent_candidate schema validation failed" in item for item in result["errors"]))
+            self.assertTrue(result["error_details"])
+            self.assertNotIn("turn_proposal", result)
+            self.assertEqual(sqlite_counts(save_dir), before_counts)
 
     def test_mcp_adapter_player_entry_and_registry_active_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

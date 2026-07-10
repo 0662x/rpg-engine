@@ -61,7 +61,7 @@ flowchart TD
 
 | 组件 | 权限 |
 | --- | --- |
-| External AI | 可以提供 `external_intent_candidate`，永远不是最终裁决。 |
+| External AI | 可以提供低信任 `external_intent_candidate`；internal intent AI 显式 `off` 时，合法候选可成为 selected route proposal，但不能成为事实、确认、approval 或 commit authority。 |
 | Internal AI | 可以看见 external candidate 并复核玩家原文，不能 preview、validate、confirm 或 commit。 |
 | Deterministic rules | 提供 fallback、risk、binding 线索和可审计规则候选，不是开放自然语言的唯一裁判。 |
 | Arbiter | 比较 external / internal / rules，决定 accept、fallback、clarify 或 block。 |
@@ -70,6 +70,18 @@ flowchart TD
 | Validation / commit | 校验并写入事实。普通玩家路径只能由 `player_confirm()` 进入。 |
 | Platform sidecar | 只做消息归一化、session gate、prewarm enqueue 和被动身份转发。 |
 | Preflight cache | 只缓存 internal review，single-use、identity-bound、advisory。 |
+
+路由提案权由 internal intent AI mode 明确选择：
+
+| Mode / input | Route proposal 结果 | Deterministic rules 的角色 |
+| --- | --- | --- |
+| internal enabled + external | external/internal 进入既有 arbitration；一致、绑定与安全检查通过后才可采用 | 提供候选、风险与诊断证据 |
+| internal `off` + valid external | Kernel 校验 schema、registry、safety、query/binding 后采用 `external_primary` | trace / diagnostic evidence，不得仅因 keyword mismatch override 或 veto |
+| internal `off` + no external | 保持当前 deterministic fallback | selected route proposal |
+
+这里改变的只有 route proposal authority。Binder、resolver、preview、validation、pending、玩家确认和
+commit authority 全部仍在 Kernel；malformed、unsafe、未知 action、非法 query 或无法绑定的 external
+candidate 必须明确 block/clarify，不能静默换成 rules 的另一意图。
 
 硬边界：
 
@@ -113,6 +125,8 @@ flowchart TD
 - `rpg_engine.ai_intent.external.normalize_external_intent_candidate()` 校验结构。
 - `rpg_engine.intent_router.ExternalCandidateInput` 保持 external input 与 passive request meta 分离。
 - `PreparedIntentCandidates.external_low_trust_candidate` 的命名故意保留 trust 含义。
+- `AIIntentRouter` trace 记录 `mode`、`route_authority`、external/rules candidates、rules outcome、
+  decision、`adopted_outcome` 和 selected outcome；兼容字段 `consensus_outcome` 继续只表示 consensus adoption。
 
 ## Internal Review
 
@@ -165,7 +179,7 @@ Action 是会或可能改变状态的玩家行动。正确链路：
 2. 可选 external candidate 被归一化为低信任候选。
 3. Kernel 生成 deterministic rules candidate。
 4. Kernel 根据风险、请求类型、AI 可用性和绑定完整度决定是否调用 internal review。
-5. Arbiter 接受、fallback、澄清或阻断。
+5. Arbiter 按三分支 mode matrix 接受、fallback、澄清或阻断。
 6. Binder 绑定 slots 到真实游戏对象。
 7. Resolver / `GMRuntime.preview_action()` 生成尚未发生的 preview。
 8. Validation 检查 delta / proposal。
@@ -191,7 +205,9 @@ internal AI 是否调用，由 kernel 风险和快捷策略决定。
 
 - External + internal 一致且 binding 无实质分歧时，arbiter 可接受 `ai_consensus`。
 - 没有 external candidate 时，低风险 internal + rules 一致可走 `ai_single_source_internal_fast`。
-- Internal AI 关闭或不可用时，rules fallback 只适用于低风险、可绑定、规则完整候选和只读 query。
+- Internal AI 显式 `off` 且有合法 external candidate 时，采用 `external_primary`；rules 只保留诊断证据。
+- Internal AI 显式 `off` 且无 external candidate 时，本阶段保持当前 deterministic fallback。
+- Internal AI 已启用但运行时不可用不等同显式 `off`，继续使用既有安全降级策略。
 - Consensus-only 或高风险 action 不能被普通 rules fallback 随意推进。
 
 当前低风险 fast path action：
@@ -215,6 +231,11 @@ internal AI 是否调用，由 kernel 风险和快捷策略决定。
 - `composite`：需要计划/步骤确认，不是直接 saveable action。
 - safety flags：`prompt_injection`、`out_of_world`、`forced_save`、`hidden_info`、
   `maintenance_request`、`unsafe_command` 必须 block 或 clarify。
+
+Routed `ActionIntent` 进入 `GMRuntime.preview_intent()` 后，keyword/action mismatch 只记录 bounded
+diagnostic，不得推翻已经完成的 route selection。直接调用低层
+`preview_action(..., source_user_text=...)` 仍保留 mismatch hard guard；caller 不能靠伪造 context 或
+source 字段绕过它。
 
 ## Intent Manifest
 
@@ -397,7 +418,7 @@ python3 -m pytest -q tests/test_ai_intent.py tests/test_runtime.py tests/test_mc
 重要行为检查：
 
 - external candidate schema rejection。
-- external candidate trace 不覆盖最终 route。
+- off + valid external 采用 `external_primary`，rules 只留 trace；off + no external 保持 fallback。
 - AI consensus adoption。
 - external / internal mismatch clarification。
 - hidden info block。

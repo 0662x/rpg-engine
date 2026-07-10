@@ -15,7 +15,7 @@ from ..preflight_cache import (
 )
 from ..ux import UxStatus
 from ..visibility import PLAYER_VIEW
-from .adapters import route_outcome_from_consensus_decision
+from .adapters import route_outcome_from_intent_decision
 from .arbiter import arbitrate_intent_candidates
 from .binder import bind_intent_candidate
 from .internal_review import collect_internal_intent_candidate
@@ -35,6 +35,7 @@ class AIIntentRouteResult:
     trace: dict[str, Any]
     rules_outcome: RouteOutcome | None = None
     consensus_outcome: RouteOutcome | None = None
+    adopted_outcome: RouteOutcome | None = None
     selected_outcome: RouteOutcome | None = None
     guards: tuple[str, ...] = ()
 
@@ -42,9 +43,8 @@ class AIIntentRouteResult:
 class AIIntentRouter:
     """Long-term AI intent entry point.
 
-    The router owns AI candidate collection, consensus arbitration and binding
-    trace assembly. Callers still decide whether a consensus result is allowed
-    to replace their deterministic fallback.
+    The router owns AI candidate collection, mode-gated arbitration, binding,
+    and route-adoption trace assembly.
     """
 
     def __init__(self, conn: sqlite3.Connection, *, registry: ActionResolverRegistry | None = None) -> None:
@@ -61,6 +61,7 @@ class AIIntentRouter:
         internal_candidate: IntentCandidate | dict[str, Any] | None = None,
         rule_candidate: IntentCandidate | dict[str, Any] | None = None,
         internal_review_metadata: dict[str, Any] | None = None,
+        intent_ai_mode: str = "consensus",
         view: str = PLAYER_VIEW,
     ) -> ConsensusDecision:
         return arbitrate_intent_candidates(
@@ -69,6 +70,7 @@ class AIIntentRouter:
             internal_candidate=internal_candidate,
             rule_candidate=rule_candidate,
             internal_review_metadata=internal_review_metadata,
+            intent_ai_mode=intent_ai_mode,
             registry=self.registry,
             view=view,
         )
@@ -174,8 +176,38 @@ class AIIntentRouter:
             internal_candidate=internal_candidate,
             rule_candidate=rule,
             internal_review_metadata=internal_review_metadata,
+            intent_ai_mode=intent_ai_mode,
             view=view,
         )
+        if intent_ai_mode == "off" and external is not None and (
+            rules_outcome is None or rules_outcome.status == "blocked"
+        ):
+            raw_kernel_errors = (
+                rules_outcome.errors
+                if rules_outcome is not None and rules_outcome.errors
+                else ("deterministic safety evidence unavailable",)
+            )
+            kernel_errors = tuple(f"kernel safety guard: {item}" for item in raw_kernel_errors)
+            decision_trace = {
+                **decision.decision_trace,
+                "kernel_safety_guard": {
+                    "status": "blocked",
+                    "errors": list(raw_kernel_errors),
+                },
+                "consensus": {
+                    "status": "blocked",
+                    "source": "external_primary",
+                    "reason": "kernel safety guard",
+                },
+            }
+            decision = ConsensusDecision(
+                status="blocked",
+                source="external_primary",
+                candidate=decision.candidate or external,
+                bound=None,
+                disagreements=kernel_errors,
+                decision_trace=decision_trace,
+            )
         if intent_ai_mode == "consensus" and internal_helper is not None and not internal_helper.ok:
             decision, fallback_guard = self.apply_unavailable_internal_policy(
                 rule=rule,
@@ -185,16 +217,30 @@ class AIIntentRouter:
             )
             guards.append(fallback_guard)
         fallback_submode = rules_outcome.submode if rules_outcome else (rule.action or "entity")
-        adoption = (
-            route_outcome_from_consensus_decision(decision, fallback_submode=fallback_submode)
+        may_adopt = intent_ai_mode == "consensus" or (intent_ai_mode == "off" and external is not None)
+        adoption = route_outcome_from_intent_decision(decision, fallback_submode=fallback_submode) if may_adopt else None
+        adopted_outcome = adoption.outcome if adoption else None
+        consensus_outcome = adopted_outcome if intent_ai_mode == "consensus" else None
+        selected_outcome = adopted_outcome or rules_outcome
+        route_authority = (
+            "external_primary"
+            if intent_ai_mode == "off" and external is not None and decision.status == "accepted"
+            else "kernel_validation"
+            if intent_ai_mode == "off" and external is not None
+            else "deterministic_rules"
+            if intent_ai_mode == "consensus" and adopted_outcome is None
+            else "kernel_validation"
+            if intent_ai_mode == "consensus" and decision.source.startswith("ai_helper_unavailable")
+            else "external_internal_arbitration"
+            if intent_ai_mode == "consensus" and external is not None
+            else "internal_review"
             if intent_ai_mode == "consensus"
-            else None
+            else "deterministic_rules"
         )
-        consensus_outcome = adoption.outcome if adoption else None
-        selected_outcome = consensus_outcome or rules_outcome
         trace: dict[str, Any] = {
             "router": "AIIntentRouter",
             "mode": intent_ai_mode,
+            "route_authority": route_authority,
             "enabled": intent_ai_mode != "off",
             "backend": backend,
             "provider": provider,
@@ -215,6 +261,7 @@ class AIIntentRouter:
             "decision": decision.to_dict(),
             "rules_outcome": rules_outcome.final_trace() if rules_outcome else None,
             "consensus_outcome": consensus_outcome.final_trace() if consensus_outcome else None,
+            "adopted_outcome": adopted_outcome.final_trace() if adopted_outcome else None,
             "selected_outcome": selected_outcome.final_trace() if selected_outcome else None,
         }
         return AIIntentRouteResult(
@@ -224,6 +271,7 @@ class AIIntentRouter:
             trace=trace,
             rules_outcome=rules_outcome,
             consensus_outcome=consensus_outcome,
+            adopted_outcome=adopted_outcome,
             selected_outcome=selected_outcome,
             guards=tuple(guards),
         )
@@ -414,9 +462,12 @@ def coerce_route_candidate(
     source: str,
     user_text: str,
 ) -> IntentCandidate:
-    if isinstance(value, IntentCandidate):
-        return value
-    return normalize_intent_candidate(value, source=source, user_text=user_text)
+    payload = value.to_dict() if isinstance(value, IntentCandidate) else dict(value)
+    return normalize_intent_candidate(
+        {**payload, "source": source, "source_user_text": user_text},
+        source=source,
+        user_text=user_text,
+    )
 
 
 def summarize_ai_helper_result(result: AIHelperResult | None) -> dict[str, Any] | None:

@@ -5,13 +5,14 @@ import json
 from typing import Any
 
 from ..intent_manifest import QUERY_KINDS
+from ..ux import PlanStep
 from .types import ClarificationChoice, ClarificationQuestion, ConsensusDecision, ConsensusRouteAdoption, RouteOutcome
 
 
 QUERY_KIND_SET = set(QUERY_KINDS)
 
 
-def route_outcome_from_consensus_decision(
+def route_outcome_from_intent_decision(
     decision: ConsensusDecision,
     *,
     fallback_submode: str,
@@ -73,32 +74,91 @@ def route_outcome_from_consensus_decision(
         )
 
     candidate = decision.candidate
+    external_primary = decision.source == "external_primary"
     mode = candidate.mode if candidate and candidate.mode in {"action", "query", "maintenance", "unknown"} else "unknown"
-    submode = candidate.action if candidate and candidate.action else ("unknown" if mode in {"maintenance", "unknown"} else fallback_submode)
+    query_kind = str(candidate.slots.get("query_kind") or "").strip().lower() if candidate else ""
+    if external_primary and mode == "query":
+        submode = query_kind if query_kind in QUERY_KIND_SET else "unknown"
+    elif candidate and candidate.action:
+        submode = candidate.action
+    elif external_primary and mode in {"action", "maintenance", "unknown"}:
+        submode = "unknown"
+    else:
+        submode = "unknown" if mode in {"maintenance", "unknown"} else fallback_submode
     if mode == "maintenance":
         mode = "unknown"
     if mode == "query" and submode not in {"entity", "scene", "context"}:
-        submode = query_submode_from_candidate(candidate, fallback_submode)
+        submode = "unknown" if external_primary and query_kind not in QUERY_KIND_SET else query_submode_from_candidate(candidate, fallback_submode)
     options = query_options_from_candidate(candidate) if mode == "query" else {}
-    confirmations = decision.disagreements or ("intent consensus requires clarification",)
+    default_confirmation = "intent route decision requires clarification" if external_primary else "intent consensus requires clarification"
+    confirmations = decision.disagreements or (default_confirmation,)
     errors = confirmations if decision.status == "blocked" else ()
     clarification = None if decision.status == "blocked" else clarification_from_consensus_decision(decision)
+    plan = (
+        candidate_plan_steps(candidate)
+        if candidate
+        and candidate.kind == "composite"
+        and decision.status != "blocked"
+        and decision_plan_validated(decision)
+        else ()
+    )
+    plan_confirmation_ready = decision_plan_confirmation_ready(decision)
+    consensus_trace = decision.decision_trace.get("consensus", {}) if isinstance(decision.decision_trace, dict) else {}
+    consensus_reason = str(consensus_trace.get("reason") or "") if isinstance(consensus_trace, dict) else ""
+    external_safety_block = external_primary and consensus_reason in {
+        "external safety blocker",
+        "kernel safety guard",
+    }
     return ConsensusRouteAdoption(
         outcome=RouteOutcome(
             mode=mode,
             submode=submode,
             action=None,
             options=options,
-            kind="unresolved",
+            kind="composite" if plan and plan_confirmation_ready else "unresolved",
             status="blocked" if decision.status == "blocked" else "needs_confirmation",
             missing_required=clarification.missing_slots if clarification else (),
             needs_confirmation=() if decision.status == "blocked" else confirmations,
             errors=errors,
-            player_message="AI 意图共识未通过，需要玩家确认。" if decision.status != "blocked" else "AI 意图安全检查阻止了这个请求。",
+            player_message=(
+                "意图路由未通过，需要玩家确认。"
+                if external_primary and decision.status != "blocked"
+                else "意图安全检查阻止了这个请求。"
+                if external_safety_block
+                else "外部意图候选未通过内核校验，请修正候选字段或重新描述。"
+                if external_primary
+                else "AI 意图共识未通过，需要玩家确认。"
+                if decision.status != "blocked"
+                else "AI 意图安全检查阻止了这个请求。"
+            ),
             source=decision.source,
             confidence="low",
+            plan=plan,
             clarification=clarification,
         )
+    )
+
+
+def route_outcome_from_consensus_decision(
+    decision: ConsensusDecision,
+    *,
+    fallback_submode: str,
+) -> ConsensusRouteAdoption | None:
+    """Compatibility alias for callers using the former consensus-only name."""
+    return route_outcome_from_intent_decision(decision, fallback_submode=fallback_submode)
+
+
+def candidate_plan_steps(candidate: Any) -> tuple[PlanStep, ...]:
+    plan = candidate.plan if candidate and isinstance(candidate.plan, tuple) else ()
+    return tuple(
+        PlanStep(
+            step_id=f"intent-step:{index}",
+            action=step.action,
+            label=step.action,
+            status="needs_confirmation",
+            options=dict(step.slots),
+        )
+        for index, step in enumerate(plan, start=1)
     )
 
 
@@ -136,8 +196,24 @@ def clarification_from_consensus_decision(decision: ConsensusDecision) -> Clarif
         choices=choices,
         disagreements=disagreements,
         missing_slots=missing_slots,
-        suggested_next_tool="ask_clarification",
+        suggested_next_tool="confirm_plan" if decision_plan_confirmation_ready(decision) else "ask_clarification",
     )
+
+
+def decision_plan_confirmation_ready(decision: ConsensusDecision) -> bool:
+    trace = decision.decision_trace if isinstance(decision.decision_trace, dict) else {}
+    consensus = trace.get("consensus") if isinstance(trace, dict) else None
+    return bool(
+        isinstance(consensus, dict)
+        and consensus.get("plan_validated") is True
+        and consensus.get("plan_confirmation_ready") is True
+    )
+
+
+def decision_plan_validated(decision: ConsensusDecision) -> bool:
+    trace = decision.decision_trace if isinstance(decision.decision_trace, dict) else {}
+    consensus = trace.get("consensus") if isinstance(trace, dict) else None
+    return bool(isinstance(consensus, dict) and consensus.get("plan_validated") is True)
 
 
 def clarification_reason(

@@ -324,6 +324,7 @@ cases:
         mode: query
         action: ""
         slots:
+          query_kind: entity
           query_text: Old Bridge
         plan: []
         confidence: high

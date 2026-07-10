@@ -22,8 +22,16 @@
     "slots": { "type": "object" },
     "plan": {
       "type": "array",
+      "maxItems": 8,
       "items": {
-        "type": "object"
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["action", "slots"],
+        "properties": {
+          "action": { "type": "string", "minLength": 1 },
+          "slots": { "type": "object" },
+          "reason": { "type": "string" }
+        }
       }
     },
     "confidence": { "type": "string", "enum": ["high", "medium", "low"] },

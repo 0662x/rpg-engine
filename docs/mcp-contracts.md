@@ -39,6 +39,9 @@ player_turn(user_text, optional external_intent_candidate)
 - `developer` profile 可以使用低层工具，但 hidden / GM / maintenance 视图读取仍只给
   `trusted_gm`、`maintenance`、`admin`。
 - `external_intent_candidate` 是 low-trust 候选输入，不是确认、approval、hidden access 或保存授权。
+- Internal intent AI enabled 时 external/internal 保持既有 arbitration；显式 `off` 且 external candidate
+  通过 schema、registry、safety、query/binding 检查时，它以 `external_primary` 成为 route proposal，
+  rules 只留诊断；显式 `off` 且无 external 时保持 deterministic fallback。
 - MCP path 必须在 configured root 下解析；campaign/save/starter 默认值和工具参数都不能是绝对路径或包含 `..`。
 - `commit_turn` 是 trusted low-level 写入入口，必须提交 validated and accepted TurnProposal delta；
   MCP 不暴露 no-backup 写入。
@@ -286,6 +289,8 @@ MCP 的 AI 配置分两层：
   per-call AI override。
 - `external_intent_candidate` 只在允许的入口作为 low-trust input。它不能表达确认、approval、hidden
   access、delta injection 或保存授权。
+- `external_primary` 只是 mode-gated route proposal source，不是事实、玩家确认、proposal approval 或
+  commit authority；非法候选必须 block/clarify，不能静默换成 rules 的另一意图。
 - Internal AI 是 visible-external independent review：可以看见 external candidate，但必须基于玩家原文和
   player-visible context 复核。
 - `player_act` 兼容入口不接收 `external_intent_candidate`。

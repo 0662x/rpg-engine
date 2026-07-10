@@ -323,16 +323,24 @@ def route_intent(
     intent_ai_trace = intent_route.trace
     decision = intent_route.decision
     selected_outcome = intent_route.selected_outcome or outcome
-    if intent_route.consensus_outcome is not None and selected_outcome == intent_route.consensus_outcome:
+    if intent_route.adopted_outcome is not None and selected_outcome == intent_route.adopted_outcome:
         outcome = selected_outcome
         alternatives.append(
             ActionAlternative(
                 mode=outcome.mode,
                 submode=outcome.submode,
                 action=outcome.action,
-                score=0.94 if outcome.source == "ai_consensus" else 0.50,
+                score=(
+                    0.94
+                    if outcome.status == "ready" and outcome.source == "ai_consensus"
+                    else 0.92
+                    if outcome.status == "ready" and outcome.source == "external_primary"
+                    else 0.50
+                    if outcome.status == "ready"
+                    else 0.10
+                ),
                 source=outcome.source,
-                reason=f"intent AI consensus decision: {decision.status if decision else 'unknown'}",
+                reason=f"intent route decision: {decision.status if decision else 'unknown'}",
             )
         )
     else:
@@ -647,7 +655,14 @@ def build_rules_intent_candidate(
     slots.pop("user_text", None)
     if mode != "action":
         action = None
-        slots = {}
+        if mode == "query":
+            slots = build_rules_query_slots(
+                user_text,
+                rule_submode=rule_submode,
+                existing_slots=slots,
+            )
+        else:
+            slots = {}
         kind = "maintenance" if mode == "maintenance" else ("query" if mode == "query" else "unresolved")
     return normalize_intent_candidate(
         {
@@ -665,6 +680,60 @@ def build_rules_intent_candidate(
         source="rules",
         user_text=user_text,
     )
+
+
+def build_rules_query_slots(
+    user_text: str,
+    *,
+    rule_submode: str,
+    existing_slots: dict[str, Any],
+) -> dict[str, Any]:
+    query_kind = str(existing_slots.get("query_kind") or rule_submode or "").strip().lower()
+    query_text = str(
+        existing_slots.get("query_text")
+        or existing_slots.get("query")
+        or existing_slots.get("target")
+        or ""
+    ).strip()
+    if not query_text and query_kind == "entity":
+        query_text = extract_entity_query_target(user_text)
+    elif not query_text and query_kind == "context":
+        query_text = user_text.strip()
+    slots: dict[str, Any] = {"query_kind": query_kind}
+    if query_text:
+        slots["query_text"] = query_text
+    return slots
+
+
+def extract_entity_query_target(user_text: str) -> str:
+    text = str(user_text or "").strip()
+    without_prefix = re.sub(
+        r"^(?:请)?(?:查看|查询|查找|查一下|看一下|看看|inspect|query|look\s+up|show\s+me|(?:查|看)\s+)",
+        "",
+        text,
+        flags=re.I,
+    ).strip()
+    prefix_removed = without_prefix != text
+    text = re.sub(
+        r"\s*(?:的)?(?:是谁|是什么|在哪里|在哪儿|在哪|哪里)\s*[?？]*$",
+        "",
+        without_prefix,
+        flags=re.I,
+    )
+    text = re.sub(
+        r"\s*的(?:属性|信息|资料)\s*[?？]*$",
+        "",
+        text,
+        flags=re.I,
+    )
+    if prefix_removed:
+        text = re.sub(
+            r"\s*(?:属性|信息|资料|info(?:rmation)?|details?)\s*[?？]*$",
+            "",
+            text,
+            flags=re.I,
+        )
+    return text.strip(" ,，:：?？")
 
 
 def normalize_intent_ai_mode(value: str | None) -> str:

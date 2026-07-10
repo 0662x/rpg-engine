@@ -1288,6 +1288,7 @@ class GMRuntime:
                     "recommended_next_tool": next_tool,
                     "commit_state": "not_saved",
                 },
+                plan=intent.plan,
                 repair_options=intent.repair_options,
                 missing_required=intent.missing_required,
                 errors=intent.errors,
@@ -1372,9 +1373,15 @@ class GMRuntime:
                 intent.action,
                 dict(intent.options),
                 context={"view": view, "intent": intent_data, "turn_contract": contract_data},
-                source_user_text=intent.user_text,
             )
             interpretation = dict(result.interpretation)
+            route_mismatch = detect_preview_action_mismatch(intent.user_text, intent.action)
+            if route_mismatch:
+                diagnostic = {**route_mismatch, "effect": "diagnostic_only"}
+                interpretation["route_mismatch_diagnostic"] = diagnostic
+                warning = str(route_mismatch.get("message") or "")
+                if warning and warning not in result.warnings:
+                    result = replace(result, warnings=(*result.warnings, warning))
             interpretation["intent"] = intent_data
             interpretation["turn_contract"] = contract_data
             interpretation["clarification"] = clarification_data

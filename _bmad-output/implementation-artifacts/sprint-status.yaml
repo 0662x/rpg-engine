@@ -78,8 +78,8 @@ development_status:
   3-7-跨-campaign-的-context-与玩家安全回路集成冒烟测试: done
   epic-3-retrospective: optional
 
-  epic-4: backlog
-  4-1-low-trust-intent-candidate-contract: backlog
+  epic-4: in-progress
+  4-1-low-trust-intent-candidate-contract: done
   4-2-ai-latency-policy-and-safe-degradation: backlog
   4-3-advisory-preflight-cache-boundary: backlog
   4-4-resident-ai-advisory-envelope-contract: backlog

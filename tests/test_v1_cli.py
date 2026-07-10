@@ -140,7 +140,17 @@ class V1CliTests(unittest.TestCase):
             patch.object(cli_v1, "SaveManager", RecordingSaveManager),
             patch.object(cli_v1.GMRuntime, "from_path", side_effect=AssertionError("player CLI must not use GMRuntime")),
         ):
-            self.assertEqual(handle_player(player_args("turn")), 0)
+            self.assertEqual(
+                handle_player(
+                    player_args(
+                        "turn",
+                        external_intent_candidate=json.dumps(
+                            {"kind": "single", "mode": "action", "action": "rest", "slots": {"until": "morning"}}
+                        ),
+                    )
+                ),
+                0,
+            )
             self.assertEqual(handle_player(player_args("act")), 0)
             self.assertEqual(handle_player(player_args("confirm")), 0)
 
@@ -160,7 +170,12 @@ class V1CliTests(unittest.TestCase):
                         "intent_base_url": "",
                         "intent_api_key_env": "",
                         "intent_fallback_backend": "off",
-                        "external_intent_candidate": None,
+                        "external_intent_candidate": {
+                            "kind": "single",
+                            "mode": "action",
+                            "action": "rest",
+                            "slots": {"until": "morning"},
+                        },
                         "preflight_id": "",
                         "message_id": "",
                         "platform": "",

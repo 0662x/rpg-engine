@@ -49,8 +49,9 @@ default exposure、normal-play status、authority gate 和 forbidden bypasses。
 1. `SaveManager.player_turn()` 接收玩家输入，解析 campaign、save 和 session。
 2. `GMRuntime.act()` 调用 `preview_from_text()`，进入 `route_intent()`。
 3. `intent_router.py` 准备规则候选、外部候选、兼容候选和 AI 配置。
-4. `ai_intent/router.py` 的 `AIIntentRouter` 编排 AI candidate collection、内部复核、
-   共识仲裁、槽位绑定和 trace。
+4. `ai_intent/router.py` 的 `AIIntentRouter` 按 mode 编排 candidate collection、可选内部复核、
+   arbitration、槽位绑定、route adoption 和 trace：enabled + external 保持双候选仲裁；
+   `off` + valid external 采用 `external_primary`；`off` + no external 保持 deterministic fallback。
 5. `GMRuntime.preview_intent()` / `GMRuntime.preview_action()` 基于动作解析器生成可确认预览。
 6. ready 结果写成 pending `TurnProposal`，此时还没有提交状态变化。
 7. `SaveManager.player_confirm()` 校验 pending proposal、平台 session hash、确认状态和来源。
@@ -103,7 +104,11 @@ preflight cache 只能作为候选来源，不能替代最终 preview、validati
 设计约束：
 
 - AI 可以提供候选和解释，不能直接提交状态。
+- `external_primary` 只表示 internal intent AI 显式 `off` 时通过 Kernel 校验的 route proposal；它不授予
+  fact、hidden、player confirmation、proposal approval、validation 或 commit authority。
 - 规则候选、AI 候选和外部候选必须保留来源信息，便于审计与回放。
+- Routed `ActionIntent` 的 keyword mismatch 只作诊断；direct low-level `preview_action` 的 mismatch guard
+  仍是硬边界，不能由 caller-supplied context/source 绕过。
 - `candidate_bound` profile 绑定候选身份。
 - 平台预热常用 `message_only` profile，正式入口必须重新构建候选并验证身份。
 - 澄清循环要防止无限循环和错误提交。

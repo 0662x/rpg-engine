@@ -162,7 +162,9 @@ player duplicate
 - `new`、`switch`、`duplicate` 只管理 active save 指向和 save copy，不写 gameplay facts。
 - `query` 是结构化只读查询，不保存、不推进时间、不需要 confirm。
 - `turn` 是普通自然语言标准入口。它可以接受 `--external-intent-candidate`，但 external candidate
-  永远是 low-trust input；kernel 仍要运行 internal/rules/arbiter/binder/preview 边界。
+  永远是 low-trust input；internal intent AI enabled 时保持 external/internal arbitration，显式 `off`
+  且候选合法时采用 `external_primary`，`off` 且无候选时保持 deterministic fallback。三条路径都必须
+  经过 Kernel schema、registry、safety、binding/query、preview 和 pending/confirm 边界。
 - `act` 是兼容 wrapper。它不接受 `--external-intent-candidate`，避免旧调用面把 external AI
   候选塞进兼容路径。
 - `confirm --session-id` 只确认当前 pending player action；session id 必须来自 `player turn` 或

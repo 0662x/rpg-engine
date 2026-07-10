@@ -284,6 +284,75 @@ class SaveManagerTests(unittest.TestCase):
             )
             self.assertFalse(manager.pending_action_path().exists())
 
+    def test_off_mode_external_primary_stays_pending_until_matching_player_confirm(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            campaign_dir = root / "campaigns" / "official"
+            shutil.copytree(OFFICIAL_EXAMPLE, campaign_dir)
+            source_digest_before = tree_digest(campaign_dir)
+            manager = SaveManager(root, default_campaign="campaigns/official")
+            started = manager.start_or_continue(campaign="campaigns/official")
+            save_path = root / started["save"]["path"]
+            before_turn = authoritative_save_snapshot(save_path)
+            external = consensus_candidate("rest", {"until": "morning"}, reason="external AI selected rest")
+
+            acted = manager.player_turn(
+                user_text="Gather Moon Herb",
+                intent_ai="off",
+                external_intent_candidate=external,
+            )
+
+            self.assertTrue(acted["ok"], acted)
+            self.assertEqual(acted["action"], "rest")
+            self.assertTrue(acted["ready_to_confirm"], acted)
+            self.assertFalse(acted["saved"], acted)
+            self.assertNotIn("delta_draft", acted)
+            self.assertNotIn("turn_proposal", acted)
+            self.assertEqual(authoritative_save_snapshot(save_path), before_turn)
+            with self.assertRaisesRegex(SaveManagerError, "does not match"):
+                manager.player_confirm("player_action:wrong")
+            self.assertEqual(authoritative_save_snapshot(save_path), before_turn)
+            self.assertTrue(manager.pending_action_path().exists())
+
+            confirmed = manager.player_confirm(acted["session_id"])
+            after_confirm = authoritative_save_snapshot(save_path)
+
+            self.assertTrue(confirmed["ok"], confirmed)
+            self.assertTrue(confirmed["saved"], confirmed)
+            self.assertNotEqual(after_confirm["current_turn_id"], before_turn["current_turn_id"])
+            self.assertFalse(manager.pending_action_path().exists())
+            self.assertEqual(tree_digest(campaign_dir), source_digest_before)
+
+    def test_off_mode_external_primary_invalid_slot_never_creates_pending(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            campaign_dir = root / "campaigns" / "official"
+            shutil.copytree(OFFICIAL_EXAMPLE, campaign_dir)
+            manager = SaveManager(root, default_campaign="campaigns/official")
+            started = manager.start_or_continue(campaign="campaigns/official")
+            save_path = root / started["save"]["path"]
+            before = authoritative_save_snapshot(save_path)
+            external = consensus_candidate(
+                "rest",
+                {"until": "morning", "destination": "Old Bridge"},
+                reason="external candidate includes a resolver-contract violation",
+            )
+
+            result = manager.player_turn(
+                user_text="休息到早上",
+                intent_ai="off",
+                external_intent_candidate=external,
+            )
+
+            self.assertFalse(result["ok"], result)
+            self.assertEqual(result["status"], "blocked")
+            self.assertFalse(result["ready_to_confirm"])
+            self.assertFalse(result["saved"])
+            self.assertTrue(any("ignored slot outside resolver contract" in item for item in result["errors"]))
+            self.assertIn("外部意图候选未通过内核校验", result["message"])
+            self.assertFalse(manager.pending_action_path().exists())
+            self.assertEqual(authoritative_save_snapshot(save_path), before)
+
     def test_registry_refresh_and_pending_state_do_not_override_sqlite_facts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1050,6 +1119,31 @@ class SaveManagerTests(unittest.TestCase):
             self.assertTrue(confirmed["ok"], confirmed)
             self.assertNotEqual(legacy.returncode, 0)
             self.assertIn("unrecognized arguments: --external-intent-candidate", legacy.stderr)
+
+    def test_player_turn_cli_reports_malformed_external_candidate_as_structured_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            campaign_dir = root / "campaigns" / "official"
+            shutil.copytree(OFFICIAL_EXAMPLE, campaign_dir)
+            load_json(run_cli("player", "start", root, "--campaign", "campaigns/official", "--format", "json"))
+
+            failed = run_cli(
+                "player",
+                "turn",
+                root,
+                "休息到早上",
+                "--external-intent-candidate",
+                json.dumps({"kind": "single", "mode": "action", "action": "rest", "slots": {"until": "morning"}}),
+                "--format",
+                "json",
+                check=False,
+            )
+            result = load_json(failed)
+
+            self.assertNotEqual(failed.returncode, 0)
+            self.assertFalse(result["ok"], result)
+            self.assertTrue(any("external_intent_candidate schema validation failed" in item for item in result["errors"]))
+            self.assertFalse((root / ".aigm" / "pending-player-action.json").exists())
 
     def test_player_turn_empty_text_keeps_clarification_before_intent_config_validation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

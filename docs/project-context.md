@@ -32,7 +32,8 @@ AI proposes. Kernel verifies. Player confirms. Engine commits.
 
 - `data/game.sqlite` 是当前事实权威来源。
 - events、JSONL、reports 是审计或投影证据，不是绕过写入校验的通道。
-- 外部 AI 输出永远是低信任候选，不是事实、不是最终意图、不是写入授权。
+- 外部 AI 输出永远是低信任候选；internal intent AI 显式 `off` 时，合法 external candidate
+  可以成为 selected route proposal，但仍不是事实、玩家确认、proposal approval 或写入授权。
 - internal AI review 可以帮助分类和复核，但不能 preview、validate、confirm 或
   commit。
 - `SaveManager.player_turn()` 可以创建 pending action，但不能提交游戏事实。

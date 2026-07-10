@@ -6,10 +6,11 @@ import tempfile
 from pathlib import Path
 
 from rpg_engine.intent_manifest import build_intent_manifest
-from rpg_engine.save_manager import SaveManager
+from rpg_engine.save_manager import SaveManager, SaveManagerError
 from tests.helpers import (
     CURRENT_CAMPAIGN_ROOT,
     CURRENT_NATIVE_REQUIRED,
+    CURRENT_SAVE_ROOT,
     FormalCurrentSaveReadOnlyTestCase,
     consensus_candidate,
     copy_current_packages,
@@ -18,6 +19,7 @@ from tests.helpers import (
     internal_review,
     query_candidate,
     run_cli,
+    tree_digest,
 )
 
 
@@ -46,6 +48,66 @@ def prepare_current_player_manager(tmp_root: str | Path) -> tuple[SaveManager, P
 
 @CURRENT_NATIVE_REQUIRED
 class CurrentNativePlayerTurnTests(FormalCurrentSaveReadOnlyTestCase):
+    def test_off_mode_external_primary_real_loop_uses_only_temporary_current_native_copy(self) -> None:
+        source_campaign_before = tree_digest(CURRENT_CAMPAIGN_ROOT)
+        formal_save_before = tree_digest(CURRENT_SAVE_ROOT)
+        formal_registry_path = CURRENT_CAMPAIGN_ROOT.parent / ".aigm" / "save-registry.json"
+        formal_registry_before = formal_registry_path.read_bytes() if formal_registry_path.exists() else None
+        self.addCleanup(lambda: self.assertEqual(tree_digest(CURRENT_CAMPAIGN_ROOT), source_campaign_before))
+        self.addCleanup(lambda: self.assertEqual(tree_digest(CURRENT_SAVE_ROOT), formal_save_before))
+        self.addCleanup(
+            lambda: self.assertEqual(
+                formal_registry_path.read_bytes() if formal_registry_path.exists() else None,
+                formal_registry_before,
+            )
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            manager, save = prepare_current_player_manager(tmp)
+            before_turn = current_turn(save)
+            external_rest = consensus_candidate("rest", {"until": "morning"}, reason="external primary selected rest")
+
+            acted = manager.player_turn(
+                user_text="在六边形菌丝复合屋收集盐",
+                external_intent_candidate=external_rest,
+                intent_ai="off",
+            )
+
+            self.assertTrue(acted["ok"], acted)
+            self.assertEqual(acted["action"], "rest")
+            self.assertTrue(acted["ready_to_confirm"], acted)
+            self.assertFalse(acted["saved"], acted)
+            self.assertEqual(current_turn(save), before_turn)
+            self.assertNotIn("delta_draft", acted)
+            self.assertNotIn("turn_proposal", acted)
+            pending = manager.read_pending_action() or {}
+            intent_trace = pending["turn_proposal"]["intent"]["decision_trace"]["intent_ai"]
+            self.assertEqual(intent_trace["route_authority"], "external_primary")
+            self.assertEqual(intent_trace["rules_outcome"]["action"], "gather")
+            self.assertEqual(intent_trace["selected_outcome"]["action"], "rest")
+
+            with self.assertRaisesRegex(SaveManagerError, "does not match"):
+                manager.player_confirm("player_action:wrong")
+            self.assertEqual(current_turn(save), before_turn)
+
+            confirmed = manager.player_confirm(acted["session_id"])
+            after_confirm_turn = current_turn(save)
+            self.assertTrue(confirmed["saved"], confirmed)
+            self.assertNotEqual(after_confirm_turn, before_turn)
+
+            queried = manager.player_turn(
+                user_text="休息到早上",
+                external_intent_candidate=query_candidate("entity", "终极复合弩"),
+                intent_ai="off",
+            )
+            self.assertTrue(queried["ok"], queried)
+            self.assertEqual(queried["action"], "query")
+            self.assertFalse(queried["ready_to_confirm"], queried)
+            self.assertFalse(queried["saved"], queried)
+            self.assertIn("终极复合弩", queried["message"])
+            self.assertEqual(current_turn(save), after_confirm_turn)
+            self.assertFalse(manager.pending_action_path().exists())
+
     def test_player_turn_standard_entry_covers_current_native_actions(self) -> None:
         cases = [
             ("travel", "去地下菌丝城", {"destination": "地下菌丝城", "pace": "careful"}, "ready", "travel", True, "确认后"),

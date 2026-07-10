@@ -32,3 +32,7 @@
 ## Deferred from: second code review of 3-6-context-budget-and-quality-diagnostics (2026-07-10)
 
 - Reaffirmed：plot post-filter 释放容量后不重新选择较低优先级 source section 仍是 Story 3.4 的 pre-existing dependency-aware budget policy 缺口；第二轮未发现新的 Story 3.6-specific 修复依据，继续 defer。
+
+## Deferred from: code review of 4-1-low-trust-intent-candidate-contract (2026-07-11)
+
+- `SaveManager.player_turn()` 在解析新的玩家请求前会清理已有 pending action；malformed external candidate 也会取消旧 pending。这是既有“新 turn 取代旧 pending”的生命周期策略，不由 Story 4.1 引入；改变它需要独立确认 pending replacement / retry 语义。

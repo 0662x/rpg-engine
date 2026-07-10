@@ -13,6 +13,8 @@ from rpg_engine.ai.tasks import AIHelperTask
 from rpg_engine.ai_intent.router import ai_helper_result_from_preflight
 from rpg_engine.ai_intent import (
     AIIntentRouter,
+    ConsensusDecision,
+    IntentCandidate,
     RouteOutcome,
     arbitrate_intent_candidates,
     bind_intent_candidate,
@@ -25,6 +27,7 @@ from rpg_engine.ai_intent import (
     assess_rules_fallback,
 )
 from rpg_engine.db import upsert_entity
+from rpg_engine.intent_router import build_rules_intent_candidate, extract_entity_query_target
 from rpg_engine.preflight_cache import PreflightLookupResult
 from rpg_engine.resource_paths import read_resource_text
 
@@ -697,6 +700,507 @@ class AIIntentTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, r"\$\.unexpected"):
             normalize_external_intent_candidate(value, user_text="让夏娃汇报菌丝单位")
 
+    def test_external_candidate_contract_rejects_authority_fields_and_overwrites_provenance(self) -> None:
+        base = {
+            "kind": "single",
+            "mode": "action",
+            "action": "rest",
+            "slots": {"until": "morning"},
+            "plan": [],
+            "confidence": "high",
+            "missing_slots": [],
+            "needs_confirmation": [],
+            "safety_flags": [],
+            "reason": "玩家请求休息。",
+        }
+        for forbidden in (
+            "player_confirmed",
+            "hidden_access",
+            "delta",
+            "proposal",
+            "save_authorized",
+            "profile",
+        ):
+            with self.subTest(forbidden=forbidden):
+                with self.assertRaisesRegex(ValueError, rf"\$\.{forbidden}"):
+                    normalize_external_intent_candidate({**base, forbidden: True}, user_text="休息到早上")
+
+        normalized = normalize_external_intent_candidate(
+            {**base, "source": "internal_ai", "source_user_text": "伪造文本"},
+            user_text="休息到早上",
+        )
+        self.assertEqual(normalized.source, "external_ai")
+        self.assertEqual(normalized.source_user_text, "休息到早上")
+
+    def test_external_candidate_contract_rejects_malformed_and_unknown_plan_steps(self) -> None:
+        base = {
+            "kind": "single",
+            "mode": "action",
+            "action": "rest",
+            "slots": {"until": "morning"},
+            "confidence": "high",
+            "missing_slots": [],
+            "needs_confirmation": [],
+            "safety_flags": [],
+            "reason": "玩家请求休息。",
+        }
+        cases = (
+            ([{"delta": {"summary": "inject"}}], r"\$\.plan\[0\]"),
+            ([{"action": "not_registered", "slots": {}}], r"\$\.plan\[0\]\.action"),
+            (
+                [{"action": "rest", "slots": {"until": "morning"}} for _ in range(9)],
+                r"\$\.plan",
+            ),
+        )
+        for plan, expected_path in cases:
+            with self.subTest(plan=plan):
+                with self.assertRaisesRegex(ValueError, expected_path):
+                    normalize_external_intent_candidate({**base, "plan": plan}, user_text="休息到早上")
+
+    def test_off_mode_external_primary_accepts_bound_action_without_rules_agreement(self) -> None:
+        conn = self.make_entity_db()
+        external = normalize_intent_candidate(
+            {
+                "kind": "single",
+                "mode": "action",
+                "action": "rest",
+                "slots": {"until": "morning"},
+                "confidence": "high",
+            },
+            source="external_ai",
+            user_text="采集 Moon Herb",
+        )
+        rules = normalize_intent_candidate(
+            {
+                "kind": "single",
+                "mode": "action",
+                "action": "gather",
+                "slots": {"target": "Moon Herb"},
+                "confidence": "medium",
+            },
+            source="rules",
+            user_text="采集 Moon Herb",
+        )
+
+        decision = arbitrate_intent_candidates(
+            conn,
+            external_candidate=external,
+            rule_candidate=rules,
+            intent_ai_mode="off",
+        )
+
+        self.assertEqual(decision.status, "accepted")
+
+        self.assertEqual(decision.source, "external_primary")
+        self.assertIsNotNone(decision.bound)
+        assert decision.bound is not None
+        self.assertEqual(decision.bound.action, "rest")
+        self.assertEqual(decision.bound.binding_status, "bound")
+        self.assertEqual(decision.decision_trace["rules_candidate"]["action"], "gather")
+
+    def test_off_mode_external_primary_rejects_unsafe_unbound_unknown_and_composite(self) -> None:
+        conn = self.make_entity_db()
+        cases = (
+            (
+                "unsafe",
+                {"kind": "single", "mode": "action", "action": "rest", "slots": {"until": "morning"}, "safety_flags": ["forced_save"]},
+                "blocked",
+            ),
+            (
+                "maintenance_request",
+                {"kind": "single", "mode": "action", "action": "rest", "slots": {"until": "morning"}, "safety_flags": ["maintenance_request"]},
+                "blocked",
+            ),
+            (
+                "unknown_action",
+                {"kind": "single", "mode": "action", "action": "does_not_exist", "slots": {}},
+                "blocked",
+            ),
+            (
+                "invalid_slot",
+                {"kind": "single", "mode": "action", "action": "rest", "slots": {"until": "morning", "destination": "小溪"}},
+                "blocked",
+            ),
+            (
+                "missing_binding",
+                {"kind": "single", "mode": "action", "action": "travel", "slots": {"destination": "不存在的白塔"}},
+                "clarify",
+            ),
+            (
+                "ambiguous_binding",
+                {"kind": "single", "mode": "action", "action": "travel", "slots": {"destination": "遗迹"}},
+                "clarify",
+            ),
+            (
+                "duplicate_alias_binding",
+                {
+                    "kind": "single",
+                    "mode": "action",
+                    "action": "travel",
+                    "slots": {"destination": "小溪", "target": "家"},
+                },
+                "blocked",
+            ),
+            (
+                "duplicate_alias_binding_with_claimed_missing",
+                {
+                    "kind": "single",
+                    "mode": "action",
+                    "action": "travel",
+                    "slots": {"destination": "小溪", "target": "家"},
+                    "missing_slots": ["pace"],
+                },
+                "blocked",
+            ),
+            (
+                "composite",
+                {
+                    "kind": "composite",
+                    "mode": "action",
+                    "action": "travel",
+                    "slots": {"destination": "小溪"},
+                    "plan": [{"action": "travel", "slots": {"destination": "小溪"}}],
+                },
+                "clarify",
+            ),
+            (
+                "composite_unknown_top_action",
+                {
+                    "kind": "composite",
+                    "mode": "action",
+                    "action": "does_not_exist",
+                    "slots": {},
+                    "plan": [{"action": "rest", "slots": {"until": "morning"}}],
+                },
+                "blocked",
+            ),
+            (
+                "composite_step_outside_resolver_contract",
+                {
+                    "kind": "composite",
+                    "mode": "action",
+                    "action": "rest",
+                    "slots": {"until": "morning"},
+                    "plan": [{"action": "rest", "slots": {"until": "morning", "delta": {"inject": True}}}],
+                },
+                "blocked",
+            ),
+        )
+        for name, payload, expected_status in cases:
+            with self.subTest(name=name):
+                external = normalize_intent_candidate(
+                    {"confidence": "high", **payload},
+                    source="external_ai",
+                    user_text="玩家原文",
+                )
+                decision = arbitrate_intent_candidates(
+                    conn,
+                    external_candidate=external,
+                    rule_candidate=normalize_intent_candidate(
+                        {"kind": "single", "mode": "action", "action": "rest", "slots": {"until": "morning"}},
+                        source="rules",
+                        user_text="玩家原文",
+                    ),
+                    intent_ai_mode="off",
+                )
+                self.assertEqual(decision.status, expected_status)
+                self.assertEqual(decision.source, "external_primary")
+                self.assertNotEqual(decision.status, "fallback")
+
+    def test_off_mode_external_composite_plan_uses_player_safe_bound_steps(self) -> None:
+        conn = self.make_entity_db()
+        external = normalize_intent_candidate(
+            {
+                "kind": "composite",
+                "mode": "action",
+                "action": "travel",
+                "slots": {"destination": "小溪"},
+                "plan": [
+                    {"action": "travel", "slots": {"destination": "小溪"}, "reason": "低信任解释"},
+                    {"action": "travel", "slots": {"destination": "不存在的白塔"}},
+                ],
+                "confidence": "high",
+            },
+            source="external_ai",
+            user_text="先去小溪，再去白塔",
+        )
+
+        decision = arbitrate_intent_candidates(
+            conn,
+            external_candidate=external,
+            intent_ai_mode="off",
+        )
+
+        self.assertEqual(decision.status, "clarify")
+        assert decision.candidate is not None
+        self.assertEqual(decision.candidate.plan[0].reason, "")
+        self.assertNotIn("user_text", decision.candidate.plan[0].slots)
+        self.assertEqual(decision.candidate.plan[1].slots, {})
+        self.assertTrue(any("step 2" in item for item in decision.disagreements))
+        adoption = route_outcome_from_consensus_decision(decision, fallback_submode="rest")
+        assert adoption is not None
+        self.assertEqual(adoption.outcome.kind, "unresolved")
+        assert adoption.outcome.clarification is not None
+        self.assertEqual(adoption.outcome.clarification.suggested_next_tool, "ask_clarification")
+
+    def test_consensus_without_external_and_internal_falls_back_to_rules_authority(self) -> None:
+        conn = self.make_entity_db()
+        router = AIIntentRouter(conn)
+        result = router.route_candidates(
+            SimpleNamespace(campaign_id="test"),
+            "休息到早上",
+            intent_ai_mode="consensus",
+            external_candidate=None,
+            rule_candidate={
+                "kind": "single",
+                "mode": "action",
+                "action": "rest",
+                "slots": {"until": "morning"},
+                "confidence": "medium",
+            },
+            rules_outcome=RouteOutcome(
+                mode="action",
+                submode="rest",
+                action="rest",
+                source="rules",
+            ),
+            backend="off",
+            provider=DEFAULT_AI_PROVIDER,
+            model=DEFAULT_AI_MODEL,
+            timeout=3,
+        )
+
+        self.assertEqual(result.trace["route_authority"], "deterministic_rules")
+
+    def test_consensus_with_external_but_unavailable_internal_records_actual_authority(self) -> None:
+        conn = self.make_entity_db()
+        router = AIIntentRouter(conn)
+        candidate = {
+            "kind": "single",
+            "mode": "action",
+            "action": "rest",
+            "slots": {"until": "morning"},
+            "confidence": "high",
+        }
+        result = router.route_candidates(
+            SimpleNamespace(campaign_id="test"),
+            "休息到早上",
+            intent_ai_mode="consensus",
+            external_candidate=candidate,
+            rule_candidate=candidate,
+            rules_outcome=RouteOutcome(
+                mode="action",
+                submode="rest",
+                action="rest",
+                source="rules",
+            ),
+            backend="off",
+            provider=DEFAULT_AI_PROVIDER,
+            model=DEFAULT_AI_MODEL,
+            timeout=3,
+        )
+
+        self.assertEqual(result.trace["decision"]["source"], "rules_fallback")
+        self.assertEqual(result.trace["route_authority"], "deterministic_rules")
+
+    def test_off_mode_external_primary_validates_query_contract_and_visibility(self) -> None:
+        conn = self.make_entity_db()
+        cases = (
+            ({"query_kind": "entity", "query_text": "夏娃"}, "accepted"),
+            ({"query_kind": "entity", "query_text": "遗迹"}, "clarify"),
+            ({"query_kind": "secrets", "query_text": "夏娃"}, "blocked"),
+            ({"query_kind": "entity"}, "clarify"),
+            ({"query_kind": "context"}, "clarify"),
+            ({"query_kind": "entity", "query_text": "夏娃", "hidden_access": True}, "blocked"),
+            ({"query_kind": "entity", "query_text": "隐秘者"}, "blocked"),
+            ({"query_kind": ["entity"], "query_text": "夏娃"}, "blocked"),
+            ({"query_kind": "scene", "query_text": {"hidden": True}}, "blocked"),
+        )
+        for slots, expected_status in cases:
+            with self.subTest(slots=slots):
+                external = normalize_intent_candidate(
+                    {"kind": "query", "mode": "query", "slots": slots, "confidence": "high"},
+                    source="external_ai",
+                    user_text="查询请求",
+                )
+                decision = arbitrate_intent_candidates(
+                    conn,
+                    external_candidate=external,
+                    intent_ai_mode="off",
+                )
+                self.assertEqual(decision.status, expected_status)
+                self.assertEqual(decision.source, "external_primary")
+
+    def test_off_mode_external_primary_rejects_inconsistent_mode_and_kind(self) -> None:
+        conn = self.make_entity_db()
+        for payload in (
+            {"kind": "single", "mode": "query", "slots": {"query_kind": "entity", "query_text": "夏娃"}},
+            {"kind": "query", "mode": "action", "action": "rest", "slots": {"until": "morning"}},
+        ):
+            with self.subTest(payload=payload):
+                decision = arbitrate_intent_candidates(
+                    conn,
+                    external_candidate=normalize_intent_candidate(
+                        {"confidence": "high", **payload},
+                        source="external_ai",
+                        user_text="玩家原文",
+                    ),
+                    intent_ai_mode="off",
+                )
+                self.assertEqual(decision.status, "blocked")
+                self.assertEqual(decision.source, "external_primary")
+                self.assertTrue(any("mode and kind are inconsistent" in item for item in decision.disagreements))
+
+    def test_off_mode_external_primary_rejects_inconsistent_action_kind_and_plan(self) -> None:
+        conn = self.make_entity_db()
+        cases = (
+            (
+                {"kind": "unresolved", "mode": "action", "action": "rest", "slots": {"until": "morning"}},
+                "kind is not routable",
+            ),
+            (
+                {
+                    "kind": "single",
+                    "mode": "action",
+                    "action": "rest",
+                    "slots": {"until": "morning"},
+                    "plan": [{"action": "rest", "slots": {"until": "morning"}}],
+                },
+                "kind and plan are inconsistent",
+            ),
+            (
+                {"kind": "composite", "mode": "action", "action": "rest", "slots": {"until": "morning"}},
+                "kind and plan are inconsistent",
+            ),
+        )
+        for payload, expected_error in cases:
+            with self.subTest(payload=payload):
+                decision = arbitrate_intent_candidates(
+                    conn,
+                    external_candidate=normalize_intent_candidate(
+                        {"confidence": "high", **payload},
+                        source="external_ai",
+                        user_text="玩家原文",
+                    ),
+                    intent_ai_mode="off",
+                )
+                self.assertEqual(decision.status, "blocked")
+                self.assertTrue(any(expected_error in item for item in decision.disagreements))
+
+    def test_off_mode_external_primary_validates_query_before_claimed_clarification(self) -> None:
+        conn = self.make_entity_db()
+        decision = arbitrate_intent_candidates(
+            conn,
+            external_candidate=normalize_intent_candidate(
+                {
+                    "kind": "query",
+                    "mode": "query",
+                    "slots": {"query_kind": "entity", "query_text": "夏娃", "hidden_access": True},
+                    "missing_slots": ["query_text"],
+                    "confidence": "high",
+                },
+                source="external_ai",
+                user_text="查询请求",
+            ),
+            intent_ai_mode="off",
+        )
+
+        self.assertEqual(decision.status, "blocked")
+        self.assertTrue(any("unsupported external query slot" in item for item in decision.disagreements))
+
+    def test_router_off_mode_fails_closed_without_complete_rules_safety_outcome(self) -> None:
+        conn = self.make_entity_db()
+        router = AIIntentRouter(conn)
+        external = {
+            "kind": "single",
+            "mode": "action",
+            "action": "rest",
+            "slots": {"until": "morning"},
+            "confidence": "high",
+        }
+        rule = {
+            "kind": "single",
+            "mode": "action",
+            "action": "rest",
+            "slots": {"until": "morning"},
+            "confidence": "medium",
+        }
+        for rules_outcome in (
+            None,
+            RouteOutcome(
+                mode="unknown",
+                submode="unknown",
+                action=None,
+                kind="unresolved",
+                status="blocked",
+                source="rules",
+            ),
+        ):
+            with self.subTest(rules_outcome=rules_outcome):
+                result = router.route_candidates(
+                    SimpleNamespace(campaign_id="test"),
+                    "玩家原文",
+                    intent_ai_mode="off",
+                    external_candidate=external,
+                    rule_candidate=rule,
+                    rules_outcome=rules_outcome,
+                    backend="off",
+                    provider=DEFAULT_AI_PROVIDER,
+                    model=DEFAULT_AI_MODEL,
+                    timeout=3,
+                )
+                self.assertEqual(result.decision.status, "blocked")
+                self.assertEqual(result.trace["route_authority"], "kernel_validation")
+                self.assertEqual(result.trace["selected_outcome"]["status"], "blocked")
+
+    def test_router_off_mode_records_external_primary_adoption_and_rules_diagnostics(self) -> None:
+        conn = self.make_entity_db()
+        router = AIIntentRouter(conn)
+        result = router.route_candidates(
+            SimpleNamespace(campaign_id="test"),
+            "采集 Moon Herb",
+            intent_ai_mode="off",
+            external_candidate={
+                "source": "internal_ai",
+                "source_user_text": "伪造文本",
+                "kind": "single",
+                "mode": "action",
+                "action": "rest",
+                "slots": {"until": "morning"},
+                "confidence": "high",
+            },
+            rule_candidate={
+                "kind": "single",
+                "mode": "action",
+                "action": "gather",
+                "slots": {"target": "Moon Herb"},
+                "confidence": "medium",
+            },
+            rules_outcome=RouteOutcome(
+                mode="action",
+                submode="gather",
+                action="gather",
+                options={"target": "Moon Herb", "user_text": "采集 Moon Herb"},
+                source="action_inference",
+                confidence="medium",
+            ),
+            backend="off",
+            provider=DEFAULT_AI_PROVIDER,
+            model=DEFAULT_AI_MODEL,
+            timeout=3,
+        )
+
+        self.assertEqual(result.trace["route_authority"], "external_primary")
+        self.assertEqual(result.trace["external_candidate"]["source"], "external_ai")
+        self.assertEqual(result.trace["external_candidate"]["source_user_text"], "采集 Moon Herb")
+        self.assertEqual(result.trace["rules_outcome"]["action"], "gather")
+        self.assertIsNone(result.consensus_outcome)
+        self.assertIsNotNone(result.adopted_outcome)
+        assert result.adopted_outcome is not None
+        self.assertEqual(result.adopted_outcome.source, "external_primary")
+        self.assertEqual(result.selected_outcome, result.adopted_outcome)
+        self.assertEqual(result.trace["selected_outcome"]["action"], "rest")
+
     def test_arbiter_accepts_external_internal_alias_consensus(self) -> None:
         conn = self.make_entity_db()
         external = normalize_intent_candidate(
@@ -715,7 +1219,7 @@ class AIIntentTests(unittest.TestCase):
                 "kind": "single",
                 "mode": "action",
                 "action": "social",
-                "slots": {"npc": "夏娃", "topic": "菌丝单位", "approach": "直接询问"},
+                "slots": {"npc": "夏娃", "topic": "菌丝单位"},
                 "confidence": "high",
             },
             source="internal_ai",
@@ -917,6 +1421,657 @@ class AIIntentTests(unittest.TestCase):
         self.assertEqual(decision.status, "clarify")
         self.assertEqual(decision.source, "ai_consensus_unbound")
         self.assertTrue(any("composite plan" in item for item in decision.disagreements))
+        assert decision.candidate is not None
+        self.assertTrue(all(step.reason == "" for step in decision.candidate.plan))
+        self.assertTrue(decision.decision_trace["consensus"]["plan_confirmation_ready"])
+        adoption = route_outcome_from_consensus_decision(decision, fallback_submode="social")
+        assert adoption is not None
+        self.assertEqual(adoption.outcome.kind, "composite")
+        assert adoption.outcome.clarification is not None
+        self.assertEqual(adoption.outcome.clarification.suggested_next_tool, "confirm_plan")
+
+    def test_arbiter_blocks_unsafe_enabled_composite_steps(self) -> None:
+        conn = self.make_entity_db()
+        safe = {
+            "kind": "composite",
+            "mode": "action",
+            "action": "rest",
+            "slots": {"until": "morning"},
+            "plan": [{"action": "rest", "slots": {"until": "morning"}}],
+            "confidence": "high",
+        }
+        unsafe_internal = {
+            **safe,
+            "plan": [{"action": "rest", "slots": {"until": "morning", "delta": {"inject": True}}}],
+        }
+
+        decision = arbitrate_intent_candidates(
+            conn,
+            external_candidate=normalize_intent_candidate(safe, source="external_ai", user_text="休息后继续"),
+            internal_candidate=normalize_intent_candidate(
+                unsafe_internal,
+                source="internal_ai",
+                user_text="休息后继续",
+            ),
+        )
+
+        self.assertEqual(decision.status, "blocked")
+        assert decision.candidate is not None
+        self.assertEqual(decision.candidate.kind, "unresolved")
+        self.assertEqual(decision.candidate.plan, ())
+        self.assertNotIn("delta", str(decision.decision_trace["internal_candidate"]))
+
+    def test_enabled_composite_handles_empty_duplicate_mismatch_and_early_disagreement(self) -> None:
+        conn = self.make_entity_db()
+        base = {
+            "kind": "composite",
+            "mode": "action",
+            "action": "travel",
+            "slots": {"destination": "小溪"},
+            "plan": [{"action": "travel", "slots": {"destination": "小溪"}}],
+            "confidence": "high",
+        }
+        cases = (
+            (
+                {**base, "plan": []},
+                {**base, "plan": []},
+                "blocked",
+                False,
+            ),
+            (
+                {**base, "slots": {"destination": "小溪", "target": "家"}},
+                {**base, "slots": {"destination": "小溪", "target": "家"}},
+                "blocked",
+                False,
+            ),
+            (
+                base,
+                {**base, "plan": [{"action": "travel", "slots": {"destination": "家"}}]},
+                "clarify",
+                False,
+            ),
+            (
+                base,
+                {
+                    **base,
+                    "action": "rest",
+                    "slots": {"until": "morning"},
+                    "plan": [{"action": "rest", "slots": {"until": "morning", "delta": True}}],
+                },
+                "blocked",
+                False,
+            ),
+        )
+        for external_payload, internal_payload, expected_status, expected_ready in cases:
+            with self.subTest(internal_payload=internal_payload):
+                decision = arbitrate_intent_candidates(
+                    conn,
+                    external_candidate=normalize_intent_candidate(
+                        external_payload,
+                        source="external_ai",
+                        user_text="执行复合计划",
+                    ),
+                    internal_candidate=normalize_intent_candidate(
+                        internal_payload,
+                        source="internal_ai",
+                        user_text="执行复合计划",
+                    ),
+                )
+                self.assertEqual(decision.status, expected_status)
+                consensus = decision.decision_trace["consensus"]
+                self.assertEqual(bool(consensus.get("plan_confirmation_ready")), expected_ready)
+                assert decision.candidate is not None
+                self.assertNotIn("delta", str(decision.candidate.to_dict()))
+                self.assertNotIn("delta", str(decision.decision_trace["internal_candidate"]))
+
+    def test_enabled_query_and_single_action_reuse_shared_contract_validation(self) -> None:
+        conn = self.make_entity_db()
+        invalid_query_payload = {
+            "kind": "query",
+            "mode": "query",
+            "slots": {"query_kind": ["entity"], "query_text": {"name": "夏娃"}},
+            "confidence": "high",
+        }
+        invalid_query = normalize_intent_candidate(
+            invalid_query_payload,
+            source="external_ai",
+            user_text="查询夏娃",
+        )
+        query_decision = arbitrate_intent_candidates(
+            conn,
+            external_candidate=invalid_query,
+            internal_candidate=normalize_intent_candidate(
+                invalid_query_payload,
+                source="internal_ai",
+                user_text="查询夏娃",
+            ),
+        )
+        self.assertEqual(query_decision.status, "blocked")
+
+        equivalent_external = normalize_intent_candidate(
+            {
+                "kind": "query",
+                "mode": "query",
+                "slots": {"query_kind": " Entity ", "query_text": " 夏娃 "},
+                "confidence": "high",
+            },
+            source="external_ai",
+            user_text="查询夏娃",
+        )
+        equivalent_internal = normalize_intent_candidate(
+            {
+                "kind": "query",
+                "mode": "query",
+                "slots": {"query_kind": "entity", "query_text": "夏娃"},
+                "confidence": "high",
+            },
+            source="internal_ai",
+            user_text="查询夏娃",
+        )
+        equivalent_decision = arbitrate_intent_candidates(
+            conn,
+            external_candidate=equivalent_external,
+            internal_candidate=equivalent_internal,
+        )
+        self.assertEqual(equivalent_decision.status, "accepted")
+
+        for payload, expected_status in (
+            (
+                {
+                    "kind": "single",
+                    "mode": "action",
+                    "action": "rest",
+                    "slots": {"until": "morning", "destination": "小溪"},
+                    "confidence": "high",
+                },
+                "blocked",
+            ),
+            (
+                {
+                    "kind": "single",
+                    "mode": "action",
+                    "action": "rest",
+                    "slots": {"until": "morning"},
+                    "missing_slots": ["pace"],
+                    "confidence": "high",
+                },
+                "clarify",
+            ),
+        ):
+            with self.subTest(payload=payload):
+                external = normalize_intent_candidate(payload, source="external_ai", user_text="休息")
+                internal = normalize_intent_candidate(payload, source="internal_ai", user_text="休息")
+                decision = arbitrate_intent_candidates(
+                    conn,
+                    external_candidate=external,
+                    internal_candidate=internal,
+                )
+                self.assertEqual(decision.status, expected_status)
+
+    def test_enabled_arbitration_rejects_inconsistent_shared_candidate_shapes(self) -> None:
+        conn = self.make_entity_db()
+        cases = (
+            {"kind": "single", "mode": "query", "slots": {"query_kind": "entity", "query_text": "夏娃"}},
+            {"kind": "unresolved", "mode": "action", "action": "rest", "slots": {"until": "morning"}},
+            {"kind": "unresolved", "mode": "unknown", "slots": {}},
+            {
+                "kind": "single",
+                "mode": "action",
+                "action": "rest",
+                "slots": {"until": "morning"},
+                "plan": [{"action": "rest", "slots": {"until": "morning"}}],
+            },
+        )
+        for payload in cases:
+            with self.subTest(payload=payload):
+                decision = arbitrate_intent_candidates(
+                    conn,
+                    external_candidate=normalize_intent_candidate(
+                        {"confidence": "high", **payload},
+                        source="external_ai",
+                        user_text="玩家原文",
+                    ),
+                    internal_candidate=normalize_intent_candidate(
+                        {"confidence": "high", **payload},
+                        source="internal_ai",
+                        user_text="玩家原文",
+                    ),
+                )
+                self.assertEqual(decision.status, "blocked")
+                assert decision.candidate is not None
+                self.assertEqual(decision.candidate.kind, "unresolved")
+                self.assertEqual(decision.candidate.plan, ())
+
+    def test_typed_query_with_action_fails_closed_on_all_arbiter_paths(self) -> None:
+        conn = self.make_entity_db()
+        typed_query = IntentCandidate(
+            source="external_ai",
+            source_user_text="查询夏娃",
+            kind="query",
+            mode="query",
+            action="rest",
+            slots={"query_kind": "entity", "query_text": "夏娃"},
+            confidence="high",
+        )
+        internal_query = IntentCandidate(
+            source="internal_ai",
+            source_user_text="查询夏娃",
+            kind="query",
+            mode="query",
+            action="rest",
+            slots={"query_kind": "entity", "query_text": "夏娃"},
+            confidence="high",
+        )
+        rules_query = normalize_intent_candidate(
+            {
+                "kind": "query",
+                "mode": "query",
+                "slots": {"query_kind": "entity", "query_text": "夏娃"},
+                "confidence": "medium",
+            },
+            source="rules",
+            user_text="查询夏娃",
+        )
+        decisions = (
+            arbitrate_intent_candidates(
+                conn,
+                external_candidate=typed_query,
+                intent_ai_mode="off",
+            ),
+            arbitrate_intent_candidates(
+                conn,
+                external_candidate=typed_query,
+                internal_candidate=internal_query,
+            ),
+            arbitrate_intent_candidates(
+                conn,
+                internal_candidate=internal_query,
+                rule_candidate=rules_query,
+            ),
+        )
+        for decision in decisions:
+            with self.subTest(source=decision.source):
+                self.assertEqual(decision.status, "blocked")
+                assert decision.candidate is not None
+                self.assertIsNone(decision.candidate.action)
+
+    def test_enabled_ordinary_mismatch_validates_and_sanitizes_each_candidate_first(self) -> None:
+        conn = self.make_entity_db()
+        cases = (
+            (
+                {
+                    "kind": "single",
+                    "mode": "action",
+                    "action": "rest",
+                    "slots": {"until": "morning", "delta": {"inject": True}},
+                    "confidence": "high",
+                },
+                {
+                    "kind": "single",
+                    "mode": "action",
+                    "action": "travel",
+                    "slots": {"destination": "小溪"},
+                    "confidence": "high",
+                },
+                "blocked",
+            ),
+            (
+                {
+                    "kind": "query",
+                    "mode": "query",
+                    "slots": {"query_kind": "entity", "query_text": {"name": "夏娃"}},
+                    "confidence": "high",
+                },
+                {
+                    "kind": "single",
+                    "mode": "action",
+                    "action": "rest",
+                    "slots": {"until": "morning"},
+                    "confidence": "high",
+                },
+                "blocked",
+            ),
+            (
+                {
+                    "kind": "single",
+                    "mode": "action",
+                    "action": "rest",
+                    "slots": {"until": "morning"},
+                    "confidence": "high",
+                },
+                {
+                    "kind": "single",
+                    "mode": "action",
+                    "action": "travel",
+                    "slots": {"destination": "小溪"},
+                    "confidence": "high",
+                },
+                "clarify",
+            ),
+        )
+        for external_payload, internal_payload, expected_status in cases:
+            with self.subTest(external_payload=external_payload):
+                decision = arbitrate_intent_candidates(
+                    conn,
+                    external_candidate=normalize_intent_candidate(
+                        external_payload,
+                        source="external_ai",
+                        user_text="玩家原文",
+                    ),
+                    internal_candidate=normalize_intent_candidate(
+                        internal_payload,
+                        source="internal_ai",
+                        user_text="玩家原文",
+                    ),
+                )
+                self.assertEqual(decision.status, expected_status)
+                self.assertNotIn("delta", str(decision.decision_trace["external_candidate"]))
+
+    def test_single_source_internal_reuses_shared_contract_before_fast_path(self) -> None:
+        conn = self.make_entity_db()
+        cases = (
+            (
+                {"kind": "single", "mode": "query", "slots": {"query_kind": "entity", "query_text": "夏娃"}},
+                {"kind": "query", "mode": "query", "slots": {"query_kind": "entity", "query_text": "夏娃"}},
+                "blocked",
+            ),
+            (
+                {
+                    "kind": "single",
+                    "mode": "action",
+                    "action": "rest",
+                    "slots": {"until": "morning", "delta": True},
+                },
+                {"kind": "single", "mode": "action", "action": "rest", "slots": {"until": "morning"}},
+                "blocked",
+            ),
+            (
+                {
+                    "kind": "single",
+                    "mode": "action",
+                    "action": "travel",
+                    "slots": {"destination": "小溪", "target": "家"},
+                },
+                {"kind": "single", "mode": "action", "action": "travel", "slots": {"destination": "小溪"}},
+                "blocked",
+            ),
+            (
+                {"kind": "single", "mode": "action", "action": "rest", "slots": {"until": "morning"}},
+                {"kind": "single", "mode": "action", "action": "rest", "slots": {"until": "morning"}},
+                "accepted",
+            ),
+        )
+        for internal_payload, rules_payload, expected_status in cases:
+            with self.subTest(internal_payload=internal_payload):
+                decision = arbitrate_intent_candidates(
+                    conn,
+                    internal_candidate=normalize_intent_candidate(
+                        {"confidence": "high", **internal_payload},
+                        source="internal_ai",
+                        user_text="玩家原文",
+                    ),
+                    rule_candidate=normalize_intent_candidate(
+                        {"confidence": "medium", **rules_payload},
+                        source="rules",
+                        user_text="玩家原文",
+                    ),
+                )
+                self.assertEqual(decision.status, expected_status)
+
+    def test_enabled_consensus_clarifies_one_sided_nondefault_optional_bound_option(self) -> None:
+        conn = self.make_entity_db()
+        decision = arbitrate_intent_candidates(
+            conn,
+            external_candidate=normalize_intent_candidate(
+                {"kind": "single", "mode": "action", "action": "rest", "slots": {}, "confidence": "high"},
+                source="external_ai",
+                user_text="休息",
+            ),
+            internal_candidate=normalize_intent_candidate(
+                {
+                    "kind": "single",
+                    "mode": "action",
+                    "action": "rest",
+                    "slots": {"until": "evening"},
+                    "confidence": "high",
+                },
+                source="internal_ai",
+                user_text="休息",
+            ),
+        )
+
+        self.assertEqual(decision.status, "clarify")
+        self.assertTrue(any("slot mismatch for until" in item for item in decision.disagreements))
+
+    def test_enabled_consensus_treats_explicit_resolver_default_as_equivalent(self) -> None:
+        conn = self.make_entity_db()
+        decision = arbitrate_intent_candidates(
+            conn,
+            external_candidate=normalize_intent_candidate(
+                {
+                    "kind": "single",
+                    "mode": "action",
+                    "action": "travel",
+                    "slots": {"destination": "小溪"},
+                    "confidence": "high",
+                },
+                source="external_ai",
+                user_text="去小溪",
+            ),
+            internal_candidate=normalize_intent_candidate(
+                {
+                    "kind": "single",
+                    "mode": "action",
+                    "action": "travel",
+                    "slots": {"destination": "小溪", "pace": "normal"},
+                    "confidence": "high",
+                },
+                source="internal_ai",
+                user_text="去小溪",
+            ),
+        )
+
+        self.assertEqual(decision.status, "accepted")
+
+    def test_single_source_fast_path_requires_matching_valid_rules_evidence(self) -> None:
+        conn = self.make_entity_db()
+        internal_query = normalize_intent_candidate(
+            {
+                "kind": "query",
+                "mode": "query",
+                "slots": {"query_kind": "entity", "query_text": "夏娃"},
+                "confidence": "high",
+            },
+            source="internal_ai",
+            user_text="查询夏娃",
+        )
+        rules_query = normalize_intent_candidate(
+            {
+                "kind": "query",
+                "mode": "query",
+                "slots": {"query_kind": "scene"},
+                "confidence": "medium",
+            },
+            source="rules",
+            user_text="查询夏娃",
+        )
+        query_decision = arbitrate_intent_candidates(
+            conn,
+            internal_candidate=internal_query,
+            rule_candidate=rules_query,
+        )
+        self.assertEqual(query_decision.status, "clarify")
+
+        internal_action = normalize_intent_candidate(
+            {
+                "kind": "single",
+                "mode": "action",
+                "action": "rest",
+                "slots": {"until": "morning"},
+                "confidence": "high",
+            },
+            source="internal_ai",
+            user_text="休息",
+        )
+        invalid_rules_cases = (
+            {
+                "kind": "single",
+                "mode": "action",
+                "action": "rest",
+                "slots": {"until": "morning", "delta": True},
+                "confidence": "medium",
+            },
+            {
+                "kind": "single",
+                "mode": "action",
+                "action": "rest",
+                "slots": {"until": "morning"},
+                "safety_flags": ["forced_save"],
+                "confidence": "medium",
+            },
+        )
+        for rules_payload in invalid_rules_cases:
+            with self.subTest(rules_payload=rules_payload):
+                decision = arbitrate_intent_candidates(
+                    conn,
+                    internal_candidate=internal_action,
+                    rule_candidate=normalize_intent_candidate(
+                        rules_payload,
+                        source="rules",
+                        user_text="休息",
+                    ),
+                )
+                self.assertNotEqual(decision.status, "accepted")
+
+    def test_production_rules_query_candidate_preserves_canonical_evidence(self) -> None:
+        conn = self.make_entity_db()
+        rules = build_rules_intent_candidate(
+            "我现在在哪里",
+            rule_mode="query",
+            rule_submode="scene",
+            inferred={},
+            route_mode="query",
+            route_action=None,
+            route_options={},
+            route_kind="query",
+            confidence="medium",
+        )
+        internal = normalize_intent_candidate(
+            {
+                "kind": "query",
+                "mode": "query",
+                "slots": {"query_kind": "scene"},
+                "confidence": "high",
+            },
+            source="internal_ai",
+            user_text="我现在在哪里",
+        )
+
+        self.assertEqual(rules.slots, {"query_kind": "scene"})
+        decision = arbitrate_intent_candidates(
+            conn,
+            internal_candidate=internal,
+            rule_candidate=rules,
+        )
+        self.assertEqual(decision.status, "accepted")
+
+        scene_with_text = normalize_intent_candidate(
+            {
+                "kind": "query",
+                "mode": "query",
+                "slots": {"query_kind": "scene", "query_text": "查看周围"},
+                "confidence": "high",
+            },
+            source="internal_ai",
+            user_text="查看周围",
+        )
+        scene_text_decision = arbitrate_intent_candidates(
+            conn,
+            internal_candidate=scene_with_text,
+            rule_candidate=rules,
+        )
+        self.assertEqual(scene_text_decision.status, "accepted")
+
+        entity_rules = build_rules_intent_candidate(
+            "查询夏娃",
+            rule_mode="query",
+            rule_submode="entity",
+            inferred={},
+            route_mode="query",
+            route_action=None,
+            route_options={},
+            route_kind="query",
+            confidence="medium",
+        )
+        self.assertEqual(
+            entity_rules.slots,
+            {"query_kind": "entity", "query_text": "夏娃"},
+        )
+        entity_internal = normalize_intent_candidate(
+            {
+                "kind": "query",
+                "mode": "query",
+                "slots": {"query_kind": "entity", "query_text": "夏娃"},
+                "confidence": "high",
+            },
+            source="internal_ai",
+            user_text="查询夏娃",
+        )
+        entity_decision = arbitrate_intent_candidates(
+            conn,
+            internal_candidate=entity_internal,
+            rule_candidate=entity_rules,
+        )
+        self.assertEqual(entity_decision.status, "accepted")
+
+        precise_rules = build_rules_intent_candidate(
+            "查询夏娃的详细资料",
+            rule_mode="query",
+            rule_submode="entity",
+            inferred={"options": {"query_kind": "entity", "query_text": "夏娃"}},
+            route_mode="query",
+            route_action=None,
+            route_options={},
+            route_kind="query",
+            confidence="medium",
+        )
+        self.assertEqual(precise_rules.slots["query_text"], "夏娃")
+
+        unknown_rules = build_rules_intent_candidate(
+            "未知查询",
+            rule_mode="query",
+            rule_submode="mystery",
+            inferred={},
+            route_mode="query",
+            route_action=None,
+            route_options={},
+            route_kind="query",
+            confidence="medium",
+        )
+        self.assertEqual(unknown_rules.slots, {"query_kind": "mystery"})
+        unknown_decision = arbitrate_intent_candidates(
+            conn,
+            internal_candidate=internal,
+            rule_candidate=unknown_rules,
+        )
+        self.assertNotEqual(unknown_decision.status, "accepted")
+
+    def test_entity_query_target_extraction_handles_narrow_chinese_forms(self) -> None:
+        cases = {
+            "查理是谁": "查理",
+            "夏娃在哪里": "夏娃",
+            "夏娃在哪儿": "夏娃",
+            "查一下夏娃": "夏娃",
+            "看一下夏娃的信息": "夏娃",
+            "看门人是谁": "看门人",
+            "夏娃的资料": "夏娃",
+            "夏娃的信息？": "夏娃",
+            "夏娃的属性": "夏娃",
+            "机密资料": "机密资料",
+        }
+        for text, expected in cases.items():
+            with self.subTest(text=text):
+                self.assertEqual(extract_entity_query_target(text), expected)
 
     def test_arbiter_blocks_internal_safety_flags(self) -> None:
         conn = self.make_entity_db()
@@ -1045,9 +2200,9 @@ class AIIntentTests(unittest.TestCase):
         router = AIIntentRouter(conn)
         internal = normalize_intent_candidate(
             {
-                "kind": "single",
+                "kind": "query",
                 "mode": "query",
-                "slots": {"query": "我现在在哪里"},
+                "slots": {"query_kind": "scene", "query_text": "我现在在哪里"},
                 "confidence": "high",
             },
             source="internal_ai",
@@ -1055,9 +2210,9 @@ class AIIntentTests(unittest.TestCase):
         )
         rules = normalize_intent_candidate(
             {
-                "kind": "single",
+                "kind": "query",
                 "mode": "query",
-                "slots": {"query": "我现在在哪里"},
+                "slots": {"query_kind": "scene", "query_text": "我现在在哪里"},
                 "confidence": "medium",
             },
             source="rules",
@@ -1109,6 +2264,33 @@ class AIIntentTests(unittest.TestCase):
         self.assertEqual(adoption.outcome.mode, "query")
         self.assertEqual(adoption.outcome.submode, "entity")
         self.assertEqual(adoption.outcome.options, {"query_text": "夏娃"})
+
+    def test_consensus_adapter_compatibility_keeps_fallback_submode_and_messages(self) -> None:
+        candidate = normalize_intent_candidate(
+            {
+                "kind": "single",
+                "mode": "action",
+                "action": "not_registered",
+                "slots": {},
+                "confidence": "low",
+            },
+            source="internal_ai",
+            user_text="玩家原文",
+        )
+        decision = ConsensusDecision(
+            status="clarify",
+            source="ai_disagreement",
+            candidate=candidate,
+            bound=None,
+        )
+
+        adoption = route_outcome_from_consensus_decision(decision, fallback_submode="rest")
+
+        self.assertIsNotNone(adoption)
+        assert adoption is not None
+        self.assertEqual(adoption.outcome.submode, "rest")
+        self.assertEqual(adoption.outcome.player_message, "AI 意图共识未通过，需要玩家确认。")
+        self.assertEqual(adoption.outcome.needs_confirmation, ("intent consensus requires clarification",))
 
     def test_ai_intent_router_route_candidates_records_rules_fallback_without_helper(self) -> None:
         conn = self.make_entity_db()
