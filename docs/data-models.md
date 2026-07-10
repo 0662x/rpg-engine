@@ -319,9 +319,17 @@ Campaign Package，在临时 Save Package 上验证同一套模型合同：
 - SQLite schema、fact authority 和 player confirmation boundary 不因 campaign 题材变化而 fork。
 - 写入类 smoke 必须使用 temporary save copy，并保留 source Campaign Package no-mutation 证据。
 
-当前 focused regression 是 `tests/test_cross_campaign_model_smoke.py`。完整 context assembly、
-basic query 和 player-safe play loop 的跨 Campaign 集成 smoke 属于后续 Context Slice story，而不是
-本模型边界 gate。
+当前 model-boundary focused regression 是 `tests/test_cross_campaign_model_smoke.py`。
+
+Story 3.7 另以 `tests/test_cross_campaign_context_smoke.py` 验证完整 context assembly、basic query
+和 player-safe play loop。它在两个独立 temporary workspace/Save 上复用同一
+`ContextBuildResult` pipeline/collector contract、player visibility filtering、`GMRuntime` preview/validation
+与 `SaveManager.player_turn -> pending -> player_confirm -> validation/commit` 链。测试分别证明
+query、context assembly、preview、validation 和 pending creation 不修改 authoritative facts，错误
+session id 被拒绝，只有正确 confirm 会增加 turn/event。每个 player result 都检查
+Campaign 自带 hidden canary，失败 evidence 只报告安全的 campaign/save/stage/context-source/
+visibility-mode，不复制 hidden 正文。写入仅发生在 temporary Save，仓库 source Campaign
+和 configured/registered formal current Saves 前后 fingerprint 必须一致；该 postcondition 在早期失败时也会执行。
 
 ### Typed Side Tables
 

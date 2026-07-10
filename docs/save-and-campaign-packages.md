@@ -153,6 +153,15 @@ ContentRegistry、entity/relationship/progress access 和 `tick_clocks` validati
 语言、capability 和内容差异仍复用同一 Campaign/Save ownership 与模型合同，并且 source Campaign
 Package 不会被写入运行态文件。当前测试入口是 `tests/test_cross_campaign_model_smoke.py`。
 
+Context / player-safe foundation 的跨 Campaign 集成门禁是
+`tests/test_cross_campaign_context_smoke.py`。它把两个 source Campaign 分别复制到独立
+temporary workspace，通过同一 `SaveManager.start_or_continue()` 创建 temporary Save，再运行
+player-safe context/query、preview/validation 和 `player_turn -> pending -> player_confirm` 链。Query、
+preview、validation 和 pending 阶段必须保持 SQLite facts 不变，错误 session 不能提交，
+正确 confirm 才可经 validation/commit 增加 turn/event。该测试同时 fingerprint 仓库 source
+Campaign、temporary Campaign copy 和 configured/registered formal current Saves；即使中间阶段失败，
+cleanup/finally 也必须验证只有 temporary Save 与它的 temporary `.aigm` entry state 可发生变化。
+
 Authoring 工具可以辅助创建和检查作者包：
 
 ```bash

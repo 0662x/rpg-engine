@@ -202,8 +202,27 @@ python3 -m pytest -q tests/test_cross_campaign_model_smoke.py
 
 该 gate 适用于触碰 Campaign/Save ownership、Content Type / Merge、Entity、Relationship 或
 Progress access contract 的 foundation 变更。它必须只写临时 Save Package，不能修改正式 current
-save package 或 source Campaign Package。完整 Context Slice、basic query 和 player-safe play loop
-跨 Campaign 测试属于 context 集成 gate，不由这个 model-boundary smoke 代替。
+save package 或 source Campaign Package。
+
+跨 Campaign Context / player-safe loop smoke：
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q \
+  tests/test_cross_campaign_context_smoke.py \
+  -p no:cacheprovider
+```
+
+该 gate 适用于触碰 `ContextBuildResult`、player visibility filtering、basic query、preview/validation
+或 `SaveManager` pending/confirm 边界的 foundation 变更。它对
+`examples/v1_minimal_adventure` 和 `examples/small_cn_campaign` 各创建独立 temporary
+workspace/Save，并证明两者复用同一 context pipeline/collector contract 与
+`player_turn -> pending -> player_confirm -> validation/commit` 链。失败 evidence 必须指出安全的
+campaign、temporary save、context source、visibility mode 和 player-safe stage，不得回显 hidden
+正文或 raw player payload。测试必须证明 query/preview/validation/pending 不写 facts，错误
+session 被拒绝，只有正确 confirm 提交，且 source Campaign 与 configured formal current
+Save（包括 workspace registry 中的 Save）的 fingerprint 不变，且这些 postcondition 在早期失败时仍执行。
+该 context integration gate 与 model-boundary smoke 正交，两者不能
+互相代替。
 
 慢测试观察：
 
