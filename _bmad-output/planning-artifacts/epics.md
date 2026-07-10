@@ -104,7 +104,7 @@ AR-5: CLI/MCP/platform adapters 必须保持 thin adapter，调用 `SaveManager`
 
 AR-6: 默认 MCP `player` profile 只能注册 player-safe tools；不得注册 `intent_preflight`、`start_turn`、`query`、`preview_from_text`、`preview_action`、`validate_delta`、`commit_turn` 或 maintenance/admin tools。
 
-AR-7: `external_intent_candidate`、internal AI review、preflight cache 和 resident AI advisory 都必须保持 low-trust/advisory/candidate 语义，不得表达 confirmation、hidden permission、proposal approval、delta injection、save authorization 或 profile escalation。
+AR-7: `external_intent_candidate`、internal AI review、preflight cache 和 resident AI advisory 都必须保持 low-trust/advisory/candidate 语义；这里的 low-trust 限定 gameplay facts、permission、player confirmation 和 commit authority，不排除 external candidate 在显式 off-mode policy 下成为 selected route proposal。任何 candidate 或 advisory 都不得表达 confirmation、hidden permission、proposal approval、delta injection、save authorization 或 profile escalation。
 
 AR-8: Preflight cache 必须保持 advisory、identity-bound、TTL-bound、single-use；`message_only` preflight 创建时不得携带 external candidate，正式入口消费时仍必须经过 arbiter、binder、resolver、validation 和 commit guard。
 
@@ -242,7 +242,7 @@ AI/主持者可以拿到准确、相关、可审计、不会泄露 hidden 的 Co
 
 ### Epic 4: AI Intent 与 Resident Advisory Loop
 
-外部 AI 和 resident AI 可以帮助理解意图、总结上下文、建议实体/关系/进度/剧情推进，并在延迟或 AI 不可用时安全降级，但事实权威仍在 Kernel。完成后，AI candidate、preflight cache、Resident AI advisory、proposal/review queue 和 latency policy 都保持 low-trust/advisory 语义。
+外部 AI 和 resident AI 可以帮助理解意图、总结上下文、建议实体/关系/进度/剧情推进，并在延迟或 AI 不可用时安全降级，但事实权威仍在 Kernel。Intent route proposal 按显式 internal intent AI mode 选择；成为 selected route 不会授予事实、玩家确认或 commit authority。完成后，AI candidate、preflight cache、Resident AI advisory、proposal/review queue 和 latency policy 都保持 low-trust/advisory 语义。
 
 **FRs covered:** FR-4, FR-5, FR-6, FR-9
 
@@ -724,8 +724,8 @@ So that I can improve AI hosting without weakening visibility boundaries.
 ### Story 4.1: Low-Trust Intent Candidate Contract
 
 As an external AI integrator,
-I want to submit structured intent candidates without gaining authority,
-So that AI can help understand natural language while the Kernel keeps routing and commit control.
+I want a valid external candidate to become proposal authority only when internal intent AI is off,
+So that deterministic rules cannot override externally understood intent while the Kernel still verifies, binds, previews, confirms, and commits safely.
 
 **Acceptance Criteria:**
 
@@ -734,15 +734,35 @@ So that AI can help understand natural language while the Kernel keeps routing a
 **Then** it may contain kind, mode, action, slots, plan, confidence, missing slots, safety flags, and reason
 **And** it cannot contain player confirmation, hidden access, delta/proposal injection, save authorization, profile escalation, or per-call override for player profile.
 
-**Given** deterministic rules, external candidates, internal review, and preflight evidence exist
-**When** routing runs
-**Then** provenance and decision trace record candidate sources and arbitration outcome
-**And** final preview, validation, confirmation, and commit remain Kernel-owned.
+**Given** internal intent AI is off and a valid external candidate is present
+**When** schema, action registry, safety, and binding checks pass and routing runs
+**Then** the external candidate becomes the selected route proposal
+**And** deterministic rules are retained only as trace or diagnostic evidence and cannot override, veto, or force clarification solely because of mismatch.
 
-**Given** a candidate is malformed, unsafe, incomplete, or inconsistent with player-visible context
-**When** schema validation, risk checks, arbiter, or binder run
-**Then** the result is clarify, fallback, or blocked as appropriate
-**And** no pending action is created from an unsafe candidate.
+**Given** internal intent AI is enabled and an external candidate is present
+**When** routing runs
+**Then** external and internal candidates follow the existing arbitration path
+**And** the external candidate does not become proposal authority merely because it is present.
+
+**Given** internal intent AI is off and no external candidate is present
+**When** routing runs
+**Then** the first fix preserves the current deterministic rules fallback
+**And** no-external fallback hardening remains a separate P0 decision.
+
+**Given** an external candidate is malformed, unsafe, names an unknown action, or has invalid or missing binding
+**When** schema validation, risk checks, action registry, or binder run
+**Then** the result is a structured rejection, clarification, or blocked response as appropriate
+**And** deterministic rules do not silently substitute a different player intent or create a pending action from the invalid candidate.
+
+**Given** an external-primary or accepted consensus route conflicts with the keyword expected action
+**When** the runtime preview mismatch guard runs
+**Then** the mismatch is retained as diagnostic evidence and does not hard-veto the routed intent
+**And** the existing mismatch guard remains for direct low-level `preview_action` calls whose action was not selected by a routed AI intent.
+
+**Given** a selected route is a query or executable action
+**When** the standard player-safe path continues
+**Then** a query returns player-visible read-only state without saving, while an action passes resolver, preview, and validation and creates only a pending action
+**And** only a matching `player_confirm(session_id)` after explicit player confirmation may commit gameplay facts.
 
 ### Story 4.2: AI Latency Policy and Safe Degradation
 
@@ -761,6 +781,11 @@ So that slow or unavailable AI results in safe fallback rather than unsafe commi
 **When** the turn proceeds
 **Then** the system safely degrades to deterministic low-risk fallback, clarification, blocked, or no-AI path
 **And** no timed-out AI result can later authorize commit.
+
+**Given** internal intent AI is configured as enabled
+**When** internal review times out or becomes unavailable
+**Then** degradation does not silently reinterpret the configured mode as explicit off or grant the external candidate unconditional proposal authority
+**And** the existing safe fallback, clarification, blocked, or no-AI policy remains in force.
 
 **Given** resident/background advisory tasks are scheduled
 **When** they complete within or beyond the 30-60 second target window

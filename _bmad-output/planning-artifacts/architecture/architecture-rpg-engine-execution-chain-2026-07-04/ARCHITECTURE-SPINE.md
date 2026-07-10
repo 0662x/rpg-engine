@@ -7,7 +7,7 @@ paradigm: "Layered Local-First Kernel with Thin Adapters and Explicit Coordinati
 scope: "RPG Engine execution-chain boundaries for player-safe play, trusted low-level and maintenance surfaces, AI intent/preflight coordination, and projection/outbox consistency"
 status: final
 created: "2026-07-04"
-updated: "2026-07-04"
+updated: "2026-07-10"
 binds:
   - CAP-1
   - CAP-2
@@ -48,11 +48,11 @@ Layer mapping:
 - **Prevents:** Treating `player_turn`, query, platform message handling, or a low-level preview as if gameplay facts were already committed.
 - **Rule:** Ordinary player-safe writes must flow through `SaveManager.player_turn()` to a pending action, then `SaveManager.player_confirm(session_id)` with matching save/session/platform identity, then `GMRuntime.commit_turn()` with validation and approved `TurnProposal`. `player_turn`, `player_query`, `start_or_continue`, save switching/creation, platform message receipt, and preflight may not commit gameplay facts.
 
-### AD-2 - Intent coordination is orchestration and provenance only [ADOPTED]
+### AD-2 - Intent coordination may select a route proposal but owns no gameplay fact or write authority [ADOPTED]
 
 - **Binds:** CAP-3, CAP-5
-- **Prevents:** A future `IntentCoordinator` or current AI intent path becoming a second gameplay authority.
-- **Rule:** `IntentCoordinator` or equivalent may prepare candidates, carry passive preflight identity, call rules/AI review, arbitrate consensus, bind slots, and emit trace/provenance. It may not preview, validate, confirm, commit, bypass hidden-read gates, construct deltas outside action resolvers, or turn preflight cache into proposal or permission cache.
+- **Prevents:** A future `IntentCoordinator` or current AI intent path becoming a second gameplay fact, player-confirmation, or write authority.
+- **Rule:** `IntentCoordinator` or equivalent may prepare candidates, carry passive preflight identity, call rules/AI review, select a route proposal, bind slots, and emit trace/provenance under an explicit mode policy. When internal intent AI is off and a valid external candidate is present, external is the proposal authority and rules are trace-only: rules may not override, veto, or force clarification solely because of mismatch. When internal intent AI is enabled, external and internal candidates keep the existing arbitration path; external is not unconditionally authoritative. When internal intent AI is off and no external candidate is present, the current rules fallback remains. The coordinator may not preview, validate, confirm, commit, bypass hidden-read gates, construct deltas outside action resolvers, or turn preflight cache into proposal or permission cache.
 
 ### AD-3 - Every public or semi-public entry surface declares category and write authority [ADOPTED]
 

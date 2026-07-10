@@ -3,11 +3,11 @@ name: "AIGM Kernel 基础架构"
 type: architecture-spine
 purpose: build-substrate
 altitude: feature
-paradigm: "本地优先、契约中心的 AIGM Kernel：剧情包/Campaign 拥有作者内容，Save 拥有运行事实，AI 只做候选/建议"
+paradigm: "本地优先、契约中心的 AIGM Kernel：剧情包/Campaign 拥有作者内容，Save 拥有运行事实，AI 可按显式 mode 提供 route proposal，但不拥有事实、确认或提交权威"
 scope: "RPG Engine / AIGM Kernel v1 foundation：剧情包/Campaign 与 Save 的所有权、契约边界、entity/relationship/progress 访问、context assembly、resident AI advisory loop、diagnostics、本地运行边界"
 status: final
 created: "2026-07-04"
-updated: "2026-07-04"
+updated: "2026-07-10"
 binds:
   - FR-1
   - FR-2
@@ -80,7 +80,7 @@ flowchart TD
   SaveFacts --> RuntimeState["workspace registry / pending / preflight / advisory tables"]
   SaveFacts --> Access
   SaveFacts --> Context
-  ExternalAI["External AI"] -. "intent candidate only" .-> App
+  ExternalAI["External AI"] -. "mode-gated intent candidate / route proposal" .-> App
   ResidentAI["Resident AI coordinator + assistants"] -. "advisory records only" .-> App
   App -. "read/import only; no runtime mutation" .-> Campaign
 ```
@@ -90,7 +90,7 @@ flowchart TD
 | Inherited | From parent | Binds here |
 | --- | --- | --- |
 | AD-1 | `architecture-rpg-engine-execution-chain-2026-07-04` | 普通玩家事实写入仍必须经过 pending action、玩家确认、validation 和 commit。 |
-| AD-2 | `architecture-rpg-engine-execution-chain-2026-07-04` | Intent coordination、internal AI review、preflight、resident AI 都不能成为 gameplay authority。 |
+| AD-2 | `architecture-rpg-engine-execution-chain-2026-07-04` | Intent coordination 可按显式 mode 选择 route proposal，但 internal AI review、preflight、resident AI 都不能成为 gameplay fact、player confirmation 或 commit authority。 |
 | AD-3 | `architecture-rpg-engine-execution-chain-2026-07-04` | 每个 public / semi-public surface 都必须声明 category 和 write authority。 |
 | AD-4 | `architecture-rpg-engine-execution-chain-2026-07-04` | SQLite commit 是 gameplay fact；projection/outbox artifact 只是可修复证据。 |
 | AD-5 | `architecture-rpg-engine-execution-chain-2026-07-04` | 下游 story 必须带 boundary tests，覆盖写入、AI 信任、hidden data 和 surface 权限。 |
@@ -103,11 +103,11 @@ flowchart TD
 - **Prevents:** world setting、relationship、progress、prompt、运行态状态和 kernel 机制混成一个可随意改写的 package 模型。
 - **Rule:** 剧情包，也就是当前代码里的 `Campaign Package`，只包含作者内容和作者测试：world settings、初始 entities、初始 relationships、progress definitions、rules、prompts、templates、capabilities、smoke tests。Save Package 包含运行事实和证据：SQLite facts/events、relationship/progress changes、projections、snapshots、cards、memory、save metadata。`.aigm/save-registry.json`、pending action/clarification、`intent_preflight_cache`、`proposal_queue`、`archivist_suggestions` 是入口状态、缓存、review/advisory state 或派生证据，不是另一套 gameplay facts。Kernel 负责 import、validation、storage、query、context assembly、visibility enforcement 和 commit。普通 play 不能把运行事实写回 Campaign Package。
 
-### AD-2 - AI 只能是 advisory/candidate，不能是事实权威 [ADOPTED]
+### AD-2 - AI route proposal 按 mode 选择，但 AI 不能成为事实、确认或提交权威 [ADOPTED]
 
 - **Binds:** FR-4, FR-5, FR-6, FR-9, FR-12
 - **Prevents:** external AI、internal intent AI、resident AI、semantic helper 或 preflight cache 变成隐藏的第二套引擎。
-- **Rule:** AI 输出可以提供 `IntentCandidate`、future `ResidentAIAdvisory`、summary draft、entity/progress suggestion、plot progression advice 和 trace evidence。当前已有输出/证据形态优先复用 `AIHelperResult`、`AIIntentRouteResult`、`SemanticSuggestion`、`ArchivistSuggestion`、`ArchivistWorkflowResult`、`ReflectionDraft`、`MemoryBuildResult`、`StateAuditResult`、`DeltaDraftResult`、`AcceptanceResult` 等实现。AI 或 assistant 输出不能确认玩家意图、授权 hidden access、批准 proposal、注入 trusted delta、绕过 resolver/validation、修改 Save facts、修改 Campaign Package 或提交 gameplay state。
+- **Rule:** AI 输出可以提供 `IntentCandidate`、future `ResidentAIAdvisory`、summary draft、entity/progress suggestion、plot progression advice 和 trace evidence。Intent route 必须按显式 internal intent AI mode 选择：internal intent AI 关闭且存在通过 kernel 结构、安全和绑定检查的 external candidate 时，external candidate 是 selected route proposal，deterministic rules 仅记录 trace / diagnostic evidence，不得 override、veto 或仅因 mismatch 强制 clarification；internal intent AI 开启时，保持 external / internal 仲裁；internal intent AI 关闭且没有 external candidate 时，保持当前 deterministic fallback。当前已有输出/证据形态优先复用 `AIHelperResult`、`AIIntentRouteResult`、`SemanticSuggestion`、`ArchivistSuggestion`、`ArchivistWorkflowResult`、`ReflectionDraft`、`MemoryBuildResult`、`StateAuditResult`、`DeltaDraftResult`、`AcceptanceResult` 等实现。任何 AI 或 assistant 输出，包括 selected route proposal，都不能充当 player confirmation、授权 hidden access、批准 proposal、注入 trusted delta、绕过 resolver/validation、修改 Save facts、修改 Campaign Package 或提交 gameplay state。
 
 ### AD-3 - Contract family 是 foundation interface [ADOPTED]
 
@@ -219,7 +219,7 @@ sequenceDiagram
   Campaign->>Kernel: load authored content + capabilities + smoke tests
   Kernel->>Save: initialize or sync current fact store
   Surface->>Kernel: player_turn or trusted operation
-  AI-->>Kernel: candidate/advisory output
+  AI-->>Kernel: mode-gated route proposal / advisory output
   Kernel->>Kernel: route, bind, assemble ContextBuildResult, preview, validate
   Kernel-->>Surface: preview / clarification / query / advisory report
   Surface->>Kernel: player_confirm or trusted maintenance approval
@@ -255,7 +255,7 @@ Contract family seeds:
 | Campaign Package | `campaign.py`, `campaign_validation.py`, `authoring/*`, `packages/service.py` | manifest、content roots、capabilities、content records、diagnostics、smoke tests、source visibility。对应 PRD 的 Scenario Package 产品概念。 |
 | Save Fact | `save_service.py`, `save_manager.py`, `runtime.py`, `save_validation.py`, `save_patch.py`, `save_archive.py` | current facts、events、pending state、projection health、import/export health、no Campaign Package mutation evidence。 |
 | Content Type / Merge | `content_types/`, `capabilities.py`, `packages/merge.py`, `packages/lock.py`, `content_sync.py` | Campaign key、YAML key、delta key、runtime table、record validation、merge policy、sync safety、package-lock evidence。 |
-| Intent Candidate | intent router / AI adapters | action/mode/slots/confidence/missing/reason/provenance；不得包含 confirmation、hidden permission、proposal approval 或 save authorization。 |
+| Intent Candidate | intent router / AI adapters | action/mode/slots/confidence/missing/reason/provenance；`intent_ai_mode`、`selected_route_source`、adoption decision 和 rules mismatch trace；不得包含 confirmation、hidden permission、proposal approval 或 save authorization。 |
 | ContextBuildResult / Context Slice | `context_builder.py`, `context/`, `context_audit.py` | scoped included/omitted items、visibility、provenance、budget、relationship/progress/world/event/memory/discovery sections、renderable outputs、`context_runs` / `context_items` audit。 |
 | Resident AI Advisory | current `ai/`, `ai_intent/`, `context/semantic.py`, `archivist.py`, `reflection.py`, `memory.py`, `ai/state_audit.py`, `delta_draft.py`, `response_acceptance.py`, `turn_assistant.py`; optional coordinator by story | advisory type、target ids、evidence、confidence、freshness、visibility mode、proposed next workflow；不能 direct write。 |
 | Response / Delta Assistant | `delta_draft.py`, `response_lint.py`, `response_acceptance.py`, `turn_assistant.py` | draft delta、response lint、consistency report、validation profile、explicit save decision；默认玩家路径不能使用它绕过 `player_turn` / `player_confirm`。 |
