@@ -110,21 +110,44 @@ story cycle unless the user explicitly requests a different route:
    tests continuously until the story reaches `review`, unless a skill-defined
    HALT condition is triggered.
 5. `[CR] Code Review` (`bmad-code-review`) after development.
-6. Apply every unambiguous `[Review][Patch]` finding when the user has already
-   authorized automatic patch handling for this cycle; do not modify
-   `[Review][Decision]` or `[Review][Defer]` items without the workflow's
-   required user input.
-7. Re-run `[CR] Code Review` once after patch fixes.
-8. If the second review is clean, or only dismiss/defer items remain, let the
-   review workflow mark the story `done` and sync `sprint-status.yaml`. If new
-   patch or decision-needed findings remain, stop and report the exact next
-   BMAD action.
+6. After review triage, apply every deduplicated, still-reproducible, in-scope,
+   unambiguous `[Review][Patch]` finding when the user has already authorized
+   automatic patch handling for this cycle. A reviewer label alone is not
+   sufficient: reject noise, stale findings, scope violations, and patches that
+   conflict with acceptance criteria or project boundaries. Do not modify
+   `[Review][Decision]` or user-selected `[Review][Defer]` items without the
+   workflow's required user input.
+7. After every patch batch, re-run the relevant verification gates and `[CR]
+   Code Review`. If a later review produces new unambiguous `[Review][Patch]`
+   findings, write them to the story, apply all of them, re-run every gate
+   invalidated by those changes, and review again. Repeat this convergence loop
+   without a fixed round limit until review is clean or only dismiss/defer items
+   remain. Deduplicate against prior findings and mark applied/resolved items in
+   the story; do not reapply an already resolved finding unless new evidence
+   shows that the fix is incomplete.
+8. Do not stop merely because a second or later review found more patch items,
+   or because an in-scope verification gate failed in a way that has an
+   unambiguous fix. Stop only for `decision-needed` findings, ambiguous intent
+   or acceptance criteria, or a genuine blocker that cannot be resolved safely
+   within the authorized scope. Repeated identical findings with no measurable
+   progress, patch oscillation, or a required gate that remains flaky after
+   focused diagnosis count as genuine blockers, not as reasons to loop forever.
+   The same applies when successive reviews keep producing different net-new
+   findings but focused root-cause work does not reduce unresolved risk or move
+   the diff toward a stable state. Base this judgment on recorded evidence and
+   progress, not on an arbitrary review-round limit. Once review converges, let
+   the review workflow mark the story `done` and sync `sprint-status.yaml`.
+   Reviewer-classified defer items may remain only when the workflow has
+   recorded them as pre-existing deferred work and no user decision is
+   unresolved.
 9. After a story reaches `done` and sprint sync succeeds, commit the completed
    story-cycle changes and push them to the configured GitHub remote unless the
    user explicitly asked not to commit or push. Use a concise commit message
    that names the completed story or boundary. Before committing, run the
-   relevant verification gates and `git diff --check`; after pushing, confirm
-   `HEAD` and the remote branch point at the new commit.
+   complete required gate set from the final clean state, including every gate
+   invalidated by review patches, plus `git diff --check`; do not rely on stale
+   green results from earlier rounds. After pushing, confirm `HEAD` and the
+   remote branch point at the new commit.
 
 This fast path is an orchestration default, not permission to skip skill rules.
 For every skill in the chain, still read the selected `SKILL.md` completely,
@@ -140,6 +163,16 @@ Default automation preferences:
 - Prefer `Apply every patch` for code-review patch findings when the user has
   pre-authorized automatic patch handling. If not pre-authorized, halt at the
   code-review prompt and ask once.
+- Once automatic patch handling is authorized for a cycle, reuse that
+  authorization for every later patch/review/verification round in the same
+  cycle. Do not repeatedly ask whether to apply newly discovered unambiguous
+  patches. Decision/defer prompts, scope limits, safety boundaries, dependency
+  approval, and skill-defined HALT conditions always take precedence over this
+  reused authorization.
+- Treat fixable verification failures as part of the same convergence loop:
+  diagnose them, apply the smallest in-scope fix, and re-run the affected and
+  invalidated gates until they pass. Never mark the story `done`, commit, or push
+  while a required gate is failing.
 - If the current tool or platform policy requires explicit authorization for
   BMAD-directed subagents or parallel review layers, ask once at the start of
   the cycle and reuse that authorization for the whole cycle. A recommended
