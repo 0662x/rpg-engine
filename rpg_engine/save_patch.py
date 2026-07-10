@@ -12,6 +12,7 @@ from .backup import create_backup
 from .campaign import Campaign
 from .db import connect, utc_now
 from .projection_service import ProjectionReport, ProjectionService
+from .projections import mark_projections_dirty
 from .render import parse_json
 from .validation_issues import issues_from_messages
 from .visibility import ENTITY_VISIBILITY_LABELS
@@ -228,6 +229,16 @@ def apply_save_patch(campaign: Campaign, patch: dict[str, Any], *, backup: bool 
                 apply_operation(conn, operation, current_turn_id=current_turn_id, now=now)
                 touched.add(entity_id)
 
+            if touched:
+                memory_invalidated = mark_projections_dirty(
+                    conn,
+                    ["memory"],
+                    turn_id=current_turn_id,
+                )
+                if not memory_invalidated:
+                    warnings.append(
+                        "memory projection metadata unavailable; readers will use fail-closed fallback"
+                    )
             conn.commit()
             projection_report = ProjectionService(campaign, conn).refresh(
                 names=["search", "snapshots", "cards"],

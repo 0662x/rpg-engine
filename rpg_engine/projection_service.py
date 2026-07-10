@@ -1,9 +1,20 @@
 from __future__ import annotations
 
+import hashlib
+import errno
 import sqlite3
-from dataclasses import dataclass, field
-from time import perf_counter
+import tempfile
+import threading
+from contextlib import contextmanager
+from dataclasses import dataclass, field, replace
+from pathlib import Path
+from time import monotonic, perf_counter, sleep
 from typing import Any, Iterable
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows fallback retains process-local serialization.
+    fcntl = None
 
 from .campaign import Campaign
 from .db import rebuild_fts, utc_now
@@ -15,17 +26,58 @@ from .projections import (
     _outbox_issue_message,
     current_turn_id,
     ensure_projection_rows,
-    mark_projection_clean,
-    mark_projection_failed,
+    mark_projection_clean_if_unchanged,
+    mark_projection_failed_if_unchanged,
+    next_projection_generation,
     process_outbox,
     projection_effective_status,
-    projection_tables_exist,
+    projection_state_table_exists,
     rewrite_events_jsonl,
 )
 
 
 REFRESHABLE_STATUSES = {"dirty", "failed", "refreshing", "stale"}
 COMMIT_POLICIES = {"service_managed", "caller_committed_required"}
+REFRESH_LOCK_TIMEOUT_SECONDS = 30.0
+REFRESH_LOCK_POLL_SECONDS = 0.05
+_REFRESH_LOCKS: dict[str, threading.RLock] = {}
+_REFRESH_LOCKS_GUARD = threading.Lock()
+
+
+@contextmanager
+def _projection_refresh_lock(campaign: Campaign, name: str) -> Any:
+    key = f"{campaign.database_path.resolve()}::{name}"
+    with _REFRESH_LOCKS_GUARD:
+        local_lock = _REFRESH_LOCKS.setdefault(key, threading.RLock())
+    local_acquired = local_lock.acquire(timeout=REFRESH_LOCK_TIMEOUT_SECONDS)
+    if not local_acquired:
+        raise TimeoutError(f"projection publication lock timed out: {name}")
+    try:
+        if fcntl is None:
+            yield
+            return
+        digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
+        lock_path = Path(tempfile.gettempdir()) / f"rpg-engine-projection-{digest}.lock"
+        with lock_path.open("a+b") as handle:
+            deadline = monotonic() + REFRESH_LOCK_TIMEOUT_SECONDS
+            while True:
+                try:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except OSError as exc:
+                    if exc.errno not in {errno.EACCES, errno.EAGAIN}:
+                        raise
+                    if monotonic() >= deadline:
+                        raise TimeoutError(
+                            f"projection publication lock timed out: {name}"
+                        ) from exc
+                    sleep(REFRESH_LOCK_POLL_SECONDS)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    finally:
+        local_lock.release()
 
 
 def _format_outbox_report_row(row: dict[str, Any], *, markdown: bool = False) -> str:
@@ -245,7 +297,7 @@ class ProjectionService:
         started_at = utc_now()
         started = perf_counter()
         projection_state_errors = self._projection_state_errors()
-        if not projection_state_errors and projection_tables_exist(self.conn):
+        if not projection_state_errors and projection_state_table_exists(self.conn):
             ensure_projection_rows(self.conn, turn_id=current_turn_id(self.conn))
             self.conn.commit()
 
@@ -262,15 +314,21 @@ class ProjectionService:
             if outbox["status"] in {"missing", "malformed"}:
                 outbox_errors.extend(str(error) for error in outbox.get("errors", ()))
             else:
-                outbox_result = process_outbox(self.campaign, self.conn)
-                outbox_errors.extend(outbox_result.errors)
-                outbox_artifacts.extend(outbox_result.artifacts)
-                if outbox_result.refreshed:
-                    outbox_refreshed.append("events_jsonl")
+                try:
+                    with _projection_refresh_lock(self.campaign, "events_jsonl"):
+                        outbox_result = process_outbox(self.campaign, self.conn)
+                    outbox_errors.extend(outbox_result.errors)
+                    outbox_artifacts.extend(outbox_result.artifacts)
+                    if outbox_result.refreshed:
+                        outbox_refreshed.append("events_jsonl")
+                except Exception as exc:
+                    if self.conn.in_transaction:
+                        self.conn.rollback()
+                    outbox_errors.append(f"events_jsonl outbox: {exc}")
 
             requested = list(original_requested)
             skipped: list[str] = []
-            if dirty_only and projection_tables_exist(self.conn):
+            if dirty_only and projection_state_table_exists(self.conn):
                 refreshable = self._names_with_status(REFRESHABLE_STATUSES)
                 requested = [name for name in requested if name in refreshable]
                 skipped = [name for name in original_requested if name not in requested]
@@ -280,7 +338,7 @@ class ProjectionService:
         else:
             requested = list(original_requested)
             skipped = []
-            if dirty_only and projection_tables_exist(self.conn):
+            if dirty_only and projection_state_table_exists(self.conn):
                 refreshable = self._names_with_status(REFRESHABLE_STATUSES)
                 requested = [name for name in requested if name in refreshable]
                 skipped = [name for name in original_requested if name not in requested]
@@ -289,7 +347,7 @@ class ProjectionService:
             items = tuple(self._refresh_one(name, options=item_options.get(name, {})) for name in requested)
         return self._build_report(
             profile=profile,
-            requested=tuple(requested),
+            requested=original_requested,
             skipped=tuple(skipped),
             items=items,
             outbox_errors=tuple(outbox_errors),
@@ -313,33 +371,102 @@ class ProjectionService:
                 version=previous.get("version"),
             )
 
-        turn_id = current_turn_id(self.conn)
-        self._mark_refreshing(name, turn_id=turn_id)
         started = perf_counter()
         try:
-            artifacts, metadata = self._write_projection(name, options=options)
-            mark_projection_clean(self.conn, name, turn_id=turn_id)
-            self.conn.commit()
-            return ProjectionItemReport(
-                name=name,
-                status="clean",
-                previous_status=previous.get("status"),
-                artifacts=tuple(artifacts),
-                turn_id=turn_id,
-                version=PROJECTION_VERSIONS[name],
-                duration_ms=(perf_counter() - started) * 1000,
-                metadata=metadata,
-            )
+            with _projection_refresh_lock(self.campaign, name):
+                turn_id = current_turn_id(self.conn)
+                refresh_generation = self._mark_refreshing(name, turn_id=turn_id)
+                owned_generation = refresh_generation
+                try:
+                    artifacts, metadata = self._write_projection(name, options=options)
+                    clean_generation = mark_projection_clean_if_unchanged(
+                        self.conn,
+                        name,
+                        turn_id=turn_id,
+                        expected_generation=refresh_generation,
+                    )
+                    if clean_generation is None:
+                        self.conn.commit()
+                        current = self._state_for(name)
+                        status = projection_effective_status(current) if current else "stale"
+                        if status == "clean":
+                            status = "stale"
+                        return ProjectionItemReport(
+                            name=name,
+                            status=status,
+                            previous_status=previous.get("status"),
+                            artifacts=tuple(artifacts),
+                            error="projection generation changed during refresh",
+                            turn_id=turn_id,
+                            version=PROJECTION_VERSIONS[name],
+                            duration_ms=(perf_counter() - started) * 1000,
+                            metadata=metadata,
+                        )
+                    owned_generation = clean_generation
+                    self.conn.commit()
+                    if name == "memory":
+                        from .memory import memory_projection_health
+
+                        effective_status = str(memory_projection_health(self.conn)["status"])
+                        if effective_status != "clean":
+                            raise RuntimeError(
+                                f"memory projection remains {effective_status} after refresh"
+                            )
+                    return ProjectionItemReport(
+                        name=name,
+                        status="clean",
+                        previous_status=previous.get("status"),
+                        artifacts=tuple(artifacts),
+                        turn_id=turn_id,
+                        version=PROJECTION_VERSIONS[name],
+                        duration_ms=(perf_counter() - started) * 1000,
+                        metadata=metadata,
+                    )
+                except Exception as exc:
+                    message = str(exc)
+                    changed = not mark_projection_failed_if_unchanged(
+                        self.conn,
+                        name,
+                        error=message,
+                        expected_generation=owned_generation,
+                    )
+                    self.conn.commit()
+                    if changed:
+                        current = self._state_for(name)
+                        status = projection_effective_status(current) if current else "stale"
+                        if status == "clean":
+                            status = "stale"
+                        return ProjectionItemReport(
+                            name=name,
+                            status=status,
+                            previous_status=previous.get("status"),
+                            error=message,
+                            turn_id=turn_id,
+                            version=PROJECTION_VERSIONS[name],
+                            duration_ms=(perf_counter() - started) * 1000,
+                        )
+                    return ProjectionItemReport(
+                        name=name,
+                        status="failed",
+                        previous_status=previous.get("status"),
+                        error=message,
+                        turn_id=turn_id,
+                        version=PROJECTION_VERSIONS[name],
+                        duration_ms=(perf_counter() - started) * 1000,
+                    )
         except Exception as exc:
-            message = str(exc)
-            mark_projection_failed(self.conn, name, message)
-            self.conn.commit()
+            if self.conn.in_transaction:
+                self.conn.rollback()
+            try:
+                failed_turn_id = current_turn_id(self.conn)
+            except (KeyError, TypeError, ValueError, sqlite3.Error):
+                failed_turn_id = None
             return ProjectionItemReport(
                 name=name,
                 status="failed",
                 previous_status=previous.get("status"),
-                error=message,
-                turn_id=turn_id,
+                error=str(exc),
+                turn_id=failed_turn_id,
                 version=PROJECTION_VERSIONS[name],
                 duration_ms=(perf_counter() - started) * 1000,
             )
@@ -371,7 +498,11 @@ class ProjectionService:
         if name == "memory":
             from .memory import rebuild_memory_summaries
 
-            result = rebuild_memory_summaries(self.campaign, self.conn)
+            result = rebuild_memory_summaries(
+                self.campaign,
+                self.conn,
+                manage_projection_state=False,
+            )
             return [str(result.report_path)], {"summaries": result.total, "by_kind": result.by_kind}
         if name == "reports":
             from .audit import write_audit_report
@@ -386,12 +517,18 @@ class ProjectionService:
             return [str(path)], {}
         raise ValueError(f"unknown projection: {name}")
 
-    def _mark_refreshing(self, name: str, *, turn_id: str | None) -> None:
-        if not projection_tables_exist(self.conn):
-            return
+    def _mark_refreshing(
+        self,
+        name: str,
+        *,
+        turn_id: str | None,
+    ) -> tuple[str, str]:
+        if not projection_state_table_exists(self.conn):
+            raise RuntimeError("projection_state is unavailable")
+        generation = next_projection_generation(self.conn, name)
         self.conn.execute(
             """
-            insert into projection_state(name, version, last_turn_id, status, updated_at, last_error)
+            insert into main.projection_state(name, version, last_turn_id, status, updated_at, last_error)
             values (?, ?, ?, 'refreshing', ?, null)
             on conflict(name) do update set
               version=excluded.version,
@@ -400,19 +537,29 @@ class ProjectionService:
               updated_at=excluded.updated_at,
               last_error=null
             """,
-            (name, PROJECTION_VERSIONS[name], turn_id, utc_now()),
+            (name, PROJECTION_VERSIONS[name], turn_id, generation),
         )
         self.conn.commit()
+        return "refreshing", generation
 
     def _state_for(self, name: str) -> dict[str, Any]:
-        if not projection_tables_exist(self.conn):
+        if not projection_state_table_exists(self.conn):
             return {}
-        row = self.conn.execute("select * from projection_state where name=?", (name,)).fetchone()
+        row = self.conn.execute(
+            "select * from main.projection_state where name = ? collate binary",
+            (name,),
+        ).fetchone()
         return dict(row) if row else {}
 
     def _names_with_status(self, statuses: set[str]) -> set[str]:
-        rows = self.conn.execute("select name, version, status from projection_state").fetchall()
-        return {str(row["name"]) for row in rows if projection_effective_status(row) in statuses}
+        rows = self.conn.execute("select name, version, status from main.projection_state").fetchall()
+        names = {str(row["name"]) for row in rows if projection_effective_status(row) in statuses}
+        if "stale" in statuses:
+            from .memory import memory_projection_health
+
+            if memory_projection_health(self.conn)["status"] == "stale":
+                names.add("memory")
+        return names
 
     def _build_report(
         self,
@@ -430,6 +577,16 @@ class ProjectionService:
         duration_ms: float,
     ) -> ProjectionReport:
         states = self._all_states()
+        items = tuple(
+            replace(
+                item,
+                status=states.get(item.name, "stale"),
+                error=item.error or "projection state changed after refresh",
+            )
+            if item.status == "clean" and states.get(item.name) != "clean"
+            else item
+            for item in items
+        )
         outbox = _inspect_outbox_health(self.conn)
         outbox_non_done = tuple(dict(row) for row in outbox.get("non_done", ()))
         outbox_errors_reported = tuple(str(error) for error in outbox.get("errors", ()))
@@ -451,7 +608,22 @@ class ProjectionService:
         artifacts = list(outbox_artifacts)
         for item in items:
             artifacts.extend(item.artifacts)
-        refreshed = tuple(dict.fromkeys((*outbox_refreshed, *(item.name for item in items if item.status == "clean"))))
+        refreshed = tuple(
+            dict.fromkeys(
+                (
+                    *outbox_refreshed,
+                    *(
+                        item.name
+                        for item in items
+                        if (
+                            item.status == "clean"
+                            and not item.error
+                            and states.get(item.name) == "clean"
+                        )
+                    ),
+                )
+            )
+        )
         return ProjectionReport(
             profile=profile,
             requested=requested,
@@ -486,11 +658,14 @@ class ProjectionService:
         columns = self._projection_state_columns()
         if set(PROJECTION_STATE_SCHEMA_COLUMNS) - columns:
             return {}
-        rows = self.conn.execute("select name, version, status from projection_state").fetchall()
+        rows = self.conn.execute("select name, version, status from main.projection_state").fetchall()
         states: dict[str, str] = {}
         for row in rows:
-            raw_status = str(row["status"])
-            states[str(row["name"])] = "failed" if raw_status not in STORED_PROJECTION_STATUSES else projection_effective_status(row)
+            states[str(row["name"])] = projection_effective_status(row)
+        if "memory" in states:
+            from .memory import memory_projection_health
+
+            states["memory"] = str(memory_projection_health(self.conn)["status"])
         return states
 
     def _projection_state_errors(self) -> list[str]:
@@ -501,13 +676,18 @@ class ProjectionService:
         missing_columns = sorted(set(PROJECTION_STATE_SCHEMA_COLUMNS) - columns)
         if missing_columns:
             errors.append(f"projection_state schema: missing columns {', '.join(missing_columns)}")
+        else:
+            from .memory import projection_state_readable
+
+            if not projection_state_readable(self.conn):
+                errors.append("projection_state schema: incompatible canonical identity or extension")
         if "name" in columns:
             duplicate_names = [
                 str(row["name"])
                 for row in self.conn.execute(
                     """
                     select name
-                    from projection_state
+                    from main.projection_state
                     group by name
                     having count(*) > 1
                     order by name
@@ -518,7 +698,17 @@ class ProjectionService:
             if duplicate_names:
                 errors.append(f"projection_state: duplicate names {', '.join(duplicate_names)}")
         if not missing_columns:
-            for row in self.conn.execute("select name, status from projection_state order by name").fetchall():
+            for row in self.conn.execute(
+                "select name, status from main.projection_state order by name"
+            ).fetchall():
+                name = "" if row["name"] is None else str(row["name"])
+                canonical_name = name.casefold()
+                if canonical_name in PROJECTION_VERSIONS and name != canonical_name:
+                    errors.append(
+                        f"projection_state.{name}: non-canonical projection alias"
+                    )
+                elif name not in PROJECTION_VERSIONS:
+                    errors.append(f"projection_state.{name}: unknown projection name")
                 raw_status = None if row["status"] is None else str(row["status"])
                 if raw_status not in STORED_PROJECTION_STATUSES:
                     errors.append(f"projection_state.{row['name']}: invalid status {raw_status}")
@@ -526,9 +716,15 @@ class ProjectionService:
 
     def _projection_state_table_exists(self) -> bool:
         row = self.conn.execute(
-            "select 1 from sqlite_master where type='table' and name='projection_state'"
+            "select 1 from main.sqlite_master "
+            "where type='table' and name='projection_state' collate nocase"
         ).fetchone()
         return bool(row)
 
     def _projection_state_columns(self) -> set[str]:
-        return {str(row[1]) for row in self.conn.execute("pragma table_info(projection_state)").fetchall()}
+        return {
+            str(row[1])
+            for row in self.conn.execute(
+                'pragma main.table_info("projection_state")'
+            ).fetchall()
+        }

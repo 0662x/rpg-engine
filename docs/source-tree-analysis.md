@@ -61,7 +61,7 @@ rpg_engine/
 
 [`rpg_engine/resources/`](../rpg_engine/resources/) 是当前权威打包资源目录：
 
-- `migrations/0001_init.sql` 到 `0008_intent_joiner_message_only.sql`
+- `migrations/0001_init.sql` 到 `0009_memory_summary_provenance.sql`
 - `schemas/*.schema.json`
 - `examples/blank_campaign`
 - `examples/small_cn_campaign`

@@ -8,7 +8,28 @@ from typing import Any, Callable, Iterable
 
 from ..campaign import load_yaml_file
 from ..db import entity_subtype_visibility_sql, get_meta
-from ..memory import find_relevant_memories, render_memory_section
+from ..memory import (
+    find_omitted_relevant_memories,
+    find_relevant_memories,
+    memory_freshness_status,
+    memory_fallback_item,
+    memory_row_authority,
+    memory_row_freshness_evidence,
+    memory_row_freshness,
+    memory_row_freshness_turn_id,
+    memory_row_has_hidden_refs,
+    memory_row_summary_type,
+    memory_row_source_event_ids,
+    memory_row_source_turn_ids,
+    memory_projection_health,
+    memory_projection_change_omissions,
+    memory_projection_snapshot,
+    memory_projection_snapshot_change,
+    player_safe_memory_reason,
+    render_memory_section,
+    row_value,
+    safe_memory_summary_id,
+)
 from ..palette import render_compact_palette_table, suggest_palette_entries
 from ..progress_access import ProgressRecord, list_progress
 from ..redaction import find_hidden_entity_id_substrings, find_hidden_entity_ref_tokens, redact_hidden_entity_refs
@@ -848,12 +869,124 @@ def collect_related_history(state: Any) -> None:
 
 def collect_memory_summaries(state: Any) -> None:
     targets = history_targets(state)
+    health = memory_projection_health(state.conn)
+    projection_snapshot = memory_projection_snapshot(state.conn, health)
     state.memory_summaries = find_relevant_memories(
         state.conn,
         targets=targets,
         limit=4,
         view=state_visibility_view(state),
     )
+    state.memory_omissions = find_omitted_relevant_memories(
+        state.conn,
+        targets=targets,
+        limit=4,
+        view=state_visibility_view(state),
+    )
+    changed_health = memory_projection_snapshot_change(
+        state.conn,
+        projection_snapshot,
+    )
+    if changed_health is not None:
+        state.memory_summaries = []
+        state.memory_omissions = memory_projection_change_omissions(
+            state.conn,
+            view=state_visibility_view(state),
+            health=changed_health,
+            limit=4,
+        )
+        projection_snapshot = memory_projection_snapshot(
+            state.conn,
+            changed_health,
+        )
+    state.memory_projection_snapshot = projection_snapshot
+
+
+def memory_context_snapshot_is_current(state: Any) -> bool:
+    if getattr(state, "memory_context_frozen", False):
+        return True
+    snapshot = getattr(state, "memory_projection_snapshot", None)
+    if snapshot is None:
+        if getattr(state, "memory_summaries", []):
+            _invalidate_memory_context(state)
+            return False
+        return True
+    changed_health = memory_projection_snapshot_change(state.conn, snapshot)
+    if changed_health is None:
+        return True
+    _invalidate_memory_context(state, health=changed_health)
+    return False
+
+
+def _invalidate_memory_context(
+    state: Any,
+    *,
+    health: dict[str, Any] | None = None,
+) -> None:
+    state.memory_summaries = []
+    current_health = health or memory_projection_health(state.conn)
+    state.memory_omissions = memory_projection_change_omissions(
+        state.conn,
+        view=state_visibility_view(state),
+        health=current_health,
+        limit=4,
+    )
+    state.plot_signals = [
+        signal
+        for signal in getattr(state, "plot_signals", [])
+        if not memory_derived_plot_signal(signal)
+    ]
+    state.plot_signal_omissions = [
+        signal
+        for signal in getattr(state, "plot_signal_omissions", [])
+        if not memory_derived_plot_signal(signal)
+    ]
+    state.memory_projection_snapshot = memory_projection_snapshot(
+        state.conn,
+        current_health,
+    )
+    state.memory_context_revision = int(
+        getattr(state, "memory_context_revision", 0)
+    ) + 1
+
+
+def memory_derived_plot_signal(signal: dict[str, Any]) -> bool:
+    return (
+        str(signal.get("signal_type") or "") == "memory"
+        or str(signal.get("id") or "").startswith("plot:memory:")
+        or "memory_summaries" in (signal.get("required_section_keys") or [])
+    )
+
+
+def freeze_unstable_memory_context(state: Any) -> None:
+    state.memory_context_frozen = True
+    state.memory_summaries = []
+    state.memory_omissions = [
+        memory_fallback_item(
+            item_id="memory:fallback:unstable-generation",
+            title="Memory summaries unavailable",
+            reason=(
+                "memory projection changed repeatedly during context assembly; "
+                "using lower-quality fallback context"
+            ),
+            stale_reason="projection_memory_unstable",
+            evidence={"projection": "memory", "status": "stale"},
+        )
+    ]
+    state.plot_signals = [
+        signal
+        for signal in getattr(state, "plot_signals", [])
+        if not memory_derived_plot_signal(signal)
+    ]
+    state.plot_signal_omissions = [
+        signal
+        for signal in getattr(state, "plot_signal_omissions", [])
+        if not memory_derived_plot_signal(signal)
+    ]
+    state.memory_projection_snapshot = None
+    state.memory_context_revision = int(
+        getattr(state, "memory_context_revision", 0)
+    ) + 1
 
 
 def active_clocks_section(state: Any) -> ContextSection:
@@ -1101,6 +1234,9 @@ def recent_events_section(state: Any) -> ContextSection | None:
 
 
 def memory_summaries_section(state: Any) -> ContextSection | None:
+    if not memory_context_snapshot_is_current(state):
+        return None
+    discard_stale_memory_rows(state)
     if not state.memory_summaries:
         return None
     return ContextSection(
@@ -1185,7 +1321,12 @@ def collect_plot_signals(state: Any) -> None:
             source_refs=[row["id"]],
             required_section_keys=["recent_events"],
         )
-    for row in getattr(state, "memory_summaries", [])[:3]:
+    memory_rows = (
+        getattr(state, "memory_summaries", [])
+        if memory_context_snapshot_is_current(state)
+        else []
+    )
+    for row in memory_rows[:3]:
         add_plot_signal(
             signals,
             signal_id=f"plot:memory:{row['id']}",
@@ -1646,17 +1787,187 @@ def event_loaded_items(state: Any) -> list[dict[str, Any]]:
 
 
 def memory_loaded_items(state: Any) -> list[dict[str, Any]]:
-    return [
-        {
+    if not memory_context_snapshot_is_current(state):
+        return []
+    discard_stale_memory_rows(state)
+    items: list[dict[str, Any]] = []
+    view = state_visibility_view(state)
+    for row in state.memory_summaries:
+        freshness = memory_row_freshness(state.conn, row, view=view)
+        items.append(
+            {
             "id": row["id"],
             "kind": "memory",
             "name": row["title"],
             "reason": "long-term memory relevant to loaded entities",
             "priority": 64,
             "depth": 0,
+            "provenance": {
+                "collector": "memory_summaries",
+                "source": "memory_summaries",
+                "source_event_ids": memory_row_source_event_ids(row, conn=state.conn, view=view),
+                "source_turn_ids": memory_row_source_turn_ids(row, conn=state.conn, view=view),
+                "summary_type": memory_row_summary_type(row),
+            },
+            "visibility": {
+                "mode": state_visibility_view(state),
+                "record_visibility_mode": row_value(row, "visibility_mode", "player"),
+                "policy": "memory lookup receives context visibility view",
+            },
+            "freshness": {
+                "status": freshness["status"],
+                "reason": freshness["reason"],
+                "freshness_turn_id": memory_row_freshness_turn_id(state.conn, row, view=view) or None,
+                "evidence": memory_row_freshness_evidence(row, conn=state.conn, view=view),
+            },
+            "authority": memory_row_authority(row),
         }
-        for row in state.memory_summaries
+        )
+    return items
+
+
+def discard_stale_memory_rows(state: Any) -> None:
+    view = state_visibility_view(state)
+    retained: list[sqlite3.Row | dict[str, Any]] = []
+    stale_rows: list[dict[str, Any]] = []
+    existing_omission_ids = {
+        str(row.get("id") or "")
+        for row in getattr(state, "memory_omissions", [])
+        if isinstance(row, dict)
+    }
+    for row in getattr(state, "memory_summaries", []):
+        freshness = memory_row_freshness(state.conn, row, view=view)
+        if freshness["status"] != "stale":
+            retained.append(row)
+            continue
+        stale_row = dict(row)
+        stale_row["freshness_status"] = "stale"
+        stale_row["stale_reason"] = (
+            freshness["reason"]
+            if can_read_hidden(view)
+            else player_safe_memory_reason(freshness["reason"])
+        )
+        if str(stale_row.get("id") or "") not in existing_omission_ids:
+            stale_rows.append(stale_row)
+    if len(retained) == len(getattr(state, "memory_summaries", [])):
+        return
+    state.memory_summaries = retained
+    state.memory_omissions = [
+        *getattr(state, "memory_omissions", []),
+        *stale_rows,
     ]
+    state.memory_context_revision = int(
+        getattr(state, "memory_context_revision", 0)
+    ) + 1
+
+
+def memory_omitted_items(state: Any) -> list[dict[str, Any]]:
+    memory_context_snapshot_is_current(state)
+    items: list[dict[str, Any]] = []
+    view = state_visibility_view(state)
+    hidden_signal_added = False
+    for omission_index, row in enumerate(getattr(state, "memory_omissions", [])):
+        raw_reason = str(row.get("stale_reason") or row.get("reason") or "memory summary omitted")
+        record_visibility_mode = str(row.get("visibility_mode") or "").strip().lower()
+        hidden_sensitive = not can_read_hidden(view) and (
+            record_visibility_mode != "player"
+            or memory_row_has_hidden_refs(state.conn, row)
+        )
+        if hidden_sensitive and hidden_signal_added:
+            continue
+        hidden_signal_added = hidden_signal_added or hidden_sensitive
+        reason = player_safe_memory_reason(raw_reason) if not can_read_hidden(view) else raw_reason
+        if hidden_sensitive:
+            reason = "memory_summary_omitted"
+        safe_row_id = safe_memory_summary_id(row.get("id")) or (
+            f"memory:omitted:unverifiable:{omission_index}"
+        )
+        item_id = "memory:omitted:hidden-sensitive" if hidden_sensitive else safe_row_id
+        raw_name = row.get("title", safe_row_id)
+        item_name = (
+            "Memory summary omitted"
+            if hidden_sensitive or not isinstance(raw_name, str)
+            else raw_name
+        )
+        source_event_ids = (
+            [] if hidden_sensitive else memory_row_source_event_ids(row, conn=state.conn, view=view)
+        )
+        source_turn_ids = (
+            [] if hidden_sensitive else memory_row_source_turn_ids(row, conn=state.conn, view=view)
+        )
+        freshness_evidence = (
+            {}
+            if hidden_sensitive
+            else memory_row_freshness_evidence(row, conn=state.conn, view=view)
+        )
+        items.append(
+            {
+                "id": item_id,
+                "kind": "memory",
+                "source": "memory_summaries",
+                "name": item_name,
+                "reason": reason,
+                "priority": 64,
+                "depth": 0,
+                "provenance": {
+                    "collector": "memory_summaries",
+                    "source": "memory_summaries",
+                    "source_event_ids": source_event_ids,
+                    "source_turn_ids": source_turn_ids,
+                    "summary_type": (
+                        "deterministic_fallback"
+                        if hidden_sensitive
+                        else memory_row_summary_type(row)
+                    ),
+                },
+                "visibility": {
+                    "mode": view,
+                    "record_visibility_mode": (
+                        "player"
+                        if hidden_sensitive
+                        else row.get("visibility_mode", "player")
+                    ),
+                    "policy": "player-safe omitted memory evidence is sanitized",
+                },
+                "freshness": {
+                    "status": (
+                        "fallback"
+                        if hidden_sensitive
+                        else memory_freshness_status(
+                            row.get("freshness_status"),
+                            default="stale",
+                        )
+                    ),
+                    "reason": reason,
+                    "freshness_turn_id": (
+                        None
+                        if hidden_sensitive
+                        else memory_row_freshness_turn_id(state.conn, row, view=view) or None
+                    ),
+                    "evidence": freshness_evidence,
+                },
+                "authority": (
+                    {
+                        "authority": "derived_context",
+                        "fact_authority": False,
+                        "fact_source": "data/game.sqlite",
+                        "summary_overrides_facts": False,
+                    }
+                    if hidden_sensitive
+                    else memory_row_authority(row)
+                ),
+                "player_safe_signal": "memory_summaries" if hidden_sensitive else safe_row_id,
+                "player_safe_reason": reason if hidden_sensitive else row.get("player_safe_reason"),
+                "budget": {
+                    "included": False,
+                    "behavior": "memory summaries are optional; stale or unavailable rows fall back to recent events/context",
+                    "priority": 64,
+                    "estimated_tokens": None,
+                    "reason": reason,
+                },
+            }
+        )
+    return items
 
 
 def plot_signal_loaded_items(state: Any) -> list[dict[str, Any]]:
@@ -1760,6 +2071,7 @@ DEFAULT_CONTEXT_COLLECTORS = [
         collect=collect_memory_summaries,
         section=memory_summaries_section,
         loaded_items=memory_loaded_items,
+        omitted_items=memory_omitted_items,
     ),
     ContextCollector(
         name="plot_signals",

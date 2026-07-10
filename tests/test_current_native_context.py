@@ -5,11 +5,14 @@ import sqlite3
 import tempfile
 from types import SimpleNamespace
 from typing import Any
+from unittest import mock
 
 from rpg_engine.campaign import load_campaign
 from rpg_engine.context.collectors import recent_activity_progress_ids
 from rpg_engine.context_builder import build_context
 from rpg_engine.db import connect, upsert_clock, upsert_entity
+from rpg_engine.memory import ensure_memory_tables
+from rpg_engine.projections import mark_projections_dirty
 from rpg_engine.runtime import GMRuntime
 
 from tests.helpers import (
@@ -28,6 +31,475 @@ from tests.helpers import (
 
 @CURRENT_NATIVE_REQUIRED
 class CurrentNativeContextTests(FormalCurrentSaveReadOnlyTestCase):
+    def test_context_rebinds_omissions_to_changed_projection_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            save = copy_current_packages(tmp)
+            campaign = load_campaign(save)
+            with connect(campaign) as conn, connect(campaign) as writer:
+                turn_id = str(
+                    conn.execute(
+                        "select value from meta where key='current_turn_id'"
+                    ).fetchone()["value"]
+                )
+                conn.execute(
+                    """
+                    insert or replace into main.projection_state
+                    (name, version, last_turn_id, status, updated_at, last_error)
+                    values('memory', 1, ?, 'clean',
+                           '2099-07-10T00:00:00+00:00', null)
+                    """,
+                    (turn_id,),
+                )
+                conn.commit()
+                marker = "STALE_OMISSION_FROM_OLD_GENERATION"
+                changed = False
+
+                def old_generation_omission(*args: Any, **kwargs: Any) -> list[dict[str, Any]]:
+                    nonlocal changed
+                    if not changed:
+                        changed = True
+                        writer.execute(
+                            """
+                            update main.projection_state
+                            set status='dirty', updated_at='2099-07-10T00:00:01+00:00'
+                            where name='memory'
+                            """
+                        )
+                        writer.commit()
+                    return [
+                        {
+                            "id": "memory:omitted:old-generation",
+                            "title": marker,
+                            "stale_reason": "stored_stale",
+                            "visibility_mode": "player",
+                            "freshness_status": "stale",
+                            "source_event_ids_json": "[]",
+                            "source_turn_ids_json": "[]",
+                            "freshness_evidence_json": "{}",
+                            "derived_authority_json": json.dumps(
+                                {
+                                    "authority": "derived_context",
+                                    "fact_authority": False,
+                                }
+                            ),
+                        }
+                    ]
+
+                with (
+                    mock.patch(
+                        "rpg_engine.context.collectors.find_relevant_memories",
+                        return_value=[],
+                    ),
+                    mock.patch(
+                        "rpg_engine.context.collectors.find_omitted_relevant_memories",
+                        side_effect=old_generation_omission,
+                    ),
+                ):
+                    result = build_context(
+                        campaign,
+                        conn,
+                        user_text="stable omission snapshot",
+                        mode="query",
+                        view="player",
+                        budget=1800,
+                        max_events=0,
+                    )
+
+        serialized = result.to_json_text()
+        self.assertNotIn(marker, serialized)
+        self.assertIn("projection_memory_dirty", serialized)
+
+    def test_context_final_snapshot_gate_freezes_after_repeated_generation_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            save = copy_current_packages(tmp)
+            campaign = load_campaign(save)
+            with connect(campaign) as conn, connect(campaign) as writer:
+                ensure_memory_tables(conn)
+                turn_id = str(
+                    conn.execute(
+                        "select value from meta where key='current_turn_id'"
+                    ).fetchone()["value"]
+                )
+                marker = "FINAL_SNAPSHOT_MEMORY_MARKER"
+                query = "native final snapshot"
+                conn.execute(
+                    """
+                    insert or replace into memory_summaries
+                    (id, kind, subject_id, title, summary, key_points_json,
+                     source_event_ids_json, source_turn_ids_json, valid_from_turn,
+                     valid_to_turn, summary_type, visibility_mode, freshness_status,
+                     freshness_turn_id, stale_reason, freshness_evidence_json,
+                     derived_authority_json, updated_at)
+                    values(?, 'world', null, ?, ?, '[]', '[]', ?, null, null,
+                           'deterministic_world', 'player', 'fresh', ?, '', ?, ?, ?)
+                    """,
+                    (
+                        "memory:native-final-snapshot",
+                        query,
+                        marker,
+                        json.dumps([turn_id]),
+                        turn_id,
+                        json.dumps({"current_turn_id": turn_id}),
+                        json.dumps(
+                            {
+                                "authority": "derived_context",
+                                "fact_authority": False,
+                                "fact_source": "data/game.sqlite",
+                                "summary_overrides_facts": False,
+                            }
+                        ),
+                        "2099-07-10T00:00:00+00:00",
+                    ),
+                )
+                conn.execute(
+                    """
+                    insert or replace into projection_state
+                    (name, version, last_turn_id, status, updated_at, last_error)
+                    values('memory', 1, ?, 'clean', '2099-07-10T00:00:00+00:00', null)
+                    """,
+                    (turn_id,),
+                )
+                conn.commit()
+
+                from rpg_engine import context_builder
+
+                original_apply_budget = context_builder.apply_budget
+                transitions = [
+                    ("dirty", "2099-07-10T00:00:01+00:00"),
+                    ("failed", "2099-07-10T00:00:02+00:00"),
+                    ("refreshing", "2099-07-10T00:00:03+00:00"),
+                ]
+
+                def dirty_after_budget(*args: Any, **kwargs: Any) -> Any:
+                    result = original_apply_budget(*args, **kwargs)
+                    if transitions:
+                        status, updated_at = transitions.pop(0)
+                        writer.execute(
+                            """
+                            update projection_state
+                            set status=?, updated_at=?, last_error=?
+                            where name='memory'
+                            """,
+                            (
+                                status,
+                                updated_at,
+                                "repeated transition" if status == "failed" else None,
+                            ),
+                        )
+                        writer.commit()
+                    return result
+
+                with mock.patch(
+                    "rpg_engine.context_builder.apply_budget",
+                    side_effect=dirty_after_budget,
+                ):
+                    result = build_context(
+                        campaign,
+                        conn,
+                        user_text=query,
+                        mode="query",
+                        view="player",
+                        budget=1800,
+                        max_events=0,
+                    )
+
+        serialized = json.dumps(result.to_json_text(), ensure_ascii=False)
+        self.assertNotIn(marker, serialized)
+        self.assertNotIn("memory:native-final-snapshot", serialized)
+        self.assertNotIn("plot:memory:memory:native-final-snapshot", serialized)
+        self.assertTrue(
+            any(
+                item.get("source") == "memory_summaries"
+                and item.get("freshness", {}).get("reason")
+                == "projection_memory_unstable"
+                for item in result.omitted_items
+            ),
+            result.omitted_items,
+        )
+
+    def test_context_retry_preserves_non_memory_plot_signals(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            save = copy_current_packages(tmp)
+            campaign = load_campaign(save)
+            with connect(campaign) as conn, connect(campaign) as writer:
+                turn_id = str(
+                    conn.execute(
+                        "select value from meta where key='current_turn_id'"
+                    ).fetchone()["value"]
+                )
+                conn.execute(
+                    """
+                    insert or replace into projection_state
+                    (name, version, last_turn_id, status, updated_at, last_error)
+                    values('memory', 1, ?, 'clean', '2099-07-10T00:00:00+00:00', null)
+                    """,
+                    (turn_id,),
+                )
+                conn.commit()
+
+                from rpg_engine import context_builder
+
+                original_apply_budget = context_builder.apply_budget
+                first_pass = True
+
+                def omit_routes_then_retry(*args: Any, **kwargs: Any) -> Any:
+                    nonlocal first_pass
+                    selected, omitted = original_apply_budget(*args, **kwargs)
+                    if first_pass:
+                        first_pass = False
+                        progress_sections = [
+                            item for item in selected if item.key == "progress_context"
+                        ]
+                        selected = [
+                            item for item in selected if item.key != "progress_context"
+                        ]
+                        omitted = [*omitted, *progress_sections]
+                        mark_projections_dirty(writer, ["memory"], turn_id=turn_id)
+                        writer.commit()
+                    return selected, omitted
+
+                with mock.patch(
+                    "rpg_engine.context_builder.apply_budget",
+                    side_effect=omit_routes_then_retry,
+                ):
+                    result = build_context(
+                        campaign,
+                        conn,
+                        user_text="去围墙领地/家",
+                        mode="action",
+                        submode="travel",
+                        view="player",
+                        budget=5000,
+                        max_events=0,
+                    )
+
+        self.assertIn("progress_context", result.sections)
+        self.assertTrue(
+            any(
+                str(item.get("id", "")).startswith("plot:progress:")
+                and item.get("budget", {}).get("included") is True
+                for item in result.loaded_items
+            ),
+            result.loaded_items,
+        )
+
+    def test_stale_memory_summary_is_omitted_when_subject_fact_is_newer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            save = copy_current_packages(tmp)
+            campaign = load_campaign(save)
+            with connect(campaign) as conn:
+                ensure_memory_tables(conn)
+                conn.execute(
+                    """
+                    insert or ignore into turns(id, session_id, user_text, intent, summary, changed, created_at)
+                    values
+                      ('turn:memory-stale-old', 's', 'old', 'note', 'old', 1, '2024-01-01T00:00:00+00:00'),
+                      ('turn:memory-stale-new', 's', 'new', 'note', 'new', 1, '2024-01-02T00:00:00+00:00')
+                    """
+                )
+                upsert_entity(
+                    conn,
+                    {
+                        "id": "item:test-memory-stale",
+                        "type": "item",
+                        "name": "记忆校验物",
+                        "status": "active",
+                        "visibility": "known",
+                        "summary": "NEW AUTHORITATIVE ENTITY SUMMARY",
+                        "updated_turn_id": "turn:memory-stale-new",
+                    },
+                )
+                conn.execute(
+                    """
+                    insert or replace into memory_summaries
+                    (id, kind, subject_id, title, summary, key_points_json, source_event_ids_json,
+                     source_turn_ids_json, valid_from_turn, valid_to_turn, summary_type, visibility_mode,
+                     freshness_status, freshness_turn_id, stale_reason, freshness_evidence_json,
+                     derived_authority_json, updated_at)
+                    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "memory:test-stale-subject",
+                        "project",
+                        "item:test-memory-stale",
+                        "Stale memory",
+                        "OLD MEMORY SUMMARY",
+                        json.dumps(["OLD MEMORY SUMMARY"], ensure_ascii=False),
+                        "[]",
+                        json.dumps(["turn:memory-stale-old"], ensure_ascii=False),
+                        "turn:memory-stale-old",
+                        None,
+                        "deterministic_project",
+                        "player",
+                        "fresh",
+                        "turn:memory-stale-old",
+                        "",
+                        json.dumps(
+                            {
+                                "current_turn_id": "turn:memory-stale-old",
+                                "subject_id": "item:test-memory-stale",
+                                "subject_updated_turn_id": "turn:memory-stale-old",
+                                "valid_from_turn": "turn:memory-stale-old",
+                            },
+                            ensure_ascii=False,
+                        ),
+                        json.dumps({"authority": "derived_context", "fact_authority": False}, ensure_ascii=False),
+                        "2024-01-01T00:00:00+00:00",
+                    ),
+                )
+                conn.commit()
+
+                result = build_context(
+                    campaign,
+                    conn,
+                    user_text="item:test-memory-stale",
+                    mode="query",
+                    view="player",
+                    budget=1800,
+                    max_events=0,
+                )
+
+        loaded_memory_ids = {
+            item["id"]
+            for item in result.loaded_items
+            if item.get("source") == "memory_summaries" and item.get("kind") == "memory"
+        }
+        omitted_memory = [
+            item
+            for item in result.omitted_items
+            if item["id"] == "memory:test-stale-subject" and item.get("source") == "memory_summaries"
+        ]
+        self.assertNotIn("memory:test-stale-subject", loaded_memory_ids)
+        self.assertEqual(omitted_memory[0]["freshness"]["status"], "stale")
+        self.assertEqual(omitted_memory[0]["freshness"]["reason"], "subject_updated_after_summary")
+        self.assertTrue(
+            any(
+                item.get("source") == "memory_summaries"
+                and item.get("reason") == "subject_updated_after_summary"
+                and item.get("severity") == "advisory"
+                for item in result.completeness["missing_signal_evidence"]
+            )
+        )
+        self.assertNotIn("OLD MEMORY SUMMARY", result.markdown)
+        self.assertIn("NEW AUTHORITATIVE ENTITY SUMMARY", result.markdown)
+
+    def test_player_context_memory_evidence_does_not_leak_hidden_source_refs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            save = copy_current_packages(tmp)
+            campaign = load_campaign(save)
+            hidden_id = "item:hidden-memory-source-probe"
+            with connect(campaign) as conn:
+                ensure_memory_tables(conn)
+                upsert_entity(
+                    conn,
+                    {
+                        "id": hidden_id,
+                        "type": "item",
+                        "name": "Hidden Memory Source Probe",
+                        "status": "active",
+                        "visibility": "hidden",
+                        "summary": "Hidden source should not leak through memory evidence.",
+                    },
+                )
+                conn.execute(
+                    """
+                    insert or replace into events
+                    (id, turn_id, game_time, type, title, summary, payload_json, source, created_at)
+                    values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "event:native-opaque-hidden-source",
+                        "turn:000044",
+                        "第28天",
+                        "note",
+                        "Opaque native source event",
+                        f"Opaque source summary references {hidden_id}",
+                        json.dumps({"hidden_ref": hidden_id}, ensure_ascii=False),
+                        "test",
+                        "2026-07-10T00:00:00+00:00",
+                    ),
+                )
+                conn.execute(
+                    """
+                    insert or replace into memory_summaries
+                    (id, kind, subject_id, title, summary, key_points_json, source_event_ids_json,
+                     source_turn_ids_json, valid_from_turn, valid_to_turn, summary_type, visibility_mode,
+                     freshness_status, freshness_turn_id, stale_reason, freshness_evidence_json,
+                     derived_authority_json, updated_at)
+                    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "memory:native-hidden-source-evidence",
+                        "world",
+                        None,
+                        "Safe native hidden source memory",
+                        "The visible text does not mention the hidden source.",
+                        "[]",
+                        json.dumps(["event:native-opaque-hidden-source"], ensure_ascii=False),
+                        "[]",
+                        None,
+                        None,
+                        "deterministic_world",
+                        "player",
+                        "fresh",
+                        "turn:000044",
+                        "",
+                        json.dumps({"source_event_ids": ["event:native-opaque-hidden-source"]}, ensure_ascii=False),
+                        json.dumps({"authority": "derived_context", "fact_authority": False}, ensure_ascii=False),
+                        "2026-07-10T00:00:00+00:00",
+                    ),
+                )
+                conn.execute(
+                    """
+                    insert or replace into memory_summaries
+                    (id, kind, subject_id, title, summary, key_points_json, source_event_ids_json,
+                     source_turn_ids_json, valid_from_turn, valid_to_turn, summary_type, visibility_mode,
+                     freshness_status, freshness_turn_id, stale_reason, freshness_evidence_json,
+                     derived_authority_json, updated_at)
+                    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "memory:native-hidden-reason-evidence",
+                        "world",
+                        None,
+                        "Safe native hidden reason memory",
+                        "The visible text also does not mention the hidden source.",
+                        "[]",
+                        "[]",
+                        "[]",
+                        None,
+                        None,
+                        "deterministic_world",
+                        "player",
+                        "stale",
+                        "turn:000044",
+                        f"stale because of {hidden_id}",
+                        json.dumps({"current_turn_id": "turn:000044"}, ensure_ascii=False),
+                        json.dumps({"authority": "derived_context", "fact_authority": False}, ensure_ascii=False),
+                        "2026-07-10T00:00:00+00:00",
+                    ),
+                )
+                conn.commit()
+
+                result = build_context(
+                    campaign,
+                    conn,
+                    user_text="Safe native hidden source memory",
+                    mode="query",
+                    view="player",
+                    budget=1800,
+                    max_events=0,
+                )
+
+        serialized = result.to_json_text()
+        self.assertNotIn(hidden_id, serialized)
+        self.assertNotIn("event:native-opaque-hidden-source", serialized)
+        self.assertNotIn("memory:native-hidden-source-evidence", {
+            item.get("id")
+            for item in result.loaded_items
+            if item.get("source") == "memory_summaries"
+        })
+
     def test_formal_save_read_only_surfaces_do_not_mutate(self) -> None:
         db_path = SAVE_ROOT / "data" / "game.sqlite"
         before_turn = current_turn(SAVE_ROOT)

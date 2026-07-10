@@ -11,6 +11,7 @@ from unittest import mock
 
 import yaml
 
+import rpg_engine.memory as memory_module
 from rpg_engine.ai.state_audit import (
     build_state_audit_prompt,
     compact_json,
@@ -94,6 +95,12 @@ from rpg_engine.content_factory import (
     split_csv,
     write_content_delta,
 )
+from rpg_engine.context.collectors import (
+    memory_loaded_items,
+    memory_omitted_items,
+    memory_summaries_section,
+)
+from rpg_engine.context_builder import build_context, missing_signal_evidence
 from rpg_engine.db import connect, upsert_entity
 from rpg_engine.memory import (
     as_text_list,
@@ -101,17 +108,46 @@ from rpg_engine.memory import (
     build_memory_records,
     build_world_memories,
     dedupe,
+    ensure_memory_tables,
+    find_omitted_relevant_memories,
     find_relevant_memories,
     format_memory_value,
     history_points,
+    latest_turn_id,
+    memory_row_freshness,
+    memory_row_authority,
+    memory_row_freshness_evidence,
+    memory_row_has_hidden_refs,
+    memory_row_source_event_ids,
+    memory_row_source_turn_ids,
+    memory_metadata_columns_present,
+    memory_projection_health,
+    memory_projection_snapshot,
+    memory_rows_have_trusted_provenance,
     memory_table_exists,
+    memory_summary_metadata,
     parse_day,
+    player_safe_memory_reason,
     rebuild_memory_summaries,
+    redact_memory_row_for_view,
     render_memory_section,
     safe_id,
     trim_join,
+    turn_is_after,
+    write_memory_report,
+)
+from rpg_engine.migrations import (
+    additive_column_has_write_blocking_constraints,
+    apply_pending_migrations,
+    ensure_schema_migrations,
+    execute_migration_statement,
+    migration_files,
+    migration_id,
 )
 from rpg_engine.ops_report import build_ops_report, scalar as ops_scalar, table_count_sql, table_exists, write_ops_report
+from rpg_engine.projection_service import ProjectionService
+from rpg_engine.projections import mark_projections_dirty
+from rpg_engine.resource_paths import read_resource_text
 from rpg_engine.reflection import (
     draft_reflection,
     format_value,
@@ -192,6 +228,53 @@ def wait_delta(command_id: str = "maintenance-tooling-wait") -> dict[str, object
         "changed": False,
         "summary": "No significant change.",
     }
+
+
+def insert_test_memory(conn: sqlite3.Connection, **overrides: object) -> sqlite3.Row:
+    values: dict[str, object] = {
+        "id": "memory:test",
+        "kind": "world",
+        "subject_id": None,
+        "title": "Test memory",
+        "summary": "Visible test summary.",
+        "key_points_json": "[]",
+        "source_event_ids_json": "[]",
+        "source_turn_ids_json": "[]",
+        "valid_from_turn": None,
+        "valid_to_turn": None,
+        "summary_type": "deterministic_world",
+        "visibility_mode": "player",
+        "freshness_status": "fresh",
+        "freshness_turn_id": "turn:seed",
+        "stale_reason": "",
+        "freshness_evidence_json": json.dumps({"current_turn_id": "turn:seed"}),
+        "derived_authority_json": json.dumps(
+            {"authority": "derived_context", "fact_authority": False}
+        ),
+        "updated_at": "2026-07-10T00:00:00+00:00",
+    }
+    values.update(overrides)
+    columns = list(values)
+    conn.execute(
+        f"insert into memory_summaries ({', '.join(columns)}) values ({', '.join('?' for _ in columns)})",
+        [values[column] for column in columns],
+    )
+    return conn.execute("select * from memory_summaries where id = ?", (values["id"],)).fetchone()
+
+
+def set_test_memory_projection_clean(
+    conn: sqlite3.Connection,
+    *,
+    last_turn_id: str = "turn:seed",
+) -> None:
+    conn.execute(
+        """
+        insert or replace into projection_state
+        (name, version, last_turn_id, status, updated_at, last_error)
+        values('memory', 1, ?, 'clean', strftime('%Y-%m-%dT%H:%M:%f+00:00', 'now'), null)
+        """,
+        (last_turn_id,),
+    )
 
 
 def action_options(**values: object) -> SimpleNamespace:
@@ -871,6 +954,3542 @@ class SavePatchAndTurnAssistantToolingTests(unittest.TestCase):
 
 
 class MemoryBackupAndWorldSettingCoverageTests(unittest.TestCase):
+    def test_memory_table_schema_backfills_provenance_and_freshness_columns(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.executescript(
+            """
+            create table entities(id text primary key);
+            create table turns(id text primary key);
+            create table memory_summaries (
+              id text primary key,
+              kind text not null,
+              subject_id text,
+              title text not null,
+              summary text not null,
+              key_points_json text not null default '[]',
+              source_event_ids_json text not null default '[]',
+              source_turn_ids_json text not null default '[]',
+              valid_from_turn text,
+              valid_to_turn text,
+              updated_at text not null,
+              foreign key(subject_id) references entities(id),
+              foreign key(valid_from_turn) references turns(id),
+              foreign key(valid_to_turn) references turns(id)
+            );
+            """
+        )
+
+        ensure_memory_tables(conn)
+        columns = {row["name"] for row in conn.execute("pragma table_info(memory_summaries)").fetchall()}
+
+        self.assertTrue(
+            {
+                "summary_type",
+                "visibility_mode",
+                "freshness_status",
+                "freshness_turn_id",
+                "stale_reason",
+                "freshness_evidence_json",
+                "derived_authority_json",
+            }.issubset(columns)
+        )
+
+    def test_memory_metadata_migration_tolerates_helper_backfilled_columns(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.executescript(read_resource_text("migrations", "0001_init.sql"))
+        ensure_schema_migrations(conn)
+        for path in migration_files():
+            mid = migration_id(path)
+            if mid != "0009_memory_summary_provenance":
+                conn.execute(
+                    "insert or ignore into schema_migrations(id, applied_at) values(?, ?)",
+                    (mid, "2026-07-10T00:00:00+00:00"),
+                )
+        ensure_memory_tables(conn)
+
+        applied = apply_pending_migrations(conn)
+        columns = {row["name"] for row in conn.execute("pragma table_info(memory_summaries)").fetchall()}
+
+        self.assertEqual([record.id for record in applied], ["0009_memory_summary_provenance"])
+        self.assertIn("0009_memory_summary_provenance", {
+            row["id"] for row in conn.execute("select id from schema_migrations").fetchall()
+        })
+        self.assertTrue(
+            {
+                "summary_type",
+                "visibility_mode",
+                "freshness_status",
+                "freshness_turn_id",
+                "stale_reason",
+                "freshness_evidence_json",
+                "derived_authority_json",
+            }.issubset(columns)
+        )
+
+    def test_memory_metadata_migration_rejects_incompatible_existing_column(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.executescript(read_resource_text("migrations", "0001_init.sql"))
+        ensure_schema_migrations(conn)
+        for path in migration_files():
+            mid = migration_id(path)
+            if mid != "0009_memory_summary_provenance":
+                conn.execute(
+                    "insert or ignore into schema_migrations(id, applied_at) values(?, ?)",
+                    (mid, "2026-07-10T00:00:00+00:00"),
+                )
+        conn.execute(
+            "alter table memory_summaries add column summary_type integer not null default 99"
+        )
+        conn.commit()
+
+        with self.assertRaisesRegex(sqlite3.OperationalError, "incompatible existing column"):
+            apply_pending_migrations(conn)
+
+        self.assertFalse(
+            conn.execute(
+                "select 1 from schema_migrations where id = '0009_memory_summary_provenance'"
+            ).fetchone()
+        )
+
+    def test_memory_metadata_migration_accepts_casefolded_compatible_column(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.executescript(read_resource_text("migrations", "0001_init.sql"))
+        ensure_schema_migrations(conn)
+        for path in migration_files():
+            mid = migration_id(path)
+            if mid != "0009_memory_summary_provenance":
+                conn.execute(
+                    "insert or ignore into schema_migrations(id, applied_at) values(?, ?)",
+                    (mid, "2026-07-10T00:00:00+00:00"),
+                )
+        conn.execute(
+            "alter table memory_summaries add column SUMMARY_TYPE text not null default 'deterministic'"
+        )
+        conn.commit()
+
+        applied = apply_pending_migrations(conn)
+
+        self.assertEqual([record.id for record in applied], ["0009_memory_summary_provenance"])
+        self.assertEqual(
+            sum(
+                1
+                for row in conn.execute("pragma table_info(memory_summaries)").fetchall()
+                if str(row["name"]).casefold() == "summary_type"
+            ),
+            1,
+        )
+
+    def test_memory_metadata_migration_normalizes_null_default_and_rejects_authority_escalation(self) -> None:
+        def legacy_conn() -> sqlite3.Connection:
+            conn = sqlite3.connect(":memory:")
+            conn.row_factory = sqlite3.Row
+            conn.executescript(read_resource_text("migrations", "0001_init.sql"))
+            ensure_schema_migrations(conn)
+            for path in migration_files():
+                mid = migration_id(path)
+                if mid != "0009_memory_summary_provenance":
+                    conn.execute(
+                        "insert or ignore into schema_migrations(id, applied_at) values(?, ?)",
+                        (mid, "2026-07-10T00:00:00+00:00"),
+                    )
+            return conn
+
+        compatible = legacy_conn()
+        compatible.execute(
+            "alter table memory_summaries add column freshness_turn_id text default null"
+        )
+        compatible.commit()
+
+        applied = apply_pending_migrations(compatible)
+
+        self.assertEqual([record.id for record in applied], ["0009_memory_summary_provenance"])
+
+        incompatible = legacy_conn()
+        incompatible.execute(
+            """
+            alter table memory_summaries add column derived_authority_json text not null
+            default '{"authority":"derived_context","fact_authority":false,"summary_overrides_facts":true}'
+            """
+        )
+        incompatible.commit()
+
+        with self.assertRaisesRegex(sqlite3.OperationalError, "incompatible existing column"):
+            apply_pending_migrations(incompatible)
+
+    def test_memory_metadata_migration_rejects_temp_shadow_constraints_and_numeric_boolean(self) -> None:
+        def legacy_conn() -> sqlite3.Connection:
+            conn = sqlite3.connect(":memory:")
+            conn.row_factory = sqlite3.Row
+            conn.executescript(read_resource_text("migrations", "0001_init.sql"))
+            ensure_schema_migrations(conn)
+            for path in migration_files():
+                mid = migration_id(path)
+                if mid != "0009_memory_summary_provenance":
+                    conn.execute(
+                        "insert or ignore into schema_migrations(id, applied_at) values(?, ?)",
+                        (mid, "2026-07-10T00:00:00+00:00"),
+                    )
+            return conn
+
+        temp_shadow = legacy_conn()
+        temp_shadow.execute("create temp table memory_summaries(id text primary key)")
+        with self.assertRaisesRegex(sqlite3.OperationalError, "TEMP schema shadows"):
+            apply_pending_migrations(temp_shadow)
+        self.assertNotIn(
+            "summary_type",
+            {row["name"] for row in temp_shadow.execute("pragma main.table_info(memory_summaries)")},
+        )
+        self.assertIsNone(
+            temp_shadow.execute(
+                "select 1 from schema_migrations where id='0009_memory_summary_provenance'"
+            ).fetchone()
+        )
+
+        constrained = legacy_conn()
+        constrained.execute(
+            "alter table memory_summaries add column freshness_status text not null "
+            "default 'fresh' check(freshness_status='fresh')"
+        )
+        constrained.commit()
+        with self.assertRaisesRegex(sqlite3.OperationalError, "incompatible existing column"):
+            apply_pending_migrations(constrained)
+
+        numeric_boolean = legacy_conn()
+        numeric_boolean.execute(
+            "alter table memory_summaries add column derived_authority_json text not null "
+            "default '{\"authority\":\"derived_context\",\"fact_authority\":0}'"
+        )
+        numeric_boolean.commit()
+        with self.assertRaisesRegex(sqlite3.OperationalError, "incompatible existing column"):
+            apply_pending_migrations(numeric_boolean)
+
+    def test_fresh_migration_chain_installs_complete_memory_metadata_contract(self) -> None:
+        fresh = sqlite3.connect(":memory:")
+        fresh.row_factory = sqlite3.Row
+
+        applied = apply_pending_migrations(fresh)
+        fresh_columns = {
+            str(row["name"])
+            for row in fresh.execute(
+                "pragma main.table_info('memory_summaries')"
+            ).fetchall()
+        }
+
+        helper = sqlite3.connect(":memory:")
+        helper.row_factory = sqlite3.Row
+        helper.executescript(read_resource_text("migrations", "0001_init.sql"))
+        ensure_memory_tables(helper)
+        helper_columns = {
+            str(row["name"])
+            for row in helper.execute(
+                "pragma main.table_info('memory_summaries')"
+            ).fetchall()
+        }
+
+        self.assertIn("0009_memory_summary_provenance", [record.id for record in applied])
+        self.assertTrue(memory_metadata_columns_present(fresh))
+        self.assertTrue(memory_metadata_columns_present(helper))
+        self.assertEqual(
+            fresh_columns & memory_module.MEMORY_METADATA_COLUMN_NAMES,
+            helper_columns & memory_module.MEMORY_METADATA_COLUMN_NAMES,
+        )
+        self.assertIsNotNone(
+            fresh.execute(
+                "select 1 from main.schema_migrations "
+                "where id='0009_memory_summary_provenance'"
+            ).fetchone()
+        )
+
+    def test_memory_migration_ledger_and_statement_targets_ignore_temp_hijacks(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.execute(
+            "create temp table schema_migrations(id text primary key, applied_at text)"
+        )
+        conn.execute(
+            "insert into temp.schema_migrations values"
+            "('0009_memory_summary_provenance', '2099-01-01T00:00:00+00:00')"
+        )
+
+        ensure_schema_migrations(conn)
+
+        self.assertIsNone(
+            conn.execute(
+                "select 1 from main.schema_migrations "
+                "where id='0009_memory_summary_provenance'"
+            ).fetchone()
+        )
+        conn.execute("create table main.meta(key text primary key, value text not null)")
+        conn.execute("create temp table meta(key text primary key, value text not null)")
+        with self.assertRaisesRegex(sqlite3.OperationalError, "TEMP schema shadows"):
+            execute_migration_statement(
+                conn,
+                "insert into meta(key, value) values('schema_version', 'bad')",
+            )
+        self.assertIsNone(
+            conn.execute(
+                "select 1 from main.meta where key='schema_version'"
+            ).fetchone()
+        )
+
+    def test_late_memory_migration_failure_rolls_back_all_prior_columns(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.executescript(read_resource_text("migrations", "0001_init.sql"))
+        ensure_schema_migrations(conn)
+        for path in migration_files():
+            mid = migration_id(path)
+            if mid != "0009_memory_summary_provenance":
+                conn.execute(
+                    "insert or ignore into main.schema_migrations(id, applied_at) values(?, ?)",
+                    (mid, "2026-07-10T00:00:00+00:00"),
+                )
+        conn.execute(
+            "alter table main.memory_summaries add column derived_authority_json "
+            "text not null default '{\"authority\":\"fact\",\"fact_authority\":true}'"
+        )
+        conn.commit()
+        before = {
+            str(row["name"])
+            for row in conn.execute(
+                "pragma main.table_info('memory_summaries')"
+            ).fetchall()
+        }
+
+        with self.assertRaisesRegex(sqlite3.OperationalError, "incompatible existing column"):
+            apply_pending_migrations(conn)
+
+        after = {
+            str(row["name"])
+            for row in conn.execute(
+                "pragma main.table_info('memory_summaries')"
+            ).fetchall()
+        }
+        self.assertEqual(after, before)
+        self.assertIsNone(
+            conn.execute(
+                "select 1 from main.schema_migrations "
+                "where id='0009_memory_summary_provenance'"
+            ).fetchone()
+        )
+
+    def test_memory_helper_and_migration_reject_executable_schema_extensions_atomically(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.executescript(
+            """
+            create table entities(id text primary key);
+            create table turns(id text primary key);
+            create table memory_summaries(
+              id text primary key,
+              kind integer not null,
+              subject_id text
+            );
+            """
+        )
+        with self.assertRaisesRegex(
+            sqlite3.OperationalError,
+            "schema contract|incompatible existing column",
+        ):
+            ensure_memory_tables(conn)
+        self.assertIsNone(
+            conn.execute(
+                "select 1 from main.sqlite_master "
+                "where type='index' and name='idx_memory_kind_subject'"
+            ).fetchone()
+        )
+
+        harmless = sqlite3.connect(":memory:")
+        harmless.execute(
+            "create table memory_summaries("
+            "id text primary key, kind text default 'check(', subject_id text)"
+        )
+        self.assertFalse(
+            additive_column_has_write_blocking_constraints(
+                harmless,
+                table="memory_summaries",
+                column="summary_type",
+            )
+        )
+
+        blocked = sqlite3.connect(":memory:")
+        blocked.execute(
+            "create table memory_summaries("
+            "id text primary key, kind text collate nocase, subject_id text, "
+            "check /* executable gap */ (length(kind) > 0))"
+        )
+        self.assertTrue(
+            additive_column_has_write_blocking_constraints(
+                blocked,
+                table="memory_summaries",
+                column="summary_type",
+            )
+        )
+
+    def test_memory_helper_prevalidates_metadata_and_requires_schema_contract(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.executescript(
+            """
+            create table entities(id text primary key);
+            create table turns(id text primary key);
+            create table memory_summaries (
+              id text primary key,
+              kind text not null,
+              subject_id text,
+              title text not null,
+              summary text not null,
+              key_points_json text not null default '[]',
+              source_event_ids_json text not null default '[]',
+              source_turn_ids_json text not null default '[]',
+              valid_from_turn text,
+              valid_to_turn text,
+              derived_authority_json integer not null default 0,
+              updated_at text not null,
+              foreign key(subject_id) references entities(id),
+              foreign key(valid_from_turn) references turns(id),
+              foreign key(valid_to_turn) references turns(id)
+            );
+            create index idx_memory_kind_subject on memory_summaries(kind, subject_id);
+            """
+        )
+
+        with self.assertRaisesRegex(sqlite3.OperationalError, "derived_authority_json"):
+            ensure_memory_tables(conn)
+
+        columns = {
+            row["name"] for row in conn.execute("pragma main.table_info(memory_summaries)")
+        }
+        self.assertNotIn("summary_type", columns)
+        self.assertNotIn("freshness_evidence_json", columns)
+
+    def test_memory_schema_rejects_case_variant_triggers_missing_fk_and_missing_lookup_index(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                ensure_memory_tables(conn)
+                conn.execute(
+                    "create trigger mixed_case_memory_trigger before insert on Memory_Summaries "
+                    "begin select 1; end"
+                )
+                mixed_case_trigger_ready = memory_metadata_columns_present(conn)
+                conn.execute("drop trigger mixed_case_memory_trigger")
+
+                conn.execute("drop index idx_memory_kind_subject")
+                missing_index_ready = memory_metadata_columns_present(conn)
+                conn.execute(
+                    "create index idx_memory_kind_subject on memory_summaries(kind, subject_id)"
+                )
+
+                schema_sql = str(
+                    conn.execute(
+                        "select sql from main.sqlite_master "
+                        "where type='table' and name='memory_summaries'"
+                    ).fetchone()[0]
+                )
+                conn.execute("pragma foreign_keys=off")
+                conn.execute("alter table memory_summaries rename to memory_summaries_original")
+                without_subject_fk = schema_sql.replace(
+                    ",\n          foreign key(subject_id) references entities(id)",
+                    "",
+                    1,
+                )
+                conn.execute(without_subject_fk)
+                conn.execute(
+                    "create index idx_memory_kind_subject_v2 "
+                    "on memory_summaries(kind, subject_id)"
+                )
+                missing_fk_ready = memory_metadata_columns_present(conn)
+
+        self.assertFalse(mixed_case_trigger_ready)
+        self.assertFalse(missing_index_ready)
+        self.assertFalse(missing_fk_ready)
+
+    def test_partial_memory_schema_returns_sanitized_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                conn.execute("drop table memory_summaries")
+                conn.execute(
+                    """
+                    create table memory_summaries (
+                      id text primary key,
+                      summary_type text not null default 'deterministic',
+                      visibility_mode text not null default 'player',
+                      freshness_status text not null default 'fresh',
+                      freshness_turn_id text,
+                      stale_reason text not null default '',
+                      freshness_evidence_json text not null default '{}',
+                      derived_authority_json text not null default '{}'
+                    )
+                    """
+                )
+
+                loaded = find_relevant_memories(conn, targets=["anything"], view="player", limit=4)
+                omitted = find_omitted_relevant_memories(
+                    conn,
+                    targets=["anything"],
+                    view="player",
+                    limit=4,
+                )
+                no_items = find_omitted_relevant_memories(
+                    conn,
+                    targets=["anything"],
+                    view="player",
+                    limit=0,
+                )
+
+        self.assertEqual(loaded, [])
+        self.assertEqual(no_items, [])
+        self.assertEqual(len(omitted), 1)
+        self.assertEqual(omitted[0]["stale_reason"], "missing_memory_metadata_columns")
+        self.assertIn("kind", json.loads(omitted[0]["freshness_evidence_json"])["missing_columns"])
+
+    def test_memory_schema_visibility_and_projection_rows_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                ensure_memory_tables(conn)
+                conn.execute(
+                    """
+                    insert or replace into projection_state
+                    (name, version, last_turn_id, status, updated_at, last_error)
+                    values('memory', 1, 'turn:seed', 'failed', '2026-07-10T00:00:00+00:00', ?)
+                    """,
+                    (sqlite3.Binary(b"broken\x00projection"),),
+                )
+                blob_omissions = find_omitted_relevant_memories(
+                    conn,
+                    targets=["anything"],
+                    view="maintenance",
+                    limit=4,
+                )
+
+                conn.execute("drop table memory_summaries")
+                conn.execute(
+                    """
+                    create table memory_summaries (
+                      id text primary key, kind text not null, subject_id text, title text not null,
+                      summary text not null, key_points_json text not null default '[]',
+                      source_event_ids_json text not null default '[]',
+                      source_turn_ids_json text not null default '[]', valid_from_turn text,
+                      valid_to_turn text, summary_type text not null default 'deterministic',
+                      visibility_mode text default null, freshness_status text not null default 'fresh',
+                      freshness_turn_id text, stale_reason text not null default '',
+                      freshness_evidence_json text not null default '{}',
+                      derived_authority_json text not null default '{"authority":"derived_context","fact_authority":false}',
+                      updated_at text not null
+                    )
+                    """
+                )
+                insert_test_memory(conn, id="memory:empty-visibility", visibility_mode="")
+                schema_ready = memory_metadata_columns_present(conn)
+                loaded = find_relevant_memories(
+                    conn,
+                    targets=["Test memory"],
+                    view="player",
+                    limit=4,
+                )
+
+                conn.execute("drop table projection_state")
+                conn.execute(
+                    """
+                    create table projection_state (
+                      name text, version integer, last_turn_id text, status text,
+                      updated_at text, last_error text
+                    )
+                    """
+                )
+                conn.executemany(
+                    "insert into projection_state values('memory', 1, 'turn:seed', ?, '2026-07-10T00:00:00+00:00', ?)",
+                    [("clean", None), ("failed", "broken")],
+                )
+                duplicate_health = memory_projection_health(conn)
+
+        self.assertTrue(blob_omissions)
+        self.assertFalse(schema_ready)
+        self.assertEqual(loaded, [])
+        self.assertEqual(duplicate_health["status"], "stale")
+
+    def test_memory_projection_refreshes_when_schema_migration_is_newer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                ensure_memory_tables(conn)
+                conn.execute(
+                    """
+                    insert or replace into projection_state
+                    (name, version, last_turn_id, status, updated_at, last_error)
+                    values('memory', 1, 'turn:seed', 'clean',
+                           '2026-07-10T00:00:00+00:00', null)
+                    """
+                )
+                conn.execute(
+                    """
+                    update schema_migrations
+                    set applied_at = '2026-07-10T01:00:00+00:00'
+                    where id = '0009_memory_summary_provenance'
+                    """
+                )
+                insert_test_memory(
+                    conn,
+                    id="memory:legacy-before-schema-upgrade",
+                    freshness_turn_id=None,
+                    freshness_evidence_json="{}",
+                )
+
+                before = memory_projection_health(conn)
+                report = ProjectionService(campaign, conn).refresh(
+                    names=["memory"],
+                    dirty_only=True,
+                    include_outbox=False,
+                    profile="test:memory_schema_upgrade",
+                )
+                after = memory_projection_health(conn)
+
+        self.assertEqual(before["status"], "stale")
+        self.assertIn("memory", report.refreshed)
+        self.assertEqual(after["status"], "clean")
+
+    def test_memory_projection_refreshes_legacy_rows_with_sources_or_bad_migration_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                ensure_memory_tables(conn)
+                insert_test_memory(
+                    conn,
+                    id="memory:legacy-with-source-turn",
+                    source_turn_ids_json=json.dumps(["turn:seed"]),
+                    freshness_turn_id=None,
+                    freshness_evidence_json="{}",
+                )
+                conn.execute(
+                    """
+                    insert or replace into projection_state
+                    (name, version, last_turn_id, status, updated_at, last_error)
+                    values('memory', 1, 'turn:seed', 'clean', '2026-07-10T00:00:00+00:00', null)
+                    """
+                )
+                conn.execute(
+                    """
+                    update schema_migrations
+                    set applied_at = '2026-07-10T01:00:00+00:00'
+                    where id = '0009_memory_summary_provenance'
+                    """
+                )
+                newer_migration = memory_projection_health(conn)
+
+                conn.execute(
+                    "delete from schema_migrations where id = '0009_memory_summary_provenance'"
+                )
+                missing_migration = memory_projection_health(conn)
+
+                conn.execute(
+                    "insert into schema_migrations(id, applied_at) values(?, ?)",
+                    (
+                        "0009_memory_summary_provenance",
+                        sqlite3.Binary(b"invalid-migration-time"),
+                    ),
+                )
+                corrupt_migration = memory_projection_health(conn)
+
+        self.assertEqual(newer_migration["status"], "stale")
+        self.assertEqual(missing_migration["status"], "stale")
+        self.assertEqual(corrupt_migration["status"], "stale")
+
+    def test_direct_memory_rebuild_reconciles_orphaned_refreshing_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                conn.execute(
+                    """
+                    insert or replace into projection_state
+                    (name, version, last_turn_id, status, updated_at, last_error)
+                    values('memory', 1, 'turn:seed', 'refreshing',
+                           '2026-07-10T00:00:00+00:00', null)
+                    """
+                )
+                conn.commit()
+
+                rebuild_memory_summaries(campaign, conn)
+                health = memory_projection_health(conn)
+
+        self.assertEqual(health["status"], "clean")
+
+    def test_direct_memory_rebuild_does_not_mark_newer_turn_clean(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                original_write_report = write_memory_report
+
+                def advance_turn_after_report(*args: object, **kwargs: object) -> Path:
+                    path = original_write_report(*args, **kwargs)
+                    conn.execute(
+                        """
+                        insert into turns(id, session_id, user_text, intent, summary, changed, created_at)
+                        values('turn:after-memory-build', 's', 'advance', 'note', 'advance', 1,
+                               '2099-01-01T00:00:00+00:00')
+                        """
+                    )
+                    conn.execute(
+                        "update meta set value='turn:after-memory-build' where key='current_turn_id'"
+                    )
+                    return path
+
+                with mock.patch(
+                    "rpg_engine.memory.write_memory_report",
+                    side_effect=advance_turn_after_report,
+                ):
+                    rebuild_memory_summaries(campaign, conn)
+                health = memory_projection_health(conn)
+
+        self.assertNotEqual(health["status"], "clean")
+
+    def test_direct_memory_rebuild_report_failure_marks_owned_generation_failed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                rebuild_memory_summaries(campaign, conn)
+
+                with (
+                    mock.patch("rpg_engine.memory.build_memory_records", return_value=[]),
+                    mock.patch(
+                        "rpg_engine.memory.write_memory_report",
+                        side_effect=OSError("memory report failed"),
+                    ),
+                    self.assertRaisesRegex(OSError, "memory report failed"),
+                ):
+                    rebuild_memory_summaries(campaign, conn)
+                health = memory_projection_health(conn)
+
+        self.assertNotEqual(health["status"], "clean")
+
+    def test_memory_storage_visibility_scans_all_freshness_turns(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                upsert_entity(
+                    conn,
+                    {
+                        "id": "item:hidden-freshness-turn-probe",
+                        "type": "item",
+                        "name": "Hidden Freshness Turn Probe",
+                        "status": "active",
+                        "visibility": "hidden",
+                        "summary": "Hidden.",
+                    },
+                )
+                conn.execute(
+                    """
+                    insert into turns(id, session_id, user_text, intent, summary, changed, created_at)
+                    values('turn:hidden-freshness-evidence', 's', 'item:hidden-freshness-turn-probe',
+                           'note', 'item:hidden-freshness-turn-probe', 1,
+                           '2026-07-10T00:00:00+00:00')
+                    """
+                )
+                conn.execute(
+                    "update meta set value='turn:hidden-freshness-evidence' where key='current_turn_id'"
+                )
+
+                metadata = memory_summary_metadata(
+                    conn,
+                    {
+                        "id": "memory:hidden-freshness-turn",
+                        "kind": "world",
+                        "title": "Safe title",
+                        "summary": "Safe summary",
+                        "key_points": [],
+                        "source_event_ids": [],
+                        "source_turn_ids": [],
+                    },
+                )
+
+        self.assertEqual(metadata["visibility_mode"], "maintenance")
+
+    def test_legacy_memory_rows_without_freshness_turn_are_omitted_when_subject_changed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                ensure_memory_tables(conn)
+                conn.execute(
+                    """
+                    insert or ignore into turns(id, session_id, user_text, intent, summary, changed, created_at)
+                    values
+                      ('turn:legacy-memory-old', 's', 'old', 'note', 'old', 1, '2024-01-01T00:00:00+00:00'),
+                      ('turn:legacy-memory-new', 's', 'new', 'note', 'new', 1, '2024-01-02T00:00:00+00:00')
+                    """
+                )
+                upsert_entity(
+                    conn,
+                    {
+                        "id": "item:legacy-memory-subject",
+                        "type": "item",
+                        "name": "Legacy Memory Subject",
+                        "status": "active",
+                        "visibility": "known",
+                        "summary": "SQLite fact is newer.",
+                        "updated_turn_id": "turn:legacy-memory-new",
+                    },
+                )
+                conn.execute(
+                    """
+                    insert into memory_summaries
+                    (id, kind, subject_id, title, summary, key_points_json, source_event_ids_json,
+                     source_turn_ids_json, valid_from_turn, valid_to_turn, summary_type, visibility_mode,
+                     freshness_status, freshness_turn_id, stale_reason, freshness_evidence_json,
+                     derived_authority_json, updated_at)
+                    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "memory:legacy-no-freshness-turn",
+                        "project",
+                        "item:legacy-memory-subject",
+                        "Legacy Memory Subject",
+                        "Old summary",
+                        "[]",
+                        "[]",
+                        json.dumps(["turn:legacy-memory-old"], ensure_ascii=False),
+                        "turn:legacy-memory-old",
+                        None,
+                        "deterministic_project",
+                        "player",
+                        "fresh",
+                        None,
+                        "",
+                        json.dumps({"valid_from_turn": "turn:legacy-memory-old"}),
+                        json.dumps({"authority": "derived_context", "fact_authority": False}, ensure_ascii=False),
+                        "2024-01-03T00:00:00+00:00",
+                    ),
+                )
+                row = conn.execute("select * from memory_summaries where id='memory:legacy-no-freshness-turn'").fetchone()
+                set_test_memory_projection_clean(conn)
+                freshness = memory_row_freshness(conn, row, view="player")
+                loaded = find_relevant_memories(conn, targets=["Legacy Memory Subject"], view="player", limit=4)
+                omitted = find_omitted_relevant_memories(conn, targets=["Legacy Memory Subject"], view="player", limit=4)
+
+        self.assertEqual(freshness["reason"], "subject_updated_after_summary")
+        self.assertNotIn("memory:legacy-no-freshness-turn", {item["id"] for item in loaded})
+        self.assertTrue(
+            any(
+                item["id"] == "memory:legacy-no-freshness-turn"
+                and item["stale_reason"] == "subject_updated_after_summary"
+                for item in omitted
+            )
+        )
+
+    def test_memory_visibility_mode_blocks_player_lookup_and_report_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                ensure_memory_tables(conn)
+                conn.execute(
+                    """
+                    insert into memory_summaries
+                    (id, kind, subject_id, title, summary, key_points_json, source_event_ids_json,
+                     source_turn_ids_json, valid_from_turn, valid_to_turn, summary_type, visibility_mode,
+                     freshness_status, freshness_turn_id, stale_reason, freshness_evidence_json,
+                     derived_authority_json, updated_at)
+                    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "memory:maintenance-only",
+                        "world",
+                        None,
+                        "Maintenance Only Memory",
+                        "private maintenance summary",
+                        "[]",
+                        "[]",
+                        "[]",
+                        None,
+                        None,
+                        "deterministic_world",
+                        "maintenance",
+                        "fresh",
+                        None,
+                        "",
+                        "{}",
+                        json.dumps({"authority": "derived_context", "fact_authority": False}, ensure_ascii=False),
+                        "2024-01-03T00:00:00+00:00",
+                    ),
+                )
+                upsert_entity(
+                    conn,
+                    {
+                        "id": "npc:hidden-reviewer",
+                        "type": "character",
+                        "name": "Hidden Reviewer",
+                        "status": "active",
+                        "visibility": "hidden",
+                        "summary": "Hidden subject.",
+                    },
+                )
+                conn.execute(
+                    """
+                    insert into memory_summaries
+                    (id, kind, subject_id, title, summary, key_points_json, source_event_ids_json,
+                     source_turn_ids_json, valid_from_turn, valid_to_turn, summary_type, visibility_mode,
+                     freshness_status, freshness_turn_id, stale_reason, freshness_evidence_json,
+                     derived_authority_json, updated_at)
+                    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "reflection:character:npc-hidden-reviewer",
+                        "character",
+                        "npc:hidden-reviewer",
+                        "Hidden Reviewer Memory",
+                        "hidden character summary",
+                        "[]",
+                        "[]",
+                        "[]",
+                        None,
+                        None,
+                        "deterministic_character",
+                        "maintenance",
+                        "fresh",
+                        None,
+                        "",
+                        "{}",
+                        json.dumps({"authority": "derived_context", "fact_authority": False}, ensure_ascii=False),
+                        "2024-01-03T00:00:00+00:00",
+                    ),
+                )
+                loaded = find_relevant_memories(conn, targets=["Maintenance Only Memory"], view="player", limit=4)
+                report_path = write_memory_report(campaign, conn)
+
+            report_text = report_path.read_text(encoding="utf-8")
+
+        self.assertEqual([row["id"] for row in loaded], [])
+        self.assertNotIn("private maintenance summary", report_text)
+        self.assertNotIn("npc-hidden-reviewer", report_text)
+        self.assertNotIn("hidden character summary", report_text)
+
+    def test_subjectless_legacy_memory_without_freshness_evidence_is_omitted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                ensure_memory_tables(conn)
+                conn.execute(
+                    """
+                    insert into memory_summaries
+                    (id, kind, subject_id, title, summary, key_points_json, source_event_ids_json,
+                     source_turn_ids_json, valid_from_turn, valid_to_turn, summary_type, visibility_mode,
+                     freshness_status, freshness_turn_id, stale_reason, freshness_evidence_json,
+                     derived_authority_json, updated_at)
+                    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "memory:legacy-subjectless-no-evidence",
+                        "world",
+                        None,
+                        "Legacy World",
+                        "Old subjectless summary",
+                        "[]",
+                        "[]",
+                        "[]",
+                        None,
+                        None,
+                        "deterministic_world",
+                        "player",
+                        "fresh",
+                        None,
+                        "",
+                        "{}",
+                        json.dumps({"authority": "derived_context", "fact_authority": False}, ensure_ascii=False),
+                        "2024-01-03T00:00:00+00:00",
+                    ),
+                )
+                set_test_memory_projection_clean(conn)
+                loaded = find_relevant_memories(conn, targets=["Legacy World"], view="player", limit=4)
+                omitted = find_omitted_relevant_memories(conn, targets=["Legacy World"], view="player", limit=4)
+
+        self.assertEqual([row["id"] for row in loaded], [])
+        self.assertTrue(
+            any(
+                item["id"] == "memory:legacy-subjectless-no-evidence"
+                and item["stale_reason"] == "missing_freshness_evidence"
+                for item in omitted
+            )
+        )
+
+    def test_player_memory_lookup_skips_hidden_refs_in_source_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                ensure_memory_tables(conn)
+                upsert_entity(
+                    conn,
+                    {
+                        "id": "item:hidden-source-probe",
+                        "type": "item",
+                        "name": "Hidden Source Probe",
+                        "status": "active",
+                        "visibility": "hidden",
+                        "summary": "Hidden source.",
+                    },
+                )
+                conn.execute(
+                    """
+                    insert into memory_summaries
+                    (id, kind, subject_id, title, summary, key_points_json, source_event_ids_json,
+                     source_turn_ids_json, valid_from_turn, valid_to_turn, summary_type, visibility_mode,
+                     freshness_status, freshness_turn_id, stale_reason, freshness_evidence_json,
+                     derived_authority_json, updated_at)
+                    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "memory:hidden-source-evidence",
+                        "world",
+                        None,
+                        "Safe looking world memory",
+                        "No visible hidden text here",
+                        "[]",
+                        json.dumps(["event:item:hidden-source-probe"], ensure_ascii=False),
+                        "[]",
+                        None,
+                        None,
+                        "deterministic_world",
+                        "player",
+                        "fresh",
+                        None,
+                        "",
+                        json.dumps({"source_event_ids": ["event:item:hidden-source-probe"]}, ensure_ascii=False),
+                        json.dumps({"authority": "derived_context", "fact_authority": False}, ensure_ascii=False),
+                        "2024-01-03T00:00:00+00:00",
+                    ),
+                )
+                loaded = find_relevant_memories(conn, targets=["Safe looking world memory"], view="player", limit=4)
+
+        self.assertEqual([row["id"] for row in loaded], [])
+
+    def test_memory_fallback_evidence_for_empty_table_and_stale_projection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                ensure_memory_tables(conn)
+                conn.execute("delete from memory_summaries")
+                conn.execute(
+                    """
+                    insert or replace into projection_state(name, version, last_turn_id, status, updated_at, last_error)
+                    values('memory', 1, 'turn:seed', 'stale', '2026-07-10T00:00:00+00:00', null)
+                    """
+                )
+                omissions = find_omitted_relevant_memories(conn, targets=["anything"], view="player", limit=4)
+
+        reasons = {item["stale_reason"] for item in omissions}
+        self.assertIn("projection_memory_stale", reasons)
+        self.assertNotIn("empty_memory_table", reasons)
+
+    def test_non_clean_or_misaligned_memory_projection_omits_existing_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                ensure_memory_tables(conn)
+                conn.execute(
+                    """
+                    insert or ignore into turns(id, session_id, user_text, intent, summary, changed, created_at)
+                    values('turn:projection-old', 's', 'old', 'note', 'old', 1, '2024-01-01T00:00:00+00:00')
+                    """
+                )
+                conn.execute(
+                    """
+                    insert into memory_summaries
+                    (id, kind, subject_id, title, summary, key_points_json, source_event_ids_json,
+                     source_turn_ids_json, valid_from_turn, valid_to_turn, summary_type, visibility_mode,
+                     freshness_status, freshness_turn_id, stale_reason, freshness_evidence_json,
+                     derived_authority_json, updated_at)
+                    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "memory:projection-old-world",
+                        "world",
+                        None,
+                        "Old projected world",
+                        "OLD PROJECTED WORLD SUMMARY",
+                        "[]",
+                        "[]",
+                        "[]",
+                        None,
+                        None,
+                        "deterministic_world",
+                        "player",
+                        "fresh",
+                        "turn:seed",
+                        "",
+                        json.dumps({"current_turn_id": "turn:seed"}, ensure_ascii=False),
+                        json.dumps({"authority": "derived_context", "fact_authority": False}),
+                        "2026-07-10T00:00:00+00:00",
+                    ),
+                )
+                conn.execute(
+                    """
+                    insert or replace into projection_state
+                    (name, version, last_turn_id, status, updated_at, last_error)
+                    values('memory', 1, 'turn:seed', 'clean', '2026-07-10T00:00:00+00:00', null)
+                    """
+                )
+                cases = [
+                    ("dirty", 1, "turn:seed", "projection_memory_dirty"),
+                    ("failed", 1, "turn:seed", "projection_memory_failed"),
+                    ("refreshing", 1, "turn:seed", "projection_memory_refreshing"),
+                    ("stale", 1, "turn:seed", "projection_memory_stale"),
+                    ("clean", 0, "turn:seed", "projection_memory_stale"),
+                    ("clean", 1, "turn:projection-old", "projection_memory_stale"),
+                ]
+                for status, version, last_turn_id, expected_reason in cases:
+                    with self.subTest(status=status, version=version, last_turn_id=last_turn_id):
+                        conn.execute(
+                            """
+                            update projection_state
+                            set status = ?, version = ?, last_turn_id = ?, last_error = null
+                            where name = 'memory'
+                            """,
+                            (status, version, last_turn_id),
+                        )
+                        loaded = find_relevant_memories(
+                            conn,
+                            targets=["Old projected world"],
+                            view="player",
+                            limit=4,
+                        )
+                        omitted = find_omitted_relevant_memories(
+                            conn,
+                            targets=["Old projected world"],
+                            view="player",
+                            limit=4,
+                        )
+
+                        self.assertEqual(loaded, [])
+                        self.assertTrue(
+                            any(item["stale_reason"] == expected_reason for item in omitted)
+                        )
+                        self.assertFalse(
+                            any(item["id"] == "memory:projection-old-world" for item in omitted)
+                        )
+
+    def test_player_memory_projection_fallback_redacts_last_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                ensure_memory_tables(conn)
+                conn.execute("delete from memory_summaries")
+                conn.execute(
+                    """
+                    insert or replace into projection_state(name, version, last_turn_id, status, updated_at, last_error)
+                    values('memory', 1, 'turn:seed', 'failed', '2026-07-10T00:00:00+00:00', 'hidden npc:hidden-reviewer exploded')
+                    """
+                )
+                player_omissions = find_omitted_relevant_memories(conn, targets=["anything"], view="player", limit=4)
+                maintenance_omissions = find_omitted_relevant_memories(
+                    conn,
+                    targets=["anything"],
+                    view="maintenance",
+                    limit=4,
+                )
+
+        player_projection = next(item for item in player_omissions if item["stale_reason"] == "projection_memory_failed")
+        maintenance_projection = next(
+            item for item in maintenance_omissions if item["stale_reason"] == "projection_memory_failed"
+        )
+        player_evidence = json.loads(player_projection["freshness_evidence_json"])
+        maintenance_evidence = json.loads(maintenance_projection["freshness_evidence_json"])
+        self.assertTrue(player_evidence["has_last_error"])
+        self.assertNotIn("last_error", player_evidence)
+        self.assertEqual(maintenance_evidence["last_error"], "hidden npc:hidden-reviewer exploded")
+
+    def test_memory_metadata_visibility_scans_source_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                upsert_entity(
+                    conn,
+                    {
+                        "id": "item:hidden-source-probe",
+                        "type": "item",
+                        "name": "Hidden Source Probe",
+                        "status": "active",
+                        "visibility": "hidden",
+                        "summary": "Hidden source.",
+                    },
+                )
+                conn.execute(
+                    """
+                    insert or ignore into turns(id, session_id, user_text, intent, summary, changed, created_at)
+                    values('turn:hidden-source-metadata', 's', 'hidden turn item:hidden-source-probe', 'note',
+                           'hidden turn summary item:hidden-source-probe', 1, '2024-01-01T00:00:00+00:00')
+                    """
+                )
+                conn.execute(
+                    """
+                    insert or replace into events(id, turn_id, game_time, type, title, summary, payload_json, source, created_at)
+                    values(?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "event:opaque-hidden-source",
+                        "turn:hidden-source-metadata",
+                        "第1天",
+                        "note",
+                        "opaque event title",
+                        "opaque event summary references item:hidden-source-probe",
+                        json.dumps({"hidden_ref": "item:hidden-source-probe"}, ensure_ascii=False),
+                        "test",
+                        "2024-01-01T00:00:00+00:00",
+                    ),
+                )
+                metadata = memory_summary_metadata(
+                    conn,
+                    {
+                        "id": "memory:hidden-source-metadata",
+                        "kind": "world",
+                        "title": "Safe looking metadata",
+                        "summary": "Text has no hidden name.",
+                        "key_points": [],
+                        "source_event_ids": ["event:opaque-hidden-source"],
+                        "source_turn_ids": ["turn:hidden-source-metadata"],
+                        "visibility_mode": "player",
+                    },
+                )
+
+        self.assertEqual(metadata["visibility_mode"], "maintenance")
+
+    def test_memory_hidden_scan_checks_all_source_rows_and_event_turns(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                ensure_memory_tables(conn)
+                upsert_entity(
+                    conn,
+                    {
+                        "id": "item:hidden-source-probe",
+                        "type": "item",
+                        "name": "Hidden Source Probe",
+                        "status": "active",
+                        "visibility": "hidden",
+                        "summary": "Hidden source.",
+                    },
+                )
+                source_event_ids = []
+                for index in range(65):
+                    turn_id = f"turn:opaque-source-{index:03d}"
+                    event_id = f"event:opaque-source-{index:03d}"
+                    turn_summary = (
+                        "hidden turn item:hidden-source-probe"
+                        if index == 64
+                        else "safe turn"
+                    )
+                    conn.execute(
+                        """
+                        insert or ignore into turns(id, session_id, user_text, intent, summary, changed, created_at)
+                        values(?, 's', ?, 'note', ?, 1, ?)
+                        """,
+                        (
+                            turn_id,
+                            turn_summary,
+                            turn_summary,
+                            f"2024-01-01T00:{index:02d}:00+00:00",
+                        ),
+                    )
+                    conn.execute(
+                        """
+                        insert or replace into events(id, turn_id, game_time, type, title, summary, payload_json, source, created_at)
+                        values(?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            event_id,
+                            turn_id,
+                            "第1天",
+                            "note",
+                            "safe opaque event",
+                            "safe opaque event summary",
+                            "{}",
+                            "test",
+                            f"2024-01-01T00:{index:02d}:30+00:00",
+                        ),
+                    )
+                    source_event_ids.append(event_id)
+                metadata = memory_summary_metadata(
+                    conn,
+                    {
+                        "id": "memory:many-opaque-source-events",
+                        "kind": "world",
+                        "title": "Many safe looking source events",
+                        "summary": "Text has no hidden name.",
+                        "key_points": [],
+                        "source_event_ids": source_event_ids,
+                        "source_turn_ids": [],
+                        "visibility_mode": "player",
+                    },
+                )
+                conn.execute(
+                    """
+                    insert into memory_summaries
+                    (id, kind, subject_id, title, summary, key_points_json, source_event_ids_json,
+                     source_turn_ids_json, valid_from_turn, valid_to_turn, summary_type, visibility_mode,
+                     freshness_status, freshness_turn_id, stale_reason, freshness_evidence_json,
+                     derived_authority_json, updated_at)
+                    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "memory:many-opaque-source-events",
+                        "world",
+                        None,
+                        "Many safe looking source events",
+                        "Text has no hidden name.",
+                        "[]",
+                        json.dumps(source_event_ids, ensure_ascii=False),
+                        "[]",
+                        None,
+                        None,
+                        "deterministic_world",
+                        "player",
+                        "fresh",
+                        "turn:opaque-source-000",
+                        "",
+                        json.dumps({"source_event_ids": source_event_ids}, ensure_ascii=False),
+                        json.dumps({"authority": "derived_context", "fact_authority": False}, ensure_ascii=False),
+                        "2024-01-01T02:00:00+00:00",
+                    ),
+                )
+                loaded = find_relevant_memories(
+                    conn,
+                    targets=["Many safe looking source events"],
+                    view="player",
+                    limit=4,
+                )
+
+        self.assertEqual(metadata["visibility_mode"], "maintenance")
+        self.assertEqual([row["id"] for row in loaded], [])
+
+    def test_memory_row_authority_clamps_corrupt_rows_to_derived_context(self) -> None:
+        authority = memory_row_authority(
+            {
+                "derived_authority_json": json.dumps(
+                    {
+                        "authority": "save_fact",
+                        "fact_authority": True,
+                        "fact_source": "memory",
+                        "private_ai_reasoning": "do not expose",
+                        "summary_overrides_facts": True,
+                    },
+                    ensure_ascii=False,
+                )
+            }
+        )
+
+        self.assertEqual(authority["authority"], "derived_context")
+        self.assertEqual(authority["fact_source"], "data/game.sqlite")
+        self.assertFalse(authority["fact_authority"])
+        self.assertFalse(authority["summary_overrides_facts"])
+        self.assertNotIn("private_ai_reasoning", authority)
+
+    def test_memory_freshness_evidence_and_player_reasons_are_allowlisted(self) -> None:
+        evidence = memory_row_freshness_evidence(
+            {
+                "freshness_evidence_json": json.dumps(
+                    {
+                        "basis": "private_ai_reasoning: secret",
+                        "current_turn_id": "turn:seed",
+                        "has_last_error": True,
+                        "last_turn_id": "turn:seed private_ai_reasoning: secret",
+                        "missing_columns": ["freshness_status", "private_ai_reasoning"],
+                        "private_ai_reasoning": "do not expose",
+                        "projection": "private_ai_reasoning: memory",
+                        "source_event_ids": [
+                            "event:seed",
+                            "event:seed private_ai_reasoning: secret",
+                            "private_ai_reasoning:secret",
+                        ],
+                        "source_turn_ids": [
+                            "turn:seed",
+                            "turn:seed private_ai_reasoning: secret",
+                        ],
+                        "status": "failed",
+                        "subject_id": "item:public",
+                        "subject_updated_turn_id": "private_ai_reasoning:secret",
+                    },
+                    ensure_ascii=False,
+                )
+            }
+        )
+
+        self.assertEqual(
+            evidence,
+            {
+                "current_turn_id": "turn:seed",
+                "has_last_error": True,
+                "missing_columns": ["freshness_status"],
+                "source_event_ids": ["event:seed"],
+                "source_turn_ids": ["turn:seed"],
+                "status": "failed",
+                "subject_id": "item:public",
+            },
+        )
+        self.assertEqual(
+            memory_row_source_event_ids(
+                {
+                    "source_event_ids_json": json.dumps(
+                        ["event:seed", "event:seed private_ai_reasoning: secret"],
+                        ensure_ascii=False,
+                    )
+                }
+            ),
+            ["event:seed"],
+        )
+        self.assertEqual(
+            memory_row_source_turn_ids(
+                {
+                    "source_turn_ids_json": json.dumps(
+                        ["turn:seed", "turn:seed private_ai_reasoning: secret"],
+                        ensure_ascii=False,
+                    )
+                }
+            ),
+            ["turn:seed"],
+        )
+        rendered = render_memory_section(
+            [
+                {
+                    "id": "summary:safe",
+                    "kind": "world",
+                    "title": "Safe memory",
+                    "summary": "Safe summary",
+                    "key_points_json": "[]",
+                    "freshness_status": "private_ai_reasoning: secret",
+                }
+            ]
+        )
+        self.assertIn("；stale", rendered)
+        self.assertNotIn("private_ai_reasoning", rendered)
+        self.assertEqual(player_safe_memory_reason("subject_hidden_unavailable"), "memory_summary_omitted")
+        self.assertEqual(player_safe_memory_reason("private_ai_reasoning: secret"), "memory_summary_omitted")
+
+    def test_player_memory_provenance_resolves_ids_and_clamps_summary_type(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                ensure_memory_tables(conn)
+                conn.execute(
+                    """
+                    insert into memory_summaries
+                    (id, kind, subject_id, title, summary, key_points_json, source_event_ids_json,
+                     source_turn_ids_json, valid_from_turn, valid_to_turn, summary_type, visibility_mode,
+                     freshness_status, freshness_turn_id, stale_reason, freshness_evidence_json,
+                     derived_authority_json, updated_at)
+                    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "memory:fake-player-provenance",
+                        "world",
+                        None,
+                        "Fake provenance memory",
+                        "Visible summary text.",
+                        "[]",
+                        json.dumps(["event:private_ai_reasoning:secret"]),
+                        json.dumps(["turn:private_ai_reasoning-secret"]),
+                        None,
+                        None,
+                        "private_ai_reasoning: secret",
+                        "player",
+                        "fresh",
+                        "turn:seed",
+                        "",
+                        json.dumps(
+                            {
+                                "current_turn_id": "turn:seed",
+                                "has_last_error": "false",
+                                "source_event_ids": ["event:private_ai_reasoning:secret"],
+                                "source_turn_ids": ["turn:private_ai_reasoning-secret"],
+                                "subject_id": "item:private_ai_reasoning-secret",
+                            }
+                        ),
+                        json.dumps({"authority": "derived_context", "fact_authority": False}),
+                        "2026-07-10T00:00:00+00:00",
+                    ),
+                )
+                conn.execute(
+                    """
+                    insert or replace into projection_state
+                    (name, version, last_turn_id, status, updated_at, last_error)
+                    values('memory', 1, 'turn:seed', 'clean', '2026-07-10T00:00:00+00:00', null)
+                    """
+                )
+                row = conn.execute(
+                    "select * from memory_summaries where id = 'memory:fake-player-provenance'"
+                ).fetchone()
+                items = memory_loaded_items(
+                    SimpleNamespace(
+                        conn=conn,
+                        memory_summaries=[row],
+                        visibility_view="player",
+                        mode="query",
+                    )
+                )
+                evidence = memory_row_freshness_evidence(row, conn=conn, view="player")
+                event_ids = memory_row_source_event_ids(row, conn=conn, view="player")
+                turn_ids = memory_row_source_turn_ids(row, conn=conn, view="player")
+                report_path = write_memory_report(campaign, conn)
+
+            report_text = report_path.read_text(encoding="utf-8")
+
+        self.assertEqual(event_ids, [])
+        self.assertEqual(turn_ids, [])
+        self.assertEqual(evidence, {"current_turn_id": "turn:seed"})
+        self.assertEqual(items, [])
+        self.assertNotIn("private_ai_reasoning", json.dumps(items, ensure_ascii=False))
+        self.assertNotIn("private_ai_reasoning", report_text)
+        self.assertNotIn("Fake provenance memory", report_text)
+
+    def test_player_lookup_sanitizes_raw_metadata_and_hidden_only_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                ensure_memory_tables(conn)
+                set_test_memory_projection_clean(conn)
+                empty_omissions = find_omitted_relevant_memories(
+                    conn,
+                    targets=["Oracle probe"],
+                    view="player",
+                    limit=4,
+                )
+                insert_test_memory(
+                    conn,
+                    id="memory:hidden-only-oracle",
+                    title="Oracle probe",
+                    visibility_mode="maintenance",
+                )
+                hidden_only_omissions = find_omitted_relevant_memories(
+                    conn,
+                    targets=["Oracle probe"],
+                    view="player",
+                    limit=4,
+                )
+
+                conn.execute("delete from memory_summaries")
+                insert_test_memory(
+                    conn,
+                    id="memory:raw-player-metadata",
+                    title="Raw metadata probe",
+                    source_event_ids_json=json.dumps(["event:seed"]),
+                    source_turn_ids_json=json.dumps(["turn:seed"]),
+                    summary_type="resident_ai",
+                    freshness_evidence_json=json.dumps(
+                        {
+                            "current_turn_id": "turn:seed",
+                            "private_ai_reasoning": "must disappear",
+                            "source_event_ids": ["event:seed"],
+                            "source_turn_ids": ["turn:seed"],
+                        }
+                    ),
+                    derived_authority_json=json.dumps(
+                        {
+                            "authority": "save_fact",
+                            "fact_authority": True,
+                            "private_ai_reasoning": "must disappear",
+                        }
+                    ),
+                )
+                loaded = find_relevant_memories(
+                    conn,
+                    targets=["Raw metadata probe"],
+                    view="player",
+                    limit=4,
+                )
+                report_path = write_memory_report(campaign, conn)
+
+            report_text = report_path.read_text(encoding="utf-8")
+
+        self.assertEqual(
+            [(item["id"], item["stale_reason"]) for item in empty_omissions],
+            [(item["id"], item["stale_reason"]) for item in hidden_only_omissions],
+        )
+        self.assertEqual(len(loaded), 1)
+        serialized_row = json.dumps(dict(loaded[0]), ensure_ascii=False, sort_keys=True)
+        self.assertNotIn("private_ai_reasoning", serialized_row)
+        self.assertNotIn("save_fact", serialized_row)
+        self.assertEqual(
+            json.loads(loaded[0]["derived_authority_json"])["authority"],
+            "derived_context",
+        )
+        self.assertIn("- 来源事件：", report_text)
+        self.assertIn("event:seed", report_text)
+        self.assertIn("- 来源回合：", report_text)
+        self.assertIn("- 新鲜度证据：", report_text)
+        self.assertIn("- 派生权威：", report_text)
+        self.assertIn("derived_context", report_text)
+        self.assertNotIn("private_ai_reasoning", report_text)
+
+    def test_corrupt_freshness_status_and_unresolved_evidence_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                ensure_memory_tables(conn)
+                conn.execute(
+                    """
+                    insert into memory_summaries
+                    (id, kind, subject_id, title, summary, key_points_json, source_event_ids_json,
+                     source_turn_ids_json, valid_from_turn, valid_to_turn, summary_type, visibility_mode,
+                     freshness_status, freshness_turn_id, stale_reason, freshness_evidence_json,
+                     derived_authority_json, updated_at)
+                    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "memory:corrupt-freshness",
+                        "world",
+                        None,
+                        "Corrupt freshness memory",
+                        "Must not load as fresh.",
+                        "[]",
+                        "[]",
+                        "[]",
+                        None,
+                        None,
+                        "deterministic_world",
+                        "player",
+                        "private_ai_reasoning: fresh",
+                        None,
+                        "",
+                        json.dumps({"current_turn_id": "turn:not-real"}),
+                        json.dumps({"authority": "derived_context", "fact_authority": False}),
+                        "2026-07-10T00:00:00+00:00",
+                    ),
+                )
+                set_test_memory_projection_clean(conn)
+
+                loaded = find_relevant_memories(
+                    conn,
+                    targets=["Corrupt freshness memory"],
+                    view="player",
+                    limit=4,
+                )
+                omitted = find_omitted_relevant_memories(
+                    conn,
+                    targets=["Corrupt freshness memory"],
+                    view="player",
+                    limit=4,
+                )
+
+        self.assertEqual(loaded, [])
+        self.assertFalse(any(item["id"] == "memory:corrupt-freshness" for item in omitted))
+        self.assertEqual(omitted[0]["stale_reason"], "memory_summary_omitted")
+
+    def test_memory_freshness_rejects_future_missing_invalid_and_unresolved_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                ensure_memory_tables(conn)
+                conn.executemany(
+                    """
+                    insert into turns(id, session_id, user_text, intent, summary, changed, created_at)
+                    values(?, 's', 'u', 'note', 'summary', 1, ?)
+                    """,
+                    [
+                        ("turn:future-memory", "2099-01-01T00:00:00+00:00"),
+                        ("turn:with space", "2026-07-10T00:00:00+00:00"),
+                        ("turn:offset-a", "2024-01-01T01:00:00+01:00"),
+                        ("turn:offset-b", "2024-01-01T00:30:00+00:00"),
+                        ("turn:valid-created", "2024-01-01T00:00:00+00:00"),
+                        ("turn:invalid-created", "zzzz"),
+                    ],
+                )
+                conn.execute(
+                    """
+                    insert or replace into projection_state
+                    (name, version, last_turn_id, status, updated_at, last_error)
+                    values('memory', 1, 'turn:seed', 'clean', '2026-07-10T00:00:00+00:00', null)
+                    """
+                )
+                future_row = insert_test_memory(
+                    conn,
+                    id="memory:future-evidence",
+                    freshness_turn_id="turn:future-memory",
+                )
+                space_row = insert_test_memory(
+                    conn,
+                    id="memory:space-evidence",
+                    freshness_turn_id="turn:with space",
+                    freshness_evidence_json="{}",
+                )
+                unresolved_row = insert_test_memory(
+                    conn,
+                    id="memory:unresolved-source",
+                    source_event_ids_json=json.dumps(["event:not-real"]),
+                )
+                deep_row = insert_test_memory(
+                    conn,
+                    id="memory:deep-evidence",
+                    freshness_turn_id=None,
+                    freshness_evidence_json="[" * 2000 + "]" * 2000,
+                )
+                upsert_entity(
+                    conn,
+                    {
+                        "id": "item:missing-update-turn",
+                        "type": "item",
+                        "name": "Missing Update Turn",
+                        "status": "active",
+                        "visibility": "known",
+                        "summary": "Broken update evidence.",
+                    },
+                )
+                conn.commit()
+                conn.execute("pragma foreign_keys = off")
+                conn.execute(
+                    "update entities set updated_turn_id = '' where id = 'item:missing-update-turn'"
+                )
+                conn.commit()
+                conn.execute("pragma foreign_keys = on")
+                subject_row = insert_test_memory(
+                    conn,
+                    id="memory:missing-subject-update",
+                    kind="project",
+                    subject_id="item:missing-update-turn",
+                    summary_type="deterministic_project",
+                )
+                long_turn_id = "turn:" + "x" * 10000
+                conn.execute(
+                    """
+                    insert into turns(id, session_id, user_text, intent, summary, changed, created_at)
+                    values(?, 's', 'u', 'note', 'long', 1, '2026-07-10T00:00:00+00:00')
+                    """,
+                    (long_turn_id,),
+                )
+                long_evidence = memory_row_freshness_evidence(
+                    {
+                        "freshness_evidence_json": json.dumps(
+                            {"current_turn_id": long_turn_id}
+                        )
+                    },
+                    conn=conn,
+                    view="player",
+                )
+
+                results = {
+                    "future": memory_row_freshness(conn, future_row, view="player"),
+                    "space": memory_row_freshness(conn, space_row, view="player"),
+                    "unresolved": memory_row_freshness(conn, unresolved_row, view="player"),
+                    "deep": memory_row_freshness(conn, deep_row, view="player"),
+                    "subject": memory_row_freshness(conn, subject_row, view="player"),
+                }
+                offset_order = turn_is_after(conn, "turn:offset-a", "turn:offset-b")
+                latest_valid = latest_turn_id(
+                    conn,
+                    ["turn:valid-created", "turn:invalid-created"],
+                )
+
+        self.assertTrue(all(item["status"] == "stale" for item in results.values()))
+        self.assertFalse(offset_order)
+        self.assertEqual(latest_valid, "turn:valid-created")
+        self.assertEqual(long_evidence, {})
+
+    def test_memory_freshness_checks_every_provenance_turn_and_raw_evidence_shape(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                ensure_memory_tables(conn)
+                conn.execute(
+                    """
+                    insert into turns(id, session_id, user_text, intent, summary, changed, created_at)
+                    values('turn:future-provenance', 's', 'future', 'note', 'future', 1,
+                           '2099-01-01T00:00:00+00:00')
+                    """
+                )
+                conn.execute(
+                    """
+                    insert into events
+                    (id, turn_id, game_time, type, title, summary, payload_json, source, created_at)
+                    values('event:future-provenance', 'turn:future-provenance', '', 'note', 'future',
+                           'future', '{}', 'test', '2099-01-01T00:00:00+00:00')
+                    """
+                )
+                future_evidence = insert_test_memory(
+                    conn,
+                    id="memory:future-evidence-only",
+                    freshness_evidence_json=json.dumps(
+                        {"current_turn_id": "turn:future-provenance"}
+                    ),
+                )
+                future_event = insert_test_memory(
+                    conn,
+                    id="memory:future-event-turn",
+                    source_event_ids_json=json.dumps(["event:future-provenance"]),
+                    freshness_evidence_json=json.dumps(
+                        {
+                            "current_turn_id": "turn:seed",
+                            "source_event_ids": ["event:future-provenance"],
+                        }
+                    ),
+                )
+                mixed_invalid = insert_test_memory(
+                    conn,
+                    id="memory:mixed-invalid-evidence",
+                    freshness_evidence_json=json.dumps(
+                        {"source_turn_ids": ["turn:seed", "not-a-turn"]}
+                    ),
+                )
+                set_test_memory_projection_clean(conn)
+
+                results = [
+                    memory_row_freshness(conn, future_evidence, view="player"),
+                    memory_row_freshness(conn, future_event, view="player"),
+                    memory_row_freshness(conn, mixed_invalid, view="player"),
+                ]
+
+        self.assertTrue(all(item["status"] == "stale" for item in results))
+
+    def test_corrupt_provenance_and_blob_source_rows_fail_closed_for_player(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                ensure_memory_tables(conn)
+                conn.execute(
+                    """
+                    insert into events
+                    (id, turn_id, game_time, type, title, summary, payload_json, source, created_at)
+                    values('event:blob-provenance', 'turn:seed', '', 'note', 'visible', 'visible', ?,
+                           'test', '2026-07-10T00:00:00+00:00')
+                    """,
+                    (sqlite3.Binary(b"private_ai_reasoning: secret"),),
+                )
+                deep_row = {
+                    "id": "memory:deep-hidden-scan",
+                    "subject_id": None,
+                    "title": "Deep metadata",
+                    "summary": "Visible",
+                    "key_points_json": "[]",
+                    "source_event_ids_json": "[]",
+                    "source_turn_ids_json": "[]",
+                    "freshness_evidence_json": "[" * 2000 + "]" * 2000,
+                }
+                blob_source_row = {
+                    "id": "memory:blob-source-row",
+                    "subject_id": None,
+                    "title": "Blob source",
+                    "summary": "Visible",
+                    "key_points_json": "[]",
+                    "source_event_ids_json": json.dumps(["event:blob-provenance"]),
+                    "source_turn_ids_json": "[]",
+                    "freshness_evidence_json": "{}",
+                }
+
+                deep_is_hidden = memory_row_has_hidden_refs(conn, deep_row)
+                blob_is_hidden = memory_row_has_hidden_refs(conn, blob_source_row)
+
+        self.assertTrue(deep_is_hidden)
+        self.assertTrue(blob_is_hidden)
+
+    def test_player_omission_boundary_sanitizes_reason_projection_turn_and_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                ensure_memory_tables(conn)
+                conn.execute(
+                    """
+                    update projection_state
+                    set status='failed', last_turn_id='turn:private_ai_reasoning.secret',
+                        last_error='private_ai_reasoning: projection-secret'
+                    where name='memory'
+                    """
+                )
+                projection_omission = find_omitted_relevant_memories(
+                    conn,
+                    targets=["anything"],
+                    view="player",
+                    limit=4,
+                )[0]
+
+                set_test_memory_projection_clean(conn)
+                insert_test_memory(
+                    conn,
+                    id=sqlite3.Binary(b"private-memory-id"),
+                    title="Unsafe omission",
+                    freshness_status="stale",
+                    stale_reason="private_ai_reasoning: stale-secret",
+                )
+                row_omission = find_omitted_relevant_memories(
+                    conn,
+                    targets=["Unsafe omission"],
+                    view="player",
+                    limit=4,
+                )[0]
+
+        projection_json = json.dumps(projection_omission, ensure_ascii=False)
+        self.assertNotIn("private_ai_reasoning", projection_json)
+        self.assertIsInstance(row_omission["id"], str)
+        self.assertLessEqual(len(row_omission["id"]), 256)
+        self.assertEqual(row_omission["stale_reason"], "memory_summary_omitted")
+
+    def test_memory_schema_contract_rejects_bad_base_columns_and_helper_columns(self) -> None:
+        bad_base = sqlite3.connect(":memory:")
+        bad_base.row_factory = sqlite3.Row
+        bad_base.executescript(
+            """
+            create table memory_summaries (
+              id text not null,
+              kind text not null,
+              subject_id text,
+              title text not null,
+              summary text not null,
+              key_points_json text not null default '[]',
+              source_event_ids_json text not null default '[]',
+              source_turn_ids_json text not null default '[]',
+              valid_from_turn text,
+              valid_to_turn text,
+              summary_type text not null default 'deterministic',
+              visibility_mode text not null default 'player',
+              freshness_status text not null default 'fresh',
+              freshness_turn_id text,
+              stale_reason text not null default '',
+              freshness_evidence_json text not null default '{}',
+              derived_authority_json text not null default '{"authority":"derived_context","fact_authority":false}',
+              updated_at text not null
+            );
+            """
+        )
+        self.assertFalse(memory_metadata_columns_present(bad_base))
+        bad_base.close()
+
+        bad_helper = sqlite3.connect(":memory:")
+        bad_helper.row_factory = sqlite3.Row
+        bad_helper.executescript(
+            """
+            create table entities(id text primary key);
+            create table turns(id text primary key);
+            create table memory_summaries (
+              id text primary key,
+              kind text not null,
+              subject_id text,
+              title text not null,
+              summary text not null,
+              key_points_json text not null default '[]',
+              source_event_ids_json text not null default '[]',
+              source_turn_ids_json text not null default '[]',
+              valid_from_turn text,
+              valid_to_turn text,
+              summary_type integer not null default 99,
+              updated_at text not null
+            );
+            """
+        )
+        with self.assertRaisesRegex(sqlite3.OperationalError, "incompatible existing column"):
+            ensure_memory_tables(bad_helper)
+        bad_helper.close()
+
+    def test_composite_projection_state_primary_key_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                conn.execute("drop table projection_state")
+                conn.execute(
+                    """
+                    create table projection_state (
+                      name text not null,
+                      shard text not null,
+                      version integer not null,
+                      last_turn_id text,
+                      status text not null,
+                      updated_at text not null,
+                      last_error text,
+                      primary key(name, shard)
+                    )
+                    """
+                )
+                conn.execute(
+                    """
+                    insert into projection_state
+                    (name, shard, version, last_turn_id, status, updated_at, last_error)
+                    values('memory', 'only', 1, 'turn:seed', 'clean',
+                           '2026-07-10T00:00:00+00:00', null)
+                    """
+                )
+
+                health = memory_projection_health(conn)
+
+        self.assertEqual(health["status"], "stale")
+
+    def test_memory_timestamp_overflow_is_incomparable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                conn.executemany(
+                    """
+                    insert into turns(id, session_id, user_text, intent, summary, changed, created_at)
+                    values(?, 's', 'u', 'note', 'summary', 1, ?)
+                    """,
+                    [
+                        ("turn:underflow", "0001-01-01T00:00:00+14:00"),
+                        ("turn:normal", "2026-07-10T00:00:00+00:00"),
+                    ],
+                )
+
+                comparison = turn_is_after(conn, "turn:underflow", "turn:normal")
+
+        self.assertIsNone(comparison)
+
+    def test_memory_query_limits_are_bounded_before_sqlite_binding(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                ensure_memory_tables(conn)
+                set_test_memory_projection_clean(conn)
+                loaded = find_relevant_memories(
+                    conn,
+                    targets=["anything"],
+                    view="player",
+                    limit=2**100,
+                )
+                omitted = find_omitted_relevant_memories(
+                    conn,
+                    targets=["anything"],
+                    view="player",
+                    limit=2**100,
+                )
+
+        self.assertLessEqual(len(loaded), 256)
+        self.assertLessEqual(len(omitted), 256)
+
+    def test_memory_overfetch_stops_at_total_row_scan_cap(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                ensure_memory_tables(conn)
+                set_test_memory_projection_clean(conn)
+                for index in range(6):
+                    insert_test_memory(
+                        conn,
+                        id=f"memory:scan-cap-{index}",
+                        title="scan cap candidate",
+                        visibility_mode="maintenance",
+                    )
+                statements: list[str] = []
+                conn.set_trace_callback(statements.append)
+                with (
+                    mock.patch.object(
+                        memory_module,
+                        "MAX_MEMORY_ROWS_SCANNED",
+                        2,
+                    ),
+                    mock.patch(
+                        "rpg_engine.memory.memory_projection_health",
+                        return_value={
+                            "status": "clean",
+                            "last_turn_id": "turn:seed",
+                            "last_error": None,
+                            "updated_at": "2026-07-10T00:00:00+00:00",
+                        },
+                    ),
+                ):
+                    omitted = find_omitted_relevant_memories(
+                        conn,
+                        targets=["scan cap candidate"],
+                        view="player",
+                        limit=4,
+                    )
+                conn.set_trace_callback(None)
+
+        paged_selects = [
+            statement
+            for statement in statements
+            if "from main.memory_summaries m" in statement.lower()
+            and "limit" in statement.lower()
+        ]
+        self.assertEqual(len(paged_selects), 1)
+        self.assertEqual(omitted[0]["id"], "memory:fallback:unavailable")
+
+    def test_save_patch_dirties_memory_and_omits_same_turn_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                rebuild_memory_summaries(campaign, conn)
+                before = find_relevant_memories(
+                    conn,
+                    targets=["pc:traveler"],
+                    view="player",
+                    limit=8,
+                )
+
+            result = apply_save_patch(
+                campaign,
+                {
+                    "patch_schema_version": "1",
+                    "reason": "same-turn authoritative fact update",
+                    "operations": [
+                        {
+                            "op": "set_entity_summary",
+                            "entity_id": "pc:traveler",
+                            "summary": "Authoritative same-turn update.",
+                        }
+                    ],
+                },
+                backup=False,
+            )
+            with connect(campaign) as conn:
+                fact = conn.execute(
+                    "select summary from entities where id='pc:traveler'"
+                ).fetchone()[0]
+                health = memory_projection_health(conn)
+                loaded = find_relevant_memories(
+                    conn,
+                    targets=["pc:traveler"],
+                    view="player",
+                    limit=8,
+                )
+                omitted = find_omitted_relevant_memories(
+                    conn,
+                    targets=["pc:traveler"],
+                    view="player",
+                    limit=8,
+                )
+
+        self.assertTrue(before)
+        self.assertTrue(result.ok, result.render())
+        self.assertEqual(fact, "Authoritative same-turn update.")
+        self.assertEqual(health["status"], "dirty")
+        self.assertEqual(loaded, [])
+        self.assertEqual(omitted[0]["stale_reason"], "projection_memory_dirty")
+
+    def test_save_patch_commits_fact_when_projection_metadata_is_blocked(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                conn.execute(
+                    """
+                    create trigger memory_projection_metadata_block
+                    before update on projection_state
+                    when new.name='memory'
+                    begin
+                      select raise(abort, 'projection metadata blocked');
+                    end
+                    """
+                )
+                conn.commit()
+
+            result = apply_save_patch(
+                campaign,
+                {
+                    "patch_schema_version": "1",
+                    "reason": "projection metadata must not own facts",
+                    "operations": [
+                        {
+                            "op": "set_entity_summary",
+                            "entity_id": "pc:traveler",
+                            "summary": "Fact committed despite projection metadata failure.",
+                        }
+                    ],
+                },
+                backup=False,
+            )
+            with connect(campaign) as conn:
+                summary = conn.execute(
+                    "select summary from entities where id='pc:traveler'"
+                ).fetchone()[0]
+                health = memory_projection_health(conn)
+
+        self.assertEqual(
+            summary,
+            "Fact committed despite projection metadata failure.",
+        )
+        self.assertEqual(result.operations_applied, 1)
+        self.assertEqual(health["status"], "stale")
+
+    def test_save_patch_dirties_memory_when_outbox_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                rebuild_memory_summaries(campaign, conn)
+                conn.execute("drop table main.outbox")
+                conn.commit()
+
+            result = apply_save_patch(
+                campaign,
+                {
+                    "patch_schema_version": "1",
+                    "reason": "outbox is unrelated to memory invalidation",
+                    "operations": [
+                        {
+                            "op": "set_entity_summary",
+                            "entity_id": "pc:traveler",
+                            "summary": "Fact survives missing outbox.",
+                        }
+                    ],
+                },
+                backup=False,
+            )
+            with connect(campaign) as conn:
+                summary = conn.execute(
+                    "select summary from main.entities where id='pc:traveler'"
+                ).fetchone()[0]
+                memory_status = conn.execute(
+                    "select status from main.projection_state where name='memory'"
+                ).fetchone()[0]
+
+        self.assertEqual(result.operations_applied, 1)
+        self.assertEqual(summary, "Fact survives missing outbox.")
+        self.assertEqual(memory_status, "dirty")
+
+    def test_player_memory_row_allowlist_and_kind_canonicalization(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                ensure_memory_tables(conn)
+                conn.execute(
+                    "alter table memory_summaries add column private_ai_reasoning text"
+                )
+                insert_test_memory(
+                    conn,
+                    id="memory:extended-player-row",
+                    kind="private_ai_reasoning:secret-token",
+                    title="Extended row probe",
+                )
+                conn.execute(
+                    """
+                    update memory_summaries
+                    set private_ai_reasoning='secret-token'
+                    where id='memory:extended-player-row'
+                    """
+                )
+                set_test_memory_projection_clean(conn)
+                loaded = find_relevant_memories(
+                    conn,
+                    targets=["Extended row probe"],
+                    view="player",
+                    limit=4,
+                )
+                raw = conn.execute(
+                    "select * from memory_summaries where id='memory:extended-player-row'"
+                ).fetchone()
+                rendered = render_memory_section([raw], conn, view="player")
+
+        self.assertEqual(len(loaded), 1)
+        self.assertEqual(loaded[0]["kind"], "unknown")
+        self.assertNotIn("private_ai_reasoning", loaded[0])
+        self.assertNotIn("secret-token", json.dumps(loaded[0], ensure_ascii=False))
+        self.assertNotIn("secret-token", rendered)
+
+    def test_source_turn_hidden_locations_fail_closed_direct_and_event_linked(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                ensure_memory_tables(conn)
+                upsert_entity(
+                    conn,
+                    {
+                        "id": "loc:hidden-memory-source",
+                        "type": "location",
+                        "name": "Hidden Source Location",
+                        "status": "active",
+                        "visibility": "hidden",
+                        "summary": "Hidden.",
+                    },
+                )
+                conn.execute(
+                    """
+                    insert into turns
+                    (id, session_id, user_text, intent, location_before, location_after,
+                     summary, changed, created_at)
+                    values('turn:hidden-location-source', 's', 'safe text', 'note',
+                           'loc:hidden-memory-source', 'loc:start', 'safe summary', 1,
+                           '2024-01-01T00:00:00+00:00')
+                    """
+                )
+                conn.execute(
+                    """
+                    insert into events
+                    (id, turn_id, game_time, type, title, summary, payload_json, source, created_at)
+                    values('event:hidden-location-source', 'turn:hidden-location-source', '',
+                           'note', 'safe', 'safe', '{}', 'test',
+                           '2024-01-01T00:00:00+00:00')
+                    """
+                )
+                direct = insert_test_memory(
+                    conn,
+                    id="memory:hidden-location-direct",
+                    source_turn_ids_json=json.dumps(["turn:hidden-location-source"]),
+                )
+                linked = insert_test_memory(
+                    conn,
+                    id="memory:hidden-location-event",
+                    source_event_ids_json=json.dumps(["event:hidden-location-source"]),
+                )
+
+                direct_hidden = memory_row_has_hidden_refs(conn, direct)
+                linked_hidden = memory_row_has_hidden_refs(conn, linked)
+
+        self.assertTrue(direct_hidden)
+        self.assertTrue(linked_hidden)
+
+    def test_memory_validity_window_expiry_and_reverse_order_are_stale(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                ensure_memory_tables(conn)
+                conn.execute(
+                    """
+                    insert into turns(id, session_id, user_text, intent, summary, changed, created_at)
+                    values('turn:validity-later', 's', 'later', 'note', 'later', 1,
+                           '2099-01-01T00:00:00+00:00')
+                    """
+                )
+                conn.execute(
+                    "update meta set value='turn:validity-later' where key='current_turn_id'"
+                )
+                expired = insert_test_memory(
+                    conn,
+                    id="memory:expired-window",
+                    freshness_turn_id="turn:validity-later",
+                    valid_to_turn="turn:seed",
+                    freshness_evidence_json=json.dumps(
+                        {"current_turn_id": "turn:validity-later"}
+                    ),
+                )
+                reversed_window = insert_test_memory(
+                    conn,
+                    id="memory:reversed-window",
+                    freshness_turn_id="turn:validity-later",
+                    valid_from_turn="turn:validity-later",
+                    valid_to_turn="turn:seed",
+                    freshness_evidence_json=json.dumps(
+                        {"current_turn_id": "turn:validity-later"}
+                    ),
+                )
+                set_test_memory_projection_clean(
+                    conn,
+                    last_turn_id="turn:validity-later",
+                )
+
+                expired_status = memory_row_freshness(conn, expired, view="player")
+                reversed_status = memory_row_freshness(
+                    conn,
+                    reversed_window,
+                    view="player",
+                )
+
+        self.assertEqual(expired_status["status"], "stale")
+        self.assertEqual(reversed_status["status"], "stale")
+
+    def test_trusted_rebuild_marker_requires_resolvable_provenance(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                ensure_memory_tables(conn)
+                insert_test_memory(
+                    conn,
+                    id="memory:unresolved-trusted-marker",
+                    freshness_evidence_json=json.dumps(
+                        {
+                            "basis": "deterministic_rebuild",
+                            "current_turn_id": "turn:not-real",
+                        }
+                    ),
+                    derived_authority_json=json.dumps(
+                        {
+                            "authority": "derived_context",
+                            "fact_authority": False,
+                            "fact_source": "data/game.sqlite",
+                            "summary_overrides_facts": False,
+                        }
+                    ),
+                )
+                set_test_memory_projection_clean(conn)
+                conn.execute(
+                    "delete from schema_migrations where id='0009_memory_summary_provenance'"
+                )
+
+                health = memory_projection_health(conn)
+
+        self.assertEqual(health["status"], "stale")
+
+    def test_memory_lookup_rechecks_projection_snapshot_before_return(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                ensure_memory_tables(conn)
+                insert_test_memory(conn, id="memory:projection-toctou")
+                set_test_memory_projection_clean(conn)
+                with mock.patch(
+                    "rpg_engine.memory.memory_projection_health",
+                    side_effect=[
+                        {
+                            "status": "clean",
+                            "last_turn_id": "turn:seed",
+                            "last_error": None,
+                        },
+                        {
+                            "status": "dirty",
+                            "last_turn_id": "turn:next",
+                            "last_error": None,
+                        },
+                    ],
+                ):
+                    loaded = find_relevant_memories(
+                        conn,
+                        targets=["Test memory"],
+                        view="player",
+                        limit=4,
+                    )
+
+        self.assertEqual(loaded, [])
+
+    def test_memory_provenance_queries_are_bounded_and_reference_count_is_capped(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                ensure_memory_tables(conn)
+                turn_ids = [f"turn:bounded-source-{index:03d}" for index in range(129)]
+                conn.executemany(
+                    """
+                    insert into turns(id, session_id, user_text, intent, summary, changed, created_at)
+                    values(?, 's', 'safe', 'note', 'safe', 1, ?)
+                    """,
+                    [
+                        (turn_id, f"2024-01-{1 + index % 28:02d}T00:00:00+00:00")
+                        for index, turn_id in enumerate(turn_ids)
+                    ],
+                )
+                bounded = insert_test_memory(
+                    conn,
+                    id="memory:bounded-provenance",
+                    source_turn_ids_json=json.dumps(turn_ids[:64]),
+                )
+                over_limit = insert_test_memory(
+                    conn,
+                    id="memory:over-limit-provenance",
+                    source_turn_ids_json=json.dumps(turn_ids),
+                )
+                set_test_memory_projection_clean(conn)
+                statements: list[str] = []
+                conn.set_trace_callback(statements.append)
+                bounded_status = memory_row_freshness(conn, bounded, view="player")
+                conn.set_trace_callback(None)
+                over_limit_status = memory_row_freshness(
+                    conn,
+                    over_limit,
+                    view="maintenance",
+                )
+
+        selects = [
+            statement
+            for statement in statements
+            if statement.lstrip().lower().startswith("select")
+        ]
+        self.assertEqual(bounded_status["status"], "fresh")
+        self.assertLessEqual(len(selects), 200)
+        self.assertEqual(over_limit_status["status"], "stale")
+
+    def test_direct_memory_rebuild_does_not_overwrite_new_dirty_generation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                original_write_report = write_memory_report
+
+                def dirty_after_rows(*args: object, **kwargs: object) -> Path:
+                    path = original_write_report(*args, **kwargs)
+                    mark_projections_dirty(conn, ["memory"], turn_id="turn:seed")
+                    conn.commit()
+                    return path
+
+                with mock.patch(
+                    "rpg_engine.memory.write_memory_report",
+                    side_effect=dirty_after_rows,
+                ):
+                    with self.assertRaisesRegex(
+                        RuntimeError,
+                        "generation changed during rebuild completion",
+                    ):
+                        rebuild_memory_summaries(campaign, conn)
+                health = memory_projection_health(conn)
+
+        self.assertEqual(health["status"], "dirty")
+
+    def test_memory_lookup_detects_clean_generation_aba(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                ensure_memory_tables(conn)
+                insert_test_memory(conn, id="memory:projection-aba")
+                set_test_memory_projection_clean(conn)
+                with mock.patch(
+                    "rpg_engine.memory.memory_projection_health",
+                    side_effect=[
+                        {
+                            "status": "clean",
+                            "last_turn_id": "turn:seed",
+                            "last_error": None,
+                            "updated_at": "2026-07-10T00:00:00+00:00",
+                        },
+                        {
+                            "status": "clean",
+                            "last_turn_id": "turn:seed",
+                            "last_error": None,
+                            "updated_at": "2026-07-10T00:00:01+00:00",
+                        },
+                    ],
+                ):
+                    loaded = find_relevant_memories(
+                        conn,
+                        targets=["Test memory"],
+                        view="player",
+                        limit=4,
+                    )
+
+        self.assertEqual(loaded, [])
+
+    def test_maintenance_memory_lookup_rejects_blob_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                ensure_memory_tables(conn)
+                insert_test_memory(
+                    conn,
+                    id="memory:maintenance-blob-row",
+                    title=sqlite3.Binary(b"private-title"),
+                    updated_at=sqlite3.Binary(b"invalid-time"),
+                )
+                set_test_memory_projection_clean(conn)
+
+                loaded = find_relevant_memories(
+                    conn,
+                    targets=["anything"],
+                    view="maintenance",
+                    limit=4,
+                )
+
+        self.assertEqual(loaded, [])
+
+    def test_memory_schema_rejects_composite_primary_key_and_required_extension(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                ensure_memory_tables(conn)
+                conn.execute(
+                    "alter table memory_summaries add column tenant text not null"
+                )
+                required_extension_ready = memory_metadata_columns_present(conn)
+
+                conn.execute("drop table memory_summaries")
+                conn.execute(
+                    """
+                    create table memory_summaries (
+                      id text not null,
+                      shard text not null default 'main',
+                      kind text not null,
+                      subject_id text,
+                      title text not null,
+                      summary text not null,
+                      key_points_json text not null default '[]',
+                      source_event_ids_json text not null default '[]',
+                      source_turn_ids_json text not null default '[]',
+                      valid_from_turn text,
+                      valid_to_turn text,
+                      summary_type text not null default 'deterministic',
+                      visibility_mode text not null default 'player',
+                      freshness_status text not null default 'fresh',
+                      freshness_turn_id text,
+                      stale_reason text not null default '',
+                      freshness_evidence_json text not null default '{}',
+                      derived_authority_json text not null default '{"authority":"derived_context","fact_authority":false}',
+                      updated_at text not null,
+                      primary key(id, shard)
+                    )
+                    """
+                )
+                composite_ready = memory_metadata_columns_present(conn)
+
+        self.assertFalse(required_extension_ready)
+        self.assertFalse(composite_ready)
+
+    def test_memory_schema_rejects_unicode_and_write_blocking_extensions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                ensure_memory_tables(conn)
+
+                def contract_after(statement: str) -> bool:
+                    conn.execute("savepoint memory_contract_extension")
+                    try:
+                        conn.execute(statement)
+                        return memory_metadata_columns_present(conn)
+                    finally:
+                        conn.execute("rollback to memory_contract_extension")
+                        conn.execute("release memory_contract_extension")
+
+                unicode_required = contract_after(
+                    'alter table memory_summaries add column "ſummary" text not null'
+                )
+                unique_non_identity = contract_after(
+                    "create unique index memory_unique_updated_at "
+                    "on memory_summaries(updated_at)"
+                )
+                partial_identity = contract_after(
+                    "create unique index memory_partial_identity on memory_summaries(id) "
+                    "where kind='world'"
+                )
+                expression_identity = contract_after(
+                    "create unique index memory_expression_identity "
+                    "on memory_summaries(lower(id))"
+                )
+                generated_poison = contract_after(
+                    "alter table memory_summaries add column poison text "
+                    "generated always as (null) virtual not null"
+                )
+                blocking_trigger = contract_after(
+                    "create trigger memory_blocking_insert before insert on memory_summaries "
+                    "begin select raise(abort, 'blocked'); end"
+                )
+                non_unique_expression = contract_after(
+                    "create index memory_expression_read on "
+                    "memory_summaries(json_extract(summary, '$.x'))"
+                )
+                non_unique_partial = contract_after(
+                    "create index memory_partial_read on memory_summaries(kind) "
+                    "where length(summary) > 0"
+                )
+                commented_check = contract_after(
+                    "alter table memory_summaries add column check_poison text not null "
+                    "default 'x' check /* gap */ (check_poison='y')"
+                )
+                temp_trigger = contract_after(
+                    "create temp trigger memory_temp_block before insert on memory_summaries "
+                    "begin select raise(abort, 'temp blocked'); end"
+                )
+
+                schema_sql = str(
+                    conn.execute(
+                        "select sql from sqlite_master "
+                        "where type='table' and name='memory_summaries'"
+                    ).fetchone()[0]
+                )
+                conn.execute(
+                    "alter table memory_summaries rename to memory_summaries_original"
+                )
+                poison_schema = schema_sql.replace(
+                    "foreign key(subject_id)",
+                    "poison_default text default (poison()), "
+                    "foreign key(subject_id)",
+                    1,
+                )
+                self.assertNotEqual(poison_schema, schema_sql)
+                conn.execute(poison_schema)
+                conn.create_function(
+                    "poison",
+                    0,
+                    lambda: (_ for _ in ()).throw(
+                        RuntimeError("poison default ran")
+                    ),
+                )
+                unsafe_default = memory_metadata_columns_present(conn)
+                with self.assertRaises(sqlite3.Error):
+                    insert_test_memory(
+                        conn,
+                        id="memory:unsafe-default-probe",
+                    )
+
+        self.assertFalse(unicode_required)
+        self.assertFalse(unique_non_identity)
+        self.assertFalse(partial_identity)
+        self.assertFalse(expression_identity)
+        self.assertFalse(generated_poison)
+        self.assertFalse(blocking_trigger)
+        self.assertFalse(non_unique_expression)
+        self.assertFalse(non_unique_partial)
+        self.assertFalse(commented_check)
+        self.assertFalse(temp_trigger)
+        self.assertFalse(unsafe_default)
+
+    def test_trusted_rebuild_marker_validates_row_subject(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                ensure_memory_tables(conn)
+                conn.commit()
+                conn.execute("pragma foreign_keys=off")
+                insert_test_memory(
+                    conn,
+                    id="memory:missing-trusted-subject",
+                    kind="project",
+                    subject_id="item:not-real",
+                    summary_type="deterministic_project",
+                    freshness_evidence_json=json.dumps(
+                        {
+                            "basis": "deterministic_rebuild",
+                            "current_turn_id": "turn:seed",
+                        }
+                    ),
+                    derived_authority_json=json.dumps(
+                        {
+                            "authority": "derived_context",
+                            "fact_authority": False,
+                            "fact_source": "data/game.sqlite",
+                            "summary_overrides_facts": False,
+                        }
+                    ),
+                )
+                conn.commit()
+                conn.execute("pragma foreign_keys=on")
+                set_test_memory_projection_clean(conn)
+                conn.execute(
+                    "delete from schema_migrations where id='0009_memory_summary_provenance'"
+                )
+
+                health = memory_projection_health(conn)
+
+        self.assertEqual(health["status"], "stale")
+
+    def test_future_validity_bounds_are_separate_from_freshness(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                ensure_memory_tables(conn)
+                conn.execute(
+                    """
+                    insert into turns(id, session_id, user_text, intent, summary, changed, created_at)
+                    values('turn:future-validity-bound', 's', 'future', 'note', 'future', 1,
+                           '2099-01-01T00:00:00+00:00')
+                    """
+                )
+                future_end = insert_test_memory(
+                    conn,
+                    id="memory:future-valid-to",
+                    valid_to_turn="turn:future-validity-bound",
+                    freshness_evidence_json=json.dumps(
+                        {
+                            "current_turn_id": "turn:seed",
+                            "valid_to_turn": "turn:future-validity-bound",
+                        }
+                    ),
+                )
+                future_start = insert_test_memory(
+                    conn,
+                    id="memory:future-valid-from",
+                    valid_from_turn="turn:future-validity-bound",
+                    freshness_evidence_json=json.dumps(
+                        {
+                            "current_turn_id": "turn:seed",
+                            "valid_from_turn": "turn:future-validity-bound",
+                        }
+                    ),
+                )
+                mismatched_bound = insert_test_memory(
+                    conn,
+                    id="memory:mismatched-validity-evidence",
+                    valid_to_turn="turn:future-validity-bound",
+                    freshness_evidence_json=json.dumps(
+                        {"current_turn_id": "turn:seed"}
+                    ),
+                )
+                bound_only = insert_test_memory(
+                    conn,
+                    id="memory:validity-bound-only",
+                    freshness_turn_id=None,
+                    valid_to_turn="turn:future-validity-bound",
+                    freshness_evidence_json=json.dumps(
+                        {"valid_to_turn": "turn:future-validity-bound"}
+                    ),
+                )
+                bound_scalar = insert_test_memory(
+                    conn,
+                    id="memory:validity-bound-scalar",
+                    freshness_turn_id="turn:seed",
+                    valid_from_turn="turn:seed",
+                    freshness_evidence_json=json.dumps(
+                        {
+                            "basis": "deterministic_rebuild",
+                            "valid_from_turn": "turn:seed",
+                        }
+                    ),
+                )
+                set_test_memory_projection_clean(conn)
+
+                end_status = memory_row_freshness(conn, future_end, view="player")
+                start_status = memory_row_freshness(conn, future_start, view="player")
+                mismatched_status = memory_row_freshness(
+                    conn,
+                    mismatched_bound,
+                    view="player",
+                )
+                bound_only_status = memory_row_freshness(conn, bound_only, view="player")
+                bound_scalar_status = memory_row_freshness(
+                    conn,
+                    bound_scalar,
+                    view="player",
+                )
+
+        self.assertEqual(end_status["status"], "fresh")
+        self.assertEqual(start_status["status"], "stale")
+        self.assertEqual(start_status["reason"], "summary_not_yet_valid")
+        self.assertEqual(mismatched_status["status"], "stale")
+        self.assertEqual(
+            mismatched_status["reason"],
+            "invalid_summary_validity_window",
+        )
+        self.assertEqual(bound_only_status["status"], "stale")
+        self.assertEqual(bound_only_status["reason"], "missing_freshness_evidence")
+        self.assertEqual(bound_scalar_status["status"], "stale")
+        self.assertEqual(
+            bound_scalar_status["reason"],
+            "missing_freshness_evidence",
+        )
+
+    def test_trusted_memory_metadata_rejects_extra_authority_and_nonfinite_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                ensure_memory_tables(conn)
+                row = insert_test_memory(
+                    conn,
+                    id="memory:strict-metadata",
+                    freshness_evidence_json=json.dumps(
+                        {
+                            "basis": "deterministic_rebuild",
+                            "current_turn_id": "turn:seed",
+                            "subject_id": None,
+                            "subject_updated_turn_id": None,
+                            "source_event_ids": [],
+                            "source_turn_ids": [],
+                            "valid_from_turn": None,
+                            "valid_to_turn": None,
+                        }
+                    ),
+                    derived_authority_json=json.dumps(
+                        memory_module.DERIVED_MEMORY_AUTHORITY,
+                        sort_keys=True,
+                    ),
+                )
+                set_test_memory_projection_clean(conn)
+                self.assertTrue(memory_rows_have_trusted_provenance(conn))
+
+                conn.execute(
+                    "update main.memory_summaries set derived_authority_json=? where id=?",
+                    (
+                        json.dumps(
+                            {
+                                **memory_module.DERIVED_MEMORY_AUTHORITY,
+                                "trusted_override": True,
+                            },
+                            sort_keys=True,
+                        ),
+                        row["id"],
+                    ),
+                )
+                self.assertFalse(memory_rows_have_trusted_provenance(conn))
+
+                conn.execute(
+                    "update main.memory_summaries "
+                    "set derived_authority_json=?, freshness_evidence_json=? where id=?",
+                    (
+                        json.dumps(memory_module.DERIVED_MEMORY_AUTHORITY, sort_keys=True),
+                        '{"current_turn_id": NaN}',
+                        row["id"],
+                    ),
+                )
+                nonfinite_row = conn.execute(
+                    "select * from main.memory_summaries where id=?",
+                    (row["id"],),
+                ).fetchone()
+                nonfinite_trusted = memory_rows_have_trusted_provenance(conn)
+                nonfinite_status = memory_row_freshness(
+                    conn,
+                    nonfinite_row,
+                    view="player",
+                )["status"]
+
+        self.assertFalse(nonfinite_trusted)
+        self.assertEqual(nonfinite_status, "stale")
+
+    def test_player_memory_ids_reports_and_snapshot_publication_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                ensure_memory_tables(conn)
+                upsert_entity(
+                    conn,
+                    {
+                        "id": "item:veiled-auditor",
+                        "type": "item",
+                        "name": "VeiledAuditor",
+                        "status": "active",
+                        "visibility": "hidden",
+                        "summary": "hidden",
+                        "updated_turn_id": "turn:seed",
+                    },
+                )
+                insert_test_memory(
+                    conn,
+                    id="memory:VeiledAuditor",
+                    title="Visible-looking title",
+                    freshness_evidence_json=json.dumps(
+                        {"current_turn_id": "turn:seed"}
+                    ),
+                )
+                set_test_memory_projection_clean(conn)
+
+                loaded = find_relevant_memories(
+                    conn,
+                    targets=["Visible-looking title"],
+                    view="player",
+                    limit=4,
+                )
+                report_path = write_memory_report(campaign, conn)
+                report_text = report_path.read_text(encoding="utf-8")
+
+                conn.execute("create temp table entities(id text primary key)")
+                with self.assertRaisesRegex(sqlite3.OperationalError, "TEMP shadow"):
+                    write_memory_report(campaign, conn)
+                conn.execute("drop table temp.entities")
+
+                with mock.patch(
+                    "rpg_engine.memory.memory_projection_snapshot_change",
+                    return_value={"status": "dirty"},
+                ):
+                    with self.assertRaisesRegex(RuntimeError, "changed during report"):
+                        write_memory_report(campaign, conn)
+                changed_report = report_path.read_text(encoding="utf-8")
+
+        self.assertFalse(
+            any(row.get("id") == "memory:VeiledAuditor" for row in loaded)
+        )
+        self.assertNotIn("VeiledAuditor", report_text)
+        self.assertNotIn("VeiledAuditor", changed_report)
+        self.assertIn("report unavailable until refresh", changed_report)
+
+    def test_player_missing_memory_evidence_rejects_overrides_and_collapses_hidden_count(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                upsert_entity(
+                    conn,
+                    {
+                        "id": "npc:hidden",
+                        "type": "character",
+                        "name": "Hidden Name",
+                        "status": "active",
+                        "visibility": "hidden",
+                        "summary": "hidden",
+                        "updated_turn_id": "turn:seed",
+                    },
+                )
+                state = SimpleNamespace(
+                    conn=conn,
+                    mode="query",
+                    visibility_view="player",
+                    missing_required=[],
+                    needs_user_confirmation=[],
+                    memory_omissions=[
+                        {
+                            "id": "npc:hidden",
+                            "reason": "stored_stale",
+                            "player_safe_reason": "npc:hidden secret",
+                            "player_safe_signal": "npc:hidden",
+                        },
+                        {
+                            "id": "memory:npc:hidden",
+                            "reason": "stored_stale",
+                            "player_safe_reason": "npc:hidden secret two",
+                            "player_safe_signal": "memory:npc:hidden",
+                        },
+                    ],
+                )
+
+                evidence = missing_signal_evidence(state)
+
+        self.assertEqual(len(evidence), 1)
+        self.assertEqual(evidence[0]["signal"], "memory_summaries")
+        self.assertEqual(evidence[0]["reason"], "memory_summary_omitted")
+        self.assertNotIn("hidden", json.dumps(evidence).lower())
+
+    def test_memory_context_without_snapshot_and_malformed_omissions_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                ensure_memory_tables(conn)
+                row = insert_test_memory(conn, id="memory:no-snapshot")
+                set_test_memory_projection_clean(conn)
+                state = SimpleNamespace(
+                    conn=conn,
+                    mode="query",
+                    visibility_view="player",
+                    memory_context_frozen=False,
+                    memory_projection_snapshot=None,
+                    memory_summaries=[row],
+                    memory_omissions=[],
+                    plot_signals=[],
+                    plot_signal_omissions=[],
+                    memory_context_revision=0,
+                )
+
+                section = memory_summaries_section(state)
+                maintenance_state = SimpleNamespace(
+                    conn=conn,
+                    mode="query",
+                    visibility_view="maintenance",
+                    memory_projection_snapshot=memory_projection_snapshot(
+                        conn,
+                        memory_projection_health(conn),
+                    ),
+                    memory_omissions=[
+                        {"id": "bad id one", "reason": "stored_stale"},
+                        {"id": "bad id two", "reason": "stored_stale"},
+                    ],
+                )
+                omitted = memory_omitted_items(maintenance_state)
+
+        self.assertIsNone(section)
+        self.assertEqual(state.memory_summaries, [])
+        self.assertEqual(len({item["id"] for item in omitted}), 2)
+
+    def test_clean_empty_memory_and_nonclean_context_keep_lower_quality_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                ensure_memory_tables(conn)
+                conn.execute("delete from main.memory_summaries")
+                clean_health = {
+                    "status": "clean",
+                    "last_turn_id": "turn:seed",
+                    "last_error": None,
+                    "updated_at": "2026-07-10T00:00:00+00:00",
+                }
+                with mock.patch(
+                    "rpg_engine.memory.memory_projection_health",
+                    return_value=clean_health,
+                ):
+                    empty = find_omitted_relevant_memories(
+                        conn,
+                        targets=["anything"],
+                        view="maintenance",
+                        limit=4,
+                    )
+
+                conn.execute(
+                    """
+                    insert into main.events
+                    (id, turn_id, game_time, type, title, summary,
+                     payload_json, source, created_at)
+                    values('event:memory-fallback-context', 'turn:seed', 'day 1',
+                           'note', 'Fallback Trail', 'Authoritative recent event',
+                           '{}', 'test', '2099-01-01T00:00:00+00:00')
+                    """
+                )
+                conn.execute(
+                    "update main.projection_state set status='dirty' where name='memory'"
+                )
+                conn.commit()
+                result = build_context(
+                    campaign,
+                    conn,
+                    user_text="回顾最近发生了什么",
+                    mode="query",
+                    view="player",
+                    budget=1800,
+                    max_events=4,
+                )
+
+        self.assertEqual(empty[0]["stale_reason"], "empty_memory_table")
+        self.assertIn("recent_events", result.sections)
+        self.assertIn("Authoritative recent event", result.sections["recent_events"])
+        self.assertTrue(
+            any(
+                item.get("id") == "memory:fallback:projection-status"
+                for item in result.omitted_items
+            )
+        )
+
+    def test_player_direct_memory_boundaries_hide_maintenance_rows_and_ids(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                ensure_memory_tables(conn)
+                conn.execute(
+                    "update entities set visibility='gm' where id='pc:traveler'"
+                )
+                row = insert_test_memory(
+                    conn,
+                    id="memory:character:pc:traveler",
+                    title="Maintenance-only title",
+                    summary="Maintenance-only summary",
+                    visibility_mode="maintenance",
+                )
+                rendered = render_memory_section([row], conn, view="player")
+                redacted = redact_memory_row_for_view(conn, row, view="player")
+                state = SimpleNamespace(
+                    conn=conn,
+                    visibility_view="player",
+                    mode="query",
+                    memory_projection_snapshot=None,
+                    memory_omissions=[dict(row), dict(row)],
+                )
+                omitted = memory_omitted_items(state)
+
+        serialized = json.dumps(omitted, ensure_ascii=False)
+        self.assertNotIn("Maintenance-only", rendered)
+        self.assertEqual(redacted["id"], "memory:omitted:unverifiable")
+        self.assertEqual(len(omitted), 1)
+        self.assertEqual(omitted[0]["id"], "memory:omitted:hidden-sensitive")
+        self.assertNotIn("Maintenance-only", serialized)
+        self.assertNotIn("maintenance", serialized)
+
+    def test_direct_memory_rebuild_without_current_turn_leaves_projection_dirty(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                conn.execute("update meta set value='' where key='current_turn_id'")
+                conn.commit()
+                with mock.patch("rpg_engine.memory.build_memory_records", return_value=[]):
+                    rebuild_memory_summaries(campaign, conn)
+                state = conn.execute(
+                    "select status, last_turn_id from main.projection_state "
+                    "where name='memory'"
+                ).fetchone()
+
+        self.assertEqual(state["status"], "dirty")
+        self.assertIsNone(state["last_turn_id"])
+
+    def test_memory_subject_evidence_must_match_authoritative_subject_update(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                ensure_memory_tables(conn)
+                conn.executemany(
+                    """
+                    insert into turns(id, session_id, user_text, intent, summary, changed, created_at)
+                    values(?, 's', 'subject evidence', 'note', 'subject evidence', 1, ?)
+                    """,
+                    [
+                        ("turn:subject-evidence-1", "2026-07-10T01:00:00+00:00"),
+                        ("turn:subject-evidence-2", "2026-07-10T02:00:00+00:00"),
+                        ("turn:subject-evidence-3", "2026-07-10T03:00:00+00:00"),
+                    ],
+                )
+                upsert_entity(
+                    conn,
+                    {
+                        "id": "item:subject-a",
+                        "type": "item",
+                        "name": "Subject A",
+                        "status": "active",
+                        "visibility": "known",
+                        "summary": "Authoritative A",
+                        "updated_turn_id": "turn:subject-evidence-2",
+                    },
+                )
+                upsert_entity(
+                    conn,
+                    {
+                        "id": "item:subject-b",
+                        "type": "item",
+                        "name": "Subject B",
+                        "status": "active",
+                        "visibility": "known",
+                        "summary": "Authoritative B",
+                        "updated_turn_id": "turn:subject-evidence-3",
+                    },
+                )
+                conn.execute(
+                    "update meta set value='turn:subject-evidence-3' where key='current_turn_id'"
+                )
+                unrelated = insert_test_memory(
+                    conn,
+                    id="memory:unrelated-subject-evidence",
+                    kind="project",
+                    subject_id="item:subject-a",
+                    summary_type="deterministic_project",
+                    freshness_turn_id="turn:subject-evidence-1",
+                    source_turn_ids_json=json.dumps(["turn:subject-evidence-1"]),
+                    freshness_evidence_json=json.dumps(
+                        {
+                            "current_turn_id": "turn:subject-evidence-3",
+                            "subject_id": "item:subject-b",
+                            "subject_updated_turn_id": "turn:subject-evidence-3",
+                        }
+                    ),
+                )
+                wrong_update = insert_test_memory(
+                    conn,
+                    id="memory:wrong-subject-update-evidence",
+                    kind="project",
+                    subject_id="item:subject-a",
+                    summary_type="deterministic_project",
+                    freshness_turn_id="turn:subject-evidence-1",
+                    source_turn_ids_json=json.dumps(["turn:subject-evidence-1"]),
+                    freshness_evidence_json=json.dumps(
+                        {
+                            "current_turn_id": "turn:subject-evidence-3",
+                            "subject_id": "item:subject-a",
+                            "subject_updated_turn_id": "turn:subject-evidence-3",
+                        }
+                    ),
+                )
+                set_test_memory_projection_clean(
+                    conn,
+                    last_turn_id="turn:subject-evidence-3",
+                )
+
+                unrelated_status = memory_row_freshness(conn, unrelated, view="player")
+                wrong_update_status = memory_row_freshness(conn, wrong_update, view="player")
+
+        self.assertEqual(unrelated_status["status"], "stale")
+        self.assertEqual(wrong_update_status["status"], "stale")
+
+    def test_trusted_rebuild_marker_rejects_invalid_dynamic_row_types(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                ensure_memory_tables(conn)
+                insert_test_memory(
+                    conn,
+                    id="memory:trusted-blob-row",
+                    title=sqlite3.Binary(b"blob-title"),
+                    summary=sqlite3.Binary(b"blob-summary"),
+                    visibility_mode="maintenance",
+                    freshness_evidence_json=json.dumps(
+                        {
+                            "basis": "deterministic_rebuild",
+                            "current_turn_id": "turn:seed",
+                        }
+                    ),
+                    derived_authority_json=json.dumps(
+                        {
+                            "authority": "derived_context",
+                            "fact_authority": False,
+                            "fact_source": "data/game.sqlite",
+                            "summary_overrides_facts": False,
+                        }
+                    ),
+                )
+                set_test_memory_projection_clean(conn)
+                conn.execute(
+                    "delete from schema_migrations where id='0009_memory_summary_provenance'"
+                )
+
+                health = memory_projection_health(conn)
+
+        self.assertEqual(health["status"], "stale")
+
+    def test_maintenance_omission_reports_invalid_dynamic_row_generically(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                ensure_memory_tables(conn)
+                insert_test_memory(
+                    conn,
+                    id="memory:maintenance-invalid-row",
+                    title=sqlite3.Binary(b"private-title"),
+                    visibility_mode="maintenance",
+                )
+                set_test_memory_projection_clean(conn)
+
+                omitted = find_omitted_relevant_memories(
+                    conn,
+                    targets=["anything"],
+                    view="maintenance",
+                    limit=4,
+                )
+
+        self.assertEqual(omitted[0]["id"], "memory:fallback:invalid-row")
+        self.assertEqual(omitted[0]["stale_reason"], "invalid_memory_row")
+        self.assertNotIn("private-title", repr(omitted))
+
+    def test_non_clean_projection_short_circuits_memory_scan(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                ensure_memory_tables(conn)
+                for index in range(50):
+                    insert_test_memory(conn, id=f"memory:non-clean-{index:03d}")
+                conn.execute(
+                    """
+                    insert or replace into projection_state
+                    (name, version, last_turn_id, status, updated_at, last_error)
+                    values('memory', 1, 'turn:seed', 'dirty', '2026-07-10T00:00:00+00:00', null)
+                    """
+                )
+                statements: list[str] = []
+                conn.set_trace_callback(statements.append)
+                loaded = find_relevant_memories(
+                    conn,
+                    targets=["Test memory"],
+                    view="player",
+                    limit=50,
+                )
+                conn.set_trace_callback(None)
+
+        projection_reads = [
+            statement
+            for statement in statements
+            if "from main.projection_state" in " ".join(statement.lower().split())
+            and statement.lstrip().lower().startswith("select")
+        ]
+        self.assertEqual(loaded, [])
+        self.assertLessEqual(len(projection_reads), 3)
+
+    def test_memory_source_scan_fails_closed_on_sqlite_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                ensure_memory_tables(conn)
+                conn.execute("alter table events rename to events_unreadable")
+                conn.execute("create table events(id text primary key)")
+                conn.execute("insert into events(id) values('event:seed')")
+                row = {
+                    "id": "memory:unreadable-source",
+                    "subject_id": None,
+                    "title": "Unreadable source",
+                    "summary": "Visible text",
+                    "key_points_json": "[]",
+                    "source_event_ids_json": json.dumps(["event:seed"]),
+                    "source_turn_ids_json": "[]",
+                    "freshness_evidence_json": "{}",
+                }
+
+                unsafe = memory_row_has_hidden_refs(conn, row)
+
+        self.assertTrue(unsafe)
+
+    def test_memory_omission_paginates_past_fresh_rows_and_honors_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                ensure_memory_tables(conn)
+                for index in range(25):
+                    conn.execute(
+                        """
+                        insert into memory_summaries
+                        (id, kind, subject_id, title, summary, key_points_json, source_event_ids_json,
+                         source_turn_ids_json, valid_from_turn, valid_to_turn, summary_type, visibility_mode,
+                         freshness_status, freshness_turn_id, stale_reason, freshness_evidence_json,
+                         derived_authority_json, updated_at)
+                        values (?, 'world', null, 'Paged memory', 'fresh', '[]', '[]', '[]', null, null,
+                                'deterministic_world', 'player', 'fresh', 'turn:seed', '', ?, ?, ?)
+                        """,
+                        (
+                            f"memory:paged-fresh-{index:02d}",
+                            json.dumps({"current_turn_id": "turn:seed"}),
+                            json.dumps({"authority": "derived_context", "fact_authority": False}),
+                            f"2025-01-01T00:00:{index:02d}+00:00",
+                        ),
+                    )
+                conn.execute(
+                    """
+                    insert into memory_summaries
+                    (id, kind, subject_id, title, summary, key_points_json, source_event_ids_json,
+                     source_turn_ids_json, valid_from_turn, valid_to_turn, summary_type, visibility_mode,
+                     freshness_status, freshness_turn_id, stale_reason, freshness_evidence_json,
+                     derived_authority_json, updated_at)
+                    values ('memory:paged-stale', 'world', null, 'Paged memory', 'stale', '[]', '[]', '[]',
+                            null, null, 'deterministic_world', 'player', 'stale', 'turn:seed', 'stored_stale',
+                            '{}', '{}', '2024-01-01T00:00:00+00:00')
+                    """
+                )
+                set_test_memory_projection_clean(conn)
+
+                omitted = find_omitted_relevant_memories(
+                    conn,
+                    targets=["Paged memory"],
+                    view="player",
+                    limit=1,
+                )
+                conn.execute("drop table memory_summaries")
+                no_items = find_omitted_relevant_memories(
+                    conn,
+                    targets=["Paged memory"],
+                    view="player",
+                    limit=0,
+                )
+
+        self.assertEqual([item["id"] for item in omitted], ["memory:paged-stale"])
+        self.assertEqual(no_items, [])
+
+    def test_latest_turn_id_chunks_and_turn_order_is_deterministic(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                turn_ids = []
+                for index in range(130):
+                    turn_id = f"turn:chunk-{index:03d}"
+                    month = 1 + index // 28
+                    day = 1 + index % 28
+                    conn.execute(
+                        """
+                        insert into turns(id, session_id, user_text, intent, summary, changed, created_at)
+                        values(?, 's', 'u', 'note', 'summary', 1, ?)
+                        """,
+                        (turn_id, f"2024-{month:02d}-{day:02d}T00:00:00+00:00"),
+                    )
+                    turn_ids.append(turn_id)
+                conn.execute(
+                    """
+                    insert into turns(id, session_id, user_text, intent, summary, changed, created_at)
+                    values
+                      ('turn:tie-a', 's', 'u', 'note', 'a', 1, '2026-01-01T00:00:00+00:00'),
+                      ('turn:tie-b', 's', 'u', 'note', 'b', 1, '2026-01-01T00:00:00+00:00')
+                    """
+                )
+
+                latest = latest_turn_id(conn, turn_ids)
+                tie_after = turn_is_after(conn, "turn:tie-b", "turn:tie-a")
+                tie_before = turn_is_after(conn, "turn:tie-a", "turn:tie-b")
+                unknown = turn_is_after(conn, "turn:not-real", "turn:tie-a")
+
+        self.assertEqual(latest, "turn:chunk-129")
+        self.assertTrue(tie_after)
+        self.assertFalse(tie_before)
+        self.assertIsNone(unknown)
+
+    def test_memory_omissions_include_archived_subject_for_maintenance_view(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                ensure_memory_tables(conn)
+                upsert_entity(
+                    conn,
+                    {
+                        "id": "item:archived-memory-subject",
+                        "type": "item",
+                        "name": "Archived Memory Subject",
+                        "status": "archived",
+                        "visibility": "known",
+                        "summary": "Archived.",
+                    },
+                )
+                conn.execute(
+                    """
+                    insert into memory_summaries
+                    (id, kind, subject_id, title, summary, key_points_json, source_event_ids_json,
+                     source_turn_ids_json, valid_from_turn, valid_to_turn, summary_type, visibility_mode,
+                     freshness_status, freshness_turn_id, stale_reason, freshness_evidence_json,
+                     derived_authority_json, updated_at)
+                    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "memory:archived-subject",
+                        "project",
+                        "item:archived-memory-subject",
+                        "Archived Memory Subject",
+                        "Archived summary",
+                        "[]",
+                        "[]",
+                        "[]",
+                        None,
+                        None,
+                        "deterministic_project",
+                        "player",
+                        "fresh",
+                        None,
+                        "",
+                        "{}",
+                        json.dumps({"authority": "derived_context", "fact_authority": False}, ensure_ascii=False),
+                        "2024-01-03T00:00:00+00:00",
+                    ),
+                )
+                set_test_memory_projection_clean(conn)
+                omitted = find_omitted_relevant_memories(
+                    conn,
+                    targets=["Archived Memory Subject"],
+                    view="maintenance",
+                    limit=4,
+                )
+
+        self.assertTrue(
+            any(
+                item["id"] == "memory:archived-subject"
+                and item["stale_reason"] == "subject_archived"
+                for item in omitted
+            )
+        )
+
+    def test_trusted_memory_lookup_overfetches_past_stale_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(copy_initialized_minimal(tmp))
+            with connect(campaign) as conn:
+                ensure_memory_tables(conn)
+                conn.execute(
+                    """
+                    insert or ignore into turns(id, session_id, user_text, intent, summary, changed, created_at)
+                    values
+                      ('turn:trusted-memory-old', 's', 'old', 'note', 'old', 1, '2024-01-01T00:00:00+00:00'),
+                      ('turn:trusted-memory-new', 's', 'new', 'note', 'new', 1, '2024-01-02T00:00:00+00:00')
+                    """
+                )
+                upsert_entity(
+                    conn,
+                    {
+                        "id": "item:trusted-memory-stale",
+                        "type": "item",
+                        "name": "Trusted Memory Target",
+                        "status": "active",
+                        "visibility": "known",
+                        "summary": "Newer fact.",
+                        "updated_turn_id": "turn:trusted-memory-new",
+                    },
+                )
+                for index in range(5):
+                    conn.execute(
+                        """
+                        insert into memory_summaries
+                        (id, kind, subject_id, title, summary, key_points_json, source_event_ids_json,
+                         source_turn_ids_json, valid_from_turn, valid_to_turn, summary_type, visibility_mode,
+                         freshness_status, freshness_turn_id, stale_reason, freshness_evidence_json,
+                         derived_authority_json, updated_at)
+                        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            f"memory:trusted-stale-{index}",
+                            "world",
+                            "item:trusted-memory-stale",
+                            "Trusted Memory Target",
+                            f"stale {index}",
+                            "[]",
+                            "[]",
+                            json.dumps(["turn:trusted-memory-old"], ensure_ascii=False),
+                            "turn:trusted-memory-old",
+                            None,
+                            "deterministic_world",
+                            "player",
+                            "fresh",
+                            "turn:trusted-memory-old",
+                            "",
+                            "{}",
+                            json.dumps({"authority": "derived_context", "fact_authority": False}, ensure_ascii=False),
+                            f"2024-01-03T00:00:0{index}+00:00",
+                        ),
+                    )
+                conn.execute(
+                    """
+                    insert into memory_summaries
+                    (id, kind, subject_id, title, summary, key_points_json, source_event_ids_json,
+                     source_turn_ids_json, valid_from_turn, valid_to_turn, summary_type, visibility_mode,
+                     freshness_status, freshness_turn_id, stale_reason, freshness_evidence_json,
+                     derived_authority_json, updated_at)
+                    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "memory:trusted-fresh",
+                        "world",
+                        None,
+                        "Trusted Memory Target",
+                        "fresh row",
+                        "[]",
+                        "[]",
+                        "[]",
+                        None,
+                        None,
+                        "deterministic_world",
+                        "player",
+                        "fresh",
+                        "turn:trusted-memory-new",
+                        "",
+                        json.dumps({"current_turn_id": "turn:trusted-memory-new"}, ensure_ascii=False),
+                        json.dumps({"authority": "derived_context", "fact_authority": False}, ensure_ascii=False),
+                        "2024-01-02T00:00:00+00:00",
+                    ),
+                )
+                set_test_memory_projection_clean(conn)
+                loaded = find_relevant_memories(conn, targets=["Trusted Memory Target"], view="maintenance", limit=1)
+
+        self.assertEqual([row["id"] for row in loaded], ["memory:trusted-fresh"])
+
     def test_player_renderers_tolerate_missing_world_settings_side_table(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             campaign = load_campaign(copy_initialized_minimal(tmp))
@@ -1041,6 +4660,14 @@ class MemoryBackupAndWorldSettingCoverageTests(unittest.TestCase):
                 relevant = find_relevant_memories(conn, targets=["", "char:ally", "水车"], limit=8)
                 rendered = render_memory_section(relevant)
                 report_text = result.report_path.read_text(encoding="utf-8")
+                metadata = conn.execute(
+                    """
+                    select summary_type, visibility_mode, freshness_status, freshness_turn_id,
+                           stale_reason, freshness_evidence_json, derived_authority_json
+                    from memory_summaries
+                    where id = 'summary:current-world'
+                    """
+                ).fetchone()
 
         self.assertTrue(has_memory_table)
         self.assertTrue(any(memory["id"] == "summary:day-001" for memory in day_memories))
@@ -1053,6 +4680,17 @@ class MemoryBackupAndWorldSettingCoverageTests(unittest.TestCase):
         self.assertTrue(any(memory["kind"] == "faction" for memory in records))
         self.assertIn("盟友", rendered)
         self.assertIn("条目数", report_text)
+        self.assertEqual(metadata["summary_type"], "deterministic_world")
+        self.assertEqual(metadata["visibility_mode"], "player")
+        self.assertEqual(metadata["freshness_status"], "fresh")
+        self.assertEqual(metadata["stale_reason"], "")
+        authority = json.loads(metadata["derived_authority_json"])
+        self.assertEqual(authority["authority"], "derived_context")
+        self.assertEqual(authority["fact_source"], "data/game.sqlite")
+        self.assertFalse(authority["fact_authority"])
+        self.assertFalse(authority["summary_overrides_facts"])
+        self.assertIn("current_turn_id", json.loads(metadata["freshness_evidence_json"]))
+        self.assertIn("- 新鲜度：fresh", report_text)
         self.assertNotIn("隐藏族群", report_text)
         self.assertEqual(parse_day(None), None)
         self.assertEqual(parse_day("第 12 天 · 黄昏"), "12")
@@ -1067,12 +4705,24 @@ class MemoryBackupAndWorldSettingCoverageTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             campaign = load_campaign(copy_initialized_minimal(tmp))
             with connect(campaign) as conn:
-                with mock.patch("rpg_engine.memory.build_memory_records", return_value=[{"id": "bad", "kind": "day"}]):
+                ensure_memory_tables(conn)
+                insert_test_memory(conn, id="memory:preexisting-before-failure")
+                conn.commit()
+                valid_record = build_memory_records(conn)[0]
+                with mock.patch(
+                    "rpg_engine.memory.build_memory_records",
+                    return_value=[valid_record, {"id": "bad", "kind": "day"}],
+                ):
                     with self.assertRaises(KeyError):
                         rebuild_memory_summaries(campaign, conn)
-                rows = conn.execute("select count(*) from memory_summaries").fetchone()[0]
+                ids = {
+                    str(row["id"])
+                    for row in conn.execute(
+                        "select id from main.memory_summaries"
+                    ).fetchall()
+                }
 
-        self.assertEqual(rows, 0)
+        self.assertEqual(ids, {"memory:preexisting-before-failure"})
 
     def test_backup_create_list_restore_collision_and_render_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

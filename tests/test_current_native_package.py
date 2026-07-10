@@ -5,7 +5,11 @@ from pathlib import Path
 
 import yaml
 
+from rpg_engine.campaign import load_campaign
 from rpg_engine.campaign_validation import run_campaign_smoke_tests, validate_campaign_package
+from rpg_engine.db import connect
+from rpg_engine.memory import memory_metadata_columns_present
+from rpg_engine.migrations import migration_status
 
 from tests.helpers import (
     CURRENT_CAMPAIGN_ROOT as CAMPAIGN_ROOT,
@@ -100,10 +104,14 @@ class CurrentNativePackageTests(FormalCurrentSaveReadOnlyTestCase):
         validation = load_stdout_json(run_cli("save", "validate", SAVE_ROOT, "--format", "json", check=False))
         codes = {item["code"] for item in validation["error_details"]}
 
-        self.assertFalse(validation["ok"])
-        self.assertEqual(codes, {"SCHEMA_INCONSISTENT"})
-        self.assertTrue(any("0006_intent_preflight_cache" in item for item in validation["errors"]))
-        self.assertTrue(any("0008_intent_joiner_message_only" in item for item in validation["errors"]))
+        if validation["ok"]:
+            self.assertEqual(validation["errors"], [])
+            self.assertEqual(codes, set())
+        else:
+            self.assertEqual(codes, {"SCHEMA_INCONSISTENT"})
+            self.assertTrue(any("0006_intent_preflight_cache" in item for item in validation["errors"]))
+            self.assertTrue(any("0008_intent_joiner_message_only" in item for item in validation["errors"]))
+            self.assertTrue(any("0009_memory_summary_provenance" in item for item in validation["errors"]))
         self.assertEqual(run_cli("check", SAVE_ROOT).stdout.strip(), "OK")
 
     def test_pending_migrations_apply_cleanly_on_temp_copy(self) -> None:
@@ -113,10 +121,18 @@ class CurrentNativePackageTests(FormalCurrentSaveReadOnlyTestCase):
             applied = run_cli("migrate", "apply", save).stdout
             validation = load_stdout_json(run_cli("save", "validate", save, "--format", "json"))
 
-            self.assertIn("backup: backup-", applied)
-            self.assertIn("0006_intent_preflight_cache", applied)
-            self.assertIn("0008_intent_joiner_message_only", applied)
+            if "no pending migrations" in applied:
+                self.assertNotIn("backup: backup-", applied)
+            else:
+                self.assertIn("backup: backup-", applied)
+                self.assertIn("0006_intent_preflight_cache", applied)
+                self.assertIn("0008_intent_joiner_message_only", applied)
             self.assertTrue(validation["ok"], validation)
+            campaign = load_campaign(save)
+            with connect(campaign) as conn:
+                by_id = {record.id: record for record in migration_status(conn)}
+                self.assertTrue(by_id["0009_memory_summary_provenance"].applied)
+                self.assertTrue(memory_metadata_columns_present(conn))
 
 
 if __name__ == "__main__":

@@ -5,13 +5,13 @@ from typing import Any
 
 from .campaign import Campaign
 from .db import rebuild_fts, rebuild_fts_for_entities
+from .projection_service import ProjectionService
 from .projections import (
     append_event_records_idempotently,
     enqueue_event_export,
     mark_projection_clean,
     mark_projections_dirty,
-    process_outbox,
-    projection_tables_exist,
+    outbox_table_exists,
 )
 from .write_guard import assert_expected_turn, find_idempotent_turn, turn_guard_columns, write_guard_supported
 
@@ -98,7 +98,12 @@ class UnitOfWork:
         self._begun = False
 
     def finalize_artifacts(self) -> None:
-        if projection_tables_exist(self.conn):
-            process_outbox(self.campaign, self.conn)
+        if outbox_table_exists(self.conn):
+            ProjectionService(self.campaign, self.conn).refresh(
+                names=["events_jsonl"],
+                dirty_only=True,
+                profile="unit_of_work:events_outbox",
+                commit_policy="caller_committed_required",
+            )
         elif self.event_records:
             append_event_records_idempotently(self.campaign, self.event_records)

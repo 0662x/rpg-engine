@@ -183,8 +183,10 @@ def install_hidden_context_probe(conn: sqlite3.Connection) -> None:
         """
         insert or replace into memory_summaries
         (id, kind, subject_id, title, summary, key_points_json, source_event_ids_json,
-         source_turn_ids_json, valid_from_turn, valid_to_turn, updated_at)
-        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         source_turn_ids_json, valid_from_turn, valid_to_turn, summary_type, visibility_mode,
+         freshness_status, freshness_turn_id, stale_reason, freshness_evidence_json,
+         derived_authority_json, updated_at)
+        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             "memory:test-hidden-context-probe",
@@ -197,6 +199,19 @@ def install_hidden_context_probe(conn: sqlite3.Connection) -> None:
             "[]",
             current_turn,
             None,
+            "deterministic_world",
+            "maintenance",
+            "fresh",
+            current_turn,
+            "",
+            json.dumps(
+                {
+                    "current_turn_id": current_turn,
+                    "valid_from_turn": current_turn,
+                },
+                ensure_ascii=False,
+            ),
+            json.dumps({"authority": "derived_context", "fact_authority": False}),
             now,
         ),
     )
@@ -1335,7 +1350,7 @@ class CurrentNativeVisibilityTests(FormalCurrentSaveReadOnlyTestCase):
                 if isinstance(item, dict)
             }
             self.assertEqual(invariants["events"]["structured_visibility"], "not_applicable")
-            self.assertEqual(invariants["memory_summaries"]["structured_visibility"], "not_applicable")
+            self.assertEqual(invariants["memory_summaries"]["structured_visibility"], "visibility_mode_metadata")
 
     def test_player_safe_query_and_scene_output_do_not_expose_hidden_probe(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1597,6 +1612,31 @@ class CurrentNativeVisibilityTests(FormalCurrentSaveReadOnlyTestCase):
                         json.dumps({"target": target, "safe": safe_event_marker}, ensure_ascii=False),
                         "test",
                         "9999-07-08T00:00:00+00:00",
+                    ),
+                )
+                conn.execute(
+                    """
+                    update memory_summaries
+                    set summary_type='deterministic_world',
+                        visibility_mode='player',
+                        freshness_status='fresh',
+                        freshness_turn_id=?,
+                        stale_reason='',
+                        freshness_evidence_json=?,
+                        derived_authority_json=?
+                    where title like ?
+                    """,
+                    (
+                        current_turn,
+                        json.dumps(
+                            {
+                                "current_turn_id": current_turn,
+                                "valid_from_turn": current_turn,
+                            },
+                            ensure_ascii=False,
+                        ),
+                        json.dumps({"authority": "derived_context", "fact_authority": False}),
+                        f"%{target}%",
                     ),
                 )
                 conn.commit()

@@ -166,7 +166,7 @@ manifest：
 | `clocks` | Clock state and tick metadata. |
 | `rules` | Rule entities and rule-specific fields. |
 | `world_settings` | Stable world explanations and hidden/visible setting content. |
-| `memory_summaries` | Long-term memory summaries. |
+| `memory_summaries` | Long-term memory summaries，带 source/freshness/visibility metadata 的派生 context evidence。 |
 | `context_runs` | Context build audit records. |
 | `context_items` | Items included or omitted in a context build. |
 | `fts_index` | Full-text index for non-hidden, non-archived entities. |
@@ -183,6 +183,10 @@ manifest：
 
 `projection_state` can report `clean`, `dirty`, `refreshing`, `failed` or `stale`. Save validation requires
 required projections to be clean and aligned with `current_turn_id`.
+缺失的 `memory` state row 必须初始化为 `dirty`，直到 deterministic rebuild 完成；事实维护在同一 turn
+修改 current-state tables 时也必须将 `memory` 标 dirty，即使 `updated_turn_id` 没有变化。
+`projection_state` 的可写性不依赖 `outbox` 同时存在；queue 缺失必须单独报告 unhealthy，不能阻止 memory
+invalidation，也不能把旧 summary 留在 clean 状态。空 names invalidation 是无副作用成功。
 这些表是 health/evidence 表，不是另一套 gameplay fact authority。
 
 `inspect_save_package()` exposes this as `projection_health`, a machine-readable evidence object. Required
@@ -350,6 +354,47 @@ GM 或 maintenance 视图必须显式选择。
 
 ### ContextBuildResult And Context Audit
 
+`memory_summaries` 是派生上下文，不是当前事实权威。每条 summary 必须记录 summary type、
+source event ids、source turn ids、visibility mode、freshness status / reason、freshness evidence 和
+derived authority evidence。SQLite `entities`、relationships、progress/clocks 和 `meta` 等 current-state
+tables 中的当前事实始终优先；committed events 只提供 provenance/audit evidence，不能覆盖当前状态。当
+memory summary 的 subject 已更新、缺失、archived、hidden-unavailable 或与
+当前事实冲突时，context assembly 必须把 summary 标记为 stale/omitted 或交给 advisory review，而不能用
+summary 覆盖当前事实。`reports/memory-current.md` 和 projection `memory` health 是可重建读模型证据。
+Canonical summary type 为 deterministic day/world/character/project/faction/fallback 类型；缺失 legacy 值可
+按 kind 推断，未知非空值必须显示为 `unknown`。Player report 必须呈现安全 source events/turns、freshness
+evidence 与 clamped derived authority，不能返回原始 provenance JSON。若 memory projection 早于 provenance
+migration、非 clean、重复/损坏或与 current turn 不一致，summary lookup 只返回通用 fallback evidence。
+Player row 由固定字段 allowlist 重建，未知 kind 映射为 `unknown`；source turn location refs、过期或逆序的
+validity window、过量 provenance refs，以及 lookup/context render 期间变化的 projection/current-turn snapshot
+都必须 fail closed。最终 context gate 必须同步移除 memory section、memory-derived plot signals、loaded evidence，
+并重建 omission/completeness/budget/markdown，不能返回混合 generation。每次 budget pass 在独立 render-state
+副本上过滤 plot signals，不能污染 collector state；连续变化超过重试上限时，必须冻结为不再读取 projection
+的 generic `projection_memory_unstable` fallback。Subject evidence 必须绑定 row subject，
+且其 `subject_updated_turn_id` 必须精确对账 authoritative entity；validity bounds 及仅复制 bound 的 scalar turn
+不计作 freshness provenance。Player direct render/redactor/omitted-item 边界都必须重新执行 visibility/hidden-id
+检查；maintenance/hidden omissions 合并为一个 generic signal，不能暴露数量或分类。
+
+`projection_state.updated_at` 同时是 projection lifecycle 的 generation token，正常值保持单调。
+`refreshing -> clean/failed` 必须使用 status + generation compare-and-swap；same-turn fact maintenance 产生的
+新 dirty generation 不可被旧 refresh 覆盖。最大可表示 timestamp 等异常 metadata 必须轮换为不同、可解析的
+token，不能让投影元数据回滚事实事务；metadata writes 必须由 savepoint 与 authoritative writes 隔离并保留
+caller 的 commit/rollback ownership。同一 campaign/projection 的 database/file publication 采用跨线程/进程锁
+序列化并有界等待，events outbox 与全量 JSONL rewrite 共享 target lock；最终 report 只可把最终 effective status
+仍为 clean 的 item 列入 `refreshed`。dirty-only report 仍以原始 requested set 对账，不能把采样后变 dirty 的 skipped
+projection 报成 clean。`projection_state` 与
+`outbox` 的运行 SQL 显式使用 `main`，TEMP aliases 不能改变 machine-readable 或 rendered health。
+Canonical schema 允许不会阻止标准 insert/upsert 的 nullable 或 safe-literal-default additive columns，但拒绝
+额外主键、无 default 的必填普通列、可执行 default、generated columns、非 canonical UNIQUE、任意
+expression/partial/custom-collation index、额外 FK/CHECK/main-or-TEMP trigger，以及非 BINARY canonical
+projection identity。Identifier
+匹配采用 SQLite ASCII case-insensitive 语义，不能用 Unicode `casefold()` 把伪同名扩展当成 canonical column。
+`memory_summaries` 还要求 canonical FK signatures/actions 与 `(kind, subject_id)` lookup index；`0009` additive
+migration 必须限定 `main`、拒绝所有 statement targets 的 TEMP shadow/write-blocking CHECK/COLLATE/trigger constraints，
+并以严格 JSON type 区分 boolean 与 `0/1`。Migration ledger 固定为 `main.schema_migrations`；helper table、metadata
+columns 与 canonical index 必须在同一 savepoint 内完成或整体回滚。Player-visible memory IDs 也必须扫描 hidden
+entity id/name/alias substrings；malformed non-hidden omission IDs 使用互不冲突的 opaque fallback IDs。
+
 `rpg_engine.context_builder.ContextBuildResult` 是当前 Context Slice 合同。`build_context()` 先产出该结构，
 再由 CLI、runtime query、start-turn result、prompt/render path 消费它；不要在下游重新查询事实来拼另一套
 prompt context。
@@ -399,14 +444,21 @@ Story 3.4 后，relationship、progress/clock 和 plot progression signal 也是
   不是事实权威、clock tick、proposal approval、mandatory storylet 或 automatic director command；若其
   relationship/progress source section 因 budget 被省略，对应 plot signal 也必须省略并写入 omission evidence。
 
+Memory summaries 现在携带 `visibility_mode` 和 freshness metadata，但仍不拥有独立 hidden authority；
+player-safe collection 继续跳过含 hidden entity refs 的 memory/event rows，并通过 omitted item evidence
+说明 stale、missing table 或 lower-quality fallback。GM / maintenance view 可以检查脱敏 stale reason。
+Player view 只接受显式 `visibility_mode=player` 和完整 metadata schema；empty 与 hidden-only summary 集合使用
+同一通用 fallback，避免形成 hidden existence oracle。
+
 Player-safe context、ordinary query、scene output 和 player-safe AI/helper prompts 必须在 collection
 或 query 阶段排除 hidden / GM-only material。最终 render redaction 只能作为 defense-in-depth，不能成为
 唯一防线。GM / maintenance reads 必须显式选择 `gm` 或 `maintenance` view；同一 save 上的 trusted
 context、audit upsert 或 helper result 不能被复用到 player view。没有独立 visibility 字段的 event 或
 memory material 不承载独立 hidden 权限；hidden / GM-only 事实必须通过 hidden 或 archived entity refs
 表达。Player view collection 必须跳过包含 hidden entity refs 的 event / memory rows，且
-`ContextBuildResult.contract.visibility_invariants` 必须记录 `events` / `memory_summaries` 的
-`structured_visibility: not_applicable` 证据。若后续要让 event / memory summary 承载不绑定实体的
+`ContextBuildResult.contract.visibility_invariants` 必须记录 `events` 的
+`structured_visibility: not_applicable` 证据，以及 `memory_summaries` 的 `visibility_mode` metadata
+证据。若后续要让 event / memory summary 承载不绑定实体的
 GM-only 自由文本，必须先新增结构化 visibility / sensitivity 字段和迁移，不能静默混入当前 player-safe
 context 或 prompt。
 

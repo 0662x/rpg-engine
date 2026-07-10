@@ -1179,7 +1179,7 @@ class V1CliTests(unittest.TestCase):
             self.assertEqual(repair.returncode, 1)
             self.assertIn("global_status: failed", repair.stdout)
             self.assertIn("error: projection_state.cards: invalid status weird", repair.stdout)
-            self.assertEqual(repair.stdout.count("global_failed: cards"), 1)
+            self.assertEqual(repair.stdout.count("global_stale: cards"), 1)
 
     def test_save_inspect_projection_health_unavailable_keeps_errors_shape(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

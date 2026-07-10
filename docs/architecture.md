@@ -158,6 +158,45 @@ Relationship / progress context 必须复用 `relationship_access.py` 和 `progr
 contract，不直接依赖表结构细节。Plot progression signal 只能作为可见 context evidence / advisory input，
 不能要求 storylet、自动导演命令或状态写入。
 
+Memory summary context 只能作为 derived context evidence。`memory_summaries` 记录 source turns/events、
+summary type、visibility mode、freshness/staleness metadata 和 derived authority；当它与当前 SQLite
+facts 或 access contract 结果不一致时，权威事实优先，summary 只能被标记 stale、从 context 省略或进入
+advisory review。memory rebuild、reports 和 projection health 不得阻塞 ordinary gameplay commit；缺失
+summary refresh 时，context assembly 应继续使用 recent events、snapshots 或 lower-quality fallback。memory
+projection 非 clean、早于 provenance migration、与 current turn 错位或无法验证时，旧 summaries 必须 fail
+closed；direct rebuild 只可在同一 turn snapshot 内标 clean。Player lookup/report 只能输出已解析、当前 view
+可读的 source ids、allowlisted freshness evidence 和固定 derived-context authority。事实维护入口（包括 save
+patch）必须在同一事务中把 memory projection 标 dirty；缺失的 memory projection state 也必须从 dirty 开始，
+不能由通用初始化伪装为 clean。Player memory row 必须从字段 allowlist 重建，source turn 的 location refs、
+validity window、来源数量上限和返回前 projection snapshot 复核均采用 fail-closed 语义。Context render 必须
+在最终返回前对 generation 做 revision-aware gate；若 collection、section、plot signal、budget 或 item evidence
+期间 generation 改变，必须统一移除 memory-derived section/signal 并有界重建结果；重新生成的 omission evidence
+必须直接绑定检测到的 generation snapshot，不能先查询旧 omission 再把它标成新 generation。Player omitted-item
+边界必须把 maintenance/hidden rows 合并为单一 generic signal，不能泄露数量、类型、标题或原始 id。Projection `updated_at`
+通常按单调 generation token 分配；refresh 只能以 `refreshing + generation` CAS 到 clean，期间出现的新 dirty
+generation 不得覆盖。同一 campaign/projection 的 publication 必须跨线程/进程序列化，失去 ownership 的旧 refresher
+不能在新 generation 之后覆盖数据库 rows 或文件 artifacts；最终 report 还必须按最终 effective health 重写 item / refreshed
+结论。publication lock 必须有界等待并返回结构化失败；events outbox append 与完整 `events_jsonl` rewrite 使用同一把 target lock。
+所有 projection-state/outbox SQL 必须显式绑定 `main`，TEMP 同名表不能劫持 refresh、status 或 queue。`projection_state`
+metadata 与 `outbox` availability 独立：缺失 queue 仍必须允许 fact transaction 将 memory 标 dirty，queue health 另行报告 missing。
+Generation token 在可解析 UTC timestamp 后携带 opaque nonce，避免时钟回拨或最大值
+repair 复用历史 owner token。若损坏的最大 timestamp 已无法递增，allocator 必须产生不同 token、保持
+projection non-clean，并且绝不能阻断 authoritative fact commit；事实事务内的 projection metadata 写入使用
+savepoint 隔离并保留 caller transaction 语义；helper 自己开启事务时必须自行 commit，普通 Python/SQLite callback
+失败统一清理并返回 false。schema/trigger/constraint 失败只能使 projection stale，不得回滚 turn 或 save patch。Direct
+memory rebuild 必须先取得 `refreshing + generation` 所有权，table/report 失败或完成 CAS 丢失时不得报告成功。
+Direct player report 必须在同一 projection snapshot 上组装并原子发布，snapshot 改变时只留下 generic unavailable report。GM/maintenance
+只放宽 hidden-content 权限，
+仍必须消费字段 allowlist 与 JSON-safe 动态类型。Subject summary 的 evidence subject 必须与 row subject 一致，
+`subject_updated_turn_id` 必须对账 authoritative entity。Validity window 独立于 freshness provenance：未来
+`valid_to` 可有效，未来 `valid_from` 表示尚未生效；evidence 中的 bounds 必须与 stored bounds（包括 absence）精确一致，
+但 bounds 或与 bound 相同的 scalar turn 本身不能单独证明 freshness。Trusted rebuild authority 必须精确等于 canonical
+derived-context object，额外键、非有限 JSON 常量或 numeric pseudo-booleans 均 fail closed。
+Memory schema/migration 只操作 `main`，拒绝 TEMP shadow、大小写 trigger 绕过、数字伪 boolean authority defaults、
+非 canonical FK action 和缺失的 `(kind, subject_id)` lookup index；`main.schema_migrations` 不能被 TEMP ledger
+替代，SQL constraint 检查必须忽略 quoted/comment-only text 并拒绝 executable CHECK/COLLATE。helper backfill 必须先验证
+全部现有列，再在同一 savepoint 内原子添加缺列和 canonical index。
+
 ## 数据与包边界
 
 - Campaign Package：世界、规则、内容、capabilities、smoke tests 和作者材料。

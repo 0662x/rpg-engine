@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from copy import copy
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -11,6 +12,9 @@ from .context.collectors import (
     build_collector_sections,
     collect_loaded_items,
     collect_omitted_items,
+    freeze_unstable_memory_context,
+    memory_derived_plot_signal,
+    memory_context_snapshot_is_current,
     plot_signals_section,
     run_context_collectors,
 )
@@ -44,6 +48,7 @@ from .intent_router import (
     turn_contract_for_intent,
     turn_contract_to_dict,
 )
+from .memory import player_safe_memory_reason, safe_memory_summary_id
 from .redaction import redact_hidden_entity_id_substrings, redact_hidden_entity_refs
 from .render import render_scene
 from .visibility import can_read_hidden, context_visibility_view, normalize_visibility_view
@@ -155,6 +160,10 @@ class BuildState:
     related_events: list[sqlite3.Row] = field(default_factory=list)
     general_events: list[sqlite3.Row] = field(default_factory=list)
     memory_summaries: list[sqlite3.Row] = field(default_factory=list)
+    memory_omissions: list[dict[str, Any]] = field(default_factory=list)
+    memory_projection_snapshot: tuple[str, str, str, str] | None = None
+    memory_context_revision: int = 0
+    memory_context_frozen: bool = False
     semantic_suggestion: dict[str, Any] | None = None
     semantic_error: str | None = None
     semantic_audit: dict[str, Any] | None = None
@@ -482,6 +491,50 @@ def filter_plot_signals_for_selected_sections(
 
 
 def render_context_result(state: BuildState) -> ContextBuildResult:
+    for _ in range(2):
+        revision = state.memory_context_revision
+        render_state = context_render_state_copy(state)
+        result = _render_context_result_once(render_state)
+        render_changed = render_state.memory_context_revision != revision
+        if render_changed:
+            reconcile_render_memory_state(state, render_state)
+        snapshot_current = memory_context_snapshot_is_current(state)
+        if not render_changed and snapshot_current:
+            return result
+    freeze_unstable_memory_context(state)
+    return _render_context_result_once(context_render_state_copy(state))
+
+
+def context_render_state_copy(state: BuildState) -> BuildState:
+    render_state = copy(state)
+    render_state.plot_signals = list(state.plot_signals)
+    render_state.plot_signal_omissions = list(state.plot_signal_omissions)
+    render_state.memory_summaries = list(state.memory_summaries)
+    render_state.memory_omissions = list(state.memory_omissions)
+    return render_state
+
+
+def reconcile_render_memory_state(
+    state: BuildState,
+    render_state: BuildState,
+) -> None:
+    state.memory_summaries = list(render_state.memory_summaries)
+    state.memory_omissions = list(render_state.memory_omissions)
+    state.memory_projection_snapshot = render_state.memory_projection_snapshot
+    state.memory_context_revision = render_state.memory_context_revision
+    state.plot_signals = [
+        signal
+        for signal in state.plot_signals
+        if not memory_derived_plot_signal(signal)
+    ]
+    state.plot_signal_omissions = [
+        signal
+        for signal in state.plot_signal_omissions
+        if not memory_derived_plot_signal(signal)
+    ]
+
+
+def _render_context_result_once(state: BuildState) -> ContextBuildResult:
     sections = build_sections(state)
     selected, omitted = apply_budget(sections, state.budget_limit)
     selected_section_keys = {section.key for section in selected}
@@ -704,9 +757,9 @@ def context_visibility_invariants(context_view: str) -> list[dict[str, Any]]:
         },
         {
             "source": "memory_summaries",
-            "structured_visibility": "not_applicable",
+            "structured_visibility": "visibility_mode_metadata",
             "hidden_allowed": can_read_hidden(context_view),
-            "policy": "player view omits rows containing hidden entity refs before rendering; memory summaries do not carry standalone hidden authority in the current schema",
+            "policy": "player view omits rows containing hidden entity refs before rendering; memory summaries carry visibility_mode and freshness metadata but do not override SQLite facts",
         },
     ]
 
@@ -738,6 +791,7 @@ def item_visibility_evidence(context_view: str) -> dict[str, Any]:
 
 def missing_signal_evidence(state: BuildState) -> list[dict[str, Any]]:
     evidence: list[dict[str, Any]] = []
+    generic_memory_signal_added = False
     for item in state.missing_required:
         evidence.append(
             {
@@ -752,6 +806,49 @@ def missing_signal_evidence(state: BuildState) -> list[dict[str, Any]]:
                 "signal": str(item),
                 "source": "intent_or_context_confirmation",
                 "severity": "confirmation",
+            }
+        )
+    for item in getattr(state, "memory_omissions", []):
+        reason = str(item.get("stale_reason") or item.get("reason") or "memory summary omitted")
+        signal = str(item.get("id") or "memory_summaries")
+        if not can_read_hidden(context_state_visibility_view(state)):
+            redacted_reason = redact_hidden_entity_refs(state.conn, reason, drop_empty=False) or ""
+            redacted_reason = redact_hidden_entity_id_substrings(state.conn, redacted_reason, drop_empty=False) or ""
+            requested_reason = str(item.get("player_safe_reason") or redacted_reason)
+            requested_reason = redact_hidden_entity_refs(
+                state.conn,
+                requested_reason,
+                drop_empty=False,
+            ) or ""
+            requested_reason = redact_hidden_entity_id_substrings(
+                state.conn,
+                requested_reason,
+                drop_empty=False,
+            ) or ""
+            reason = player_safe_memory_reason(requested_reason)
+            requested_signal = str(item.get("player_safe_signal") or signal)
+            requested_signal = redact_hidden_entity_refs(
+                state.conn,
+                requested_signal,
+                drop_empty=False,
+            ) or ""
+            requested_signal = redact_hidden_entity_id_substrings(
+                state.conn,
+                requested_signal,
+                drop_empty=False,
+            ) or ""
+            signal = safe_memory_summary_id(requested_signal) or "memory_summaries"
+            if signal == "memory_summaries":
+                if generic_memory_signal_added:
+                    continue
+                generic_memory_signal_added = True
+        evidence.append(
+            {
+                "signal": signal,
+                "source": "memory_summaries",
+                "severity": "advisory",
+                "reason": reason,
+                "fallback": "recent_events_or_lower_quality_context",
             }
         )
     return evidence

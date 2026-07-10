@@ -73,10 +73,57 @@ Player-safe context / query / prompt hidden-boundary 变更还应覆盖 `tests/t
 测试需要证明 hidden entities、relationships、world settings、discovery states、memory summaries、events、
 scene output、ordinary query 和 player-safe helper prompt 输入都不会泄露 hidden material；trusted
 GM / maintenance view 应保留 explicit hidden read 能力，并证明 `gm -> player` 或 `maintenance -> player`
-的连续 context/audit 构建不会复用 hidden 内容。Events / memory summaries 目前没有独立
-visibility 字段；hidden / GM-only 内容必须通过 hidden entity refs 表达，测试应覆盖含 hidden refs 的
-rows 被 player collection 跳过、不会因 SQL top-N filtering 饿死后续 safe recall，并检查
-`ContextBuildResult.contract.visibility_invariants` 记录 not-applicable 证据。
+的连续 context/audit 构建不会复用 hidden 内容。Events 目前没有独立 visibility 字段；memory summaries
+携带 `visibility_mode` metadata，但 hidden / GM-only 内容仍必须通过 hidden entity refs 或明确 visibility
+metadata 被 player collection 跳过。测试应覆盖含 hidden refs 的 rows 不会因 SQL top-N filtering 饿死后续
+safe recall，并检查 `ContextBuildResult.contract.visibility_invariants` 记录 event not-applicable 与
+memory visibility metadata 证据。
+
+Long-term memory summary 变更还必须覆盖 schema migration / helper backfill、source turn/event
+provenance、summary type、visibility mode、freshness/staleness metadata、derived authority evidence、
+stale summary omission、authoritative SQLite facts precedence，以及 resident AI / memory projection 不可用时的
+recent-events 或 lower-quality fallback。相关 focused tests 应至少覆盖
+`tests/test_maintenance_tooling_coverage.py`、`tests/test_context_quality.py`、
+`tests/test_current_native_context.py` 和 `tests/test_current_native_visibility.py`。
+高风险回归还应覆盖 partial/incompatible schema、projection version/migration freshness 与 turn alignment、
+future/incomparable turns、unresolved/oversized provenance ids、deep/corrupt metadata JSON、hidden-only existence
+oracle、player row/report metadata sanitization，以及 non-clean projection 的 bounded-query fast fallback。还要覆盖
+missing memory state 默认 dirty、无害 additive projection columns、非有限 version、same-turn fact maintenance
+dirty、source-turn hidden locations、expired/reversed validity windows、projection snapshot TOCTOU 与 provenance
+reference/query bounds。Generation/CAS 回归还必须覆盖 same-turn dirty overwrite、clean/dirty/clean ABA、
+all-view BLOB rows、复合主键、阻塞 canonical writes 的 required extensions、NOCASE projection aliases、
+trusted-marker subject 一致性，以及 future validity bounds 与 freshness provenance 的解耦。最终 gate 还必须覆盖
+apply-budget 后的真实双连接 generation 变化、memory-derived plot signal 清除、post-refresh effective health
+对账、bound-only freshness 拒绝、Unicode 伪同名列、非 canonical UNIQUE / generated / FK / CHECK / trigger
+约束、最大 timestamp 经 UnitOfWork/save path 不阻断事实提交，以及 maintenance trusted row 的动态类型合同。
+还要覆盖 commented `CHECK`、TEMP trigger、可执行 defaults、非 UNIQUE expression/partial index、required-extension
+status diagnostics、direct rebuild report failure、失去 owner 的 failed refresh、大小写 alias 的 machine-readable
+状态、连续 generation thrash 的 generic fallback，以及 budget retry 不丢失非 memory plot signals。Review 后的
+最终回归还必须覆盖 `0009` TEMP shadow、write-blocking existing columns、严格 JSON boolean default、大小写
+main/TEMP trigger、canonical FK action/index、bound-scalar-only freshness、direct player render/id/omission 脱敏、
+同 target publication serialization、TEMP projection/outbox aliases、metadata savepoint rollback ownership、零行
+failed update、最终 report health 对账，以及 omission evidence 与 generation snapshot 的双连接绑定。
+关闭 Story 前还必须覆盖：fresh empty DB 的完整 `0001..0009` chain、late-column migration rollback、helper
+table/index atomicity、TEMP migration ledger/statement targets、exact authority/non-finite JSON、validity-bound exact match、
+total row-scan cap、hidden name/alias in legal memory IDs、report TEMP/snapshot publication、缺失 outbox 时的 memory dirty、
+self-owned metadata transaction commit、empty-name no-op、invalid projection name/status、lock timeout、真实跨进程 target
+serialization、真实双连接 generation loss、TEMP outbox processing、clean-empty fallback，以及 memory unavailable 时仍保留
+authoritative recent-events/lower-quality context。
+
+Story 3.5 的可复现 focused gate：
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q \
+  tests/test_maintenance_tooling_coverage.py \
+  tests/test_projection_service.py \
+  tests/test_context_quality.py \
+  tests/test_current_native_context.py \
+  tests/test_current_native_visibility.py \
+  tests/test_current_native_package.py \
+  -p no:cacheprovider
+```
+
+该 focused gate 通过后仍必须执行 repository full suite；后续补丁会使更早的 full-suite 证据失效。
 
 Derived player artifact hidden-boundary 变更也必须覆盖 `tests/test_current_native_visibility.py` 和
 `tests/test_projection_service.py`。测试需要证明 FTS/search、snapshots/current.md、
