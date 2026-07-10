@@ -1258,7 +1258,35 @@ class CurrentNativeVisibilityTests(FormalCurrentSaveReadOnlyTestCase):
             save = copy_current_packages(tmp)
             campaign = load_campaign(save)
             with connect(campaign) as conn:
+                oracle_token = "玄穹秘钥无公开项"
+                absent_context = build_context(
+                    campaign,
+                    conn,
+                    user_text=oracle_token,
+                    mode="query",
+                    submode="context",
+                    view="player",
+                    budget=500,
+                )
                 install_hidden_context_probe(conn)
+                conn.execute(
+                    "update entities set summary='' where id='item:test-hidden-context-probe'"
+                )
+                conn.execute(
+                    "insert into aliases(alias, entity_id, kind) values (?, ?, 'name')",
+                    (oracle_token, "item:test-hidden-context-probe"),
+                )
+                conn.commit()
+
+                hidden_only_context = build_context(
+                    campaign,
+                    conn,
+                    user_text=oracle_token,
+                    mode="query",
+                    submode="context",
+                    view="player",
+                    budget=500,
+                )
 
                 gm_context = build_context(
                     campaign,
@@ -1306,6 +1334,12 @@ class CurrentNativeVisibilityTests(FormalCurrentSaveReadOnlyTestCase):
                 maintenance_json = maintenance_context.to_json_text()
                 player_after_gm_json = player_after_gm_context.to_json_text()
                 player_json = player_context.to_json_text()
+                gm_quality = gm_context.completeness["quality_diagnostics"]
+                maintenance_quality = maintenance_context.completeness["quality_diagnostics"]
+                player_quality = player_context.completeness["quality_diagnostics"]
+                player_after_gm_quality = player_after_gm_context.completeness["quality_diagnostics"]
+                absent_quality = absent_context.completeness["quality_diagnostics"]
+                hidden_only_quality = hidden_only_context.completeness["quality_diagnostics"]
                 player_loaded_ids = {str(item.get("id")) for item in player_context.loaded_items}
                 gm_loaded_ids = {str(item.get("id")) for item in gm_context.loaded_items}
                 maintenance_loaded_ids = {str(item.get("id")) for item in maintenance_context.loaded_items}
@@ -1330,6 +1364,22 @@ class CurrentNativeVisibilityTests(FormalCurrentSaveReadOnlyTestCase):
             self.assertEqual(maintenance_context.contract["visibility_mode"], "maintenance")
             self.assertIn(HIDDEN_PROBE_TOKEN, maintenance_json)
             self.assertIn("disc:test-hidden-subject-context-probe", maintenance_loaded_ids)
+            self.assertTrue(
+                any(
+                    item.get("code") == "missing_summary"
+                    and item.get("subject_id") == "item:test-hidden-context-probe"
+                    for item in gm_quality
+                ),
+                gm_quality,
+            )
+            self.assertTrue(
+                any(
+                    item.get("code") == "missing_summary"
+                    and item.get("subject_id") == "item:test-hidden-context-probe"
+                    for item in maintenance_quality
+                ),
+                maintenance_quality,
+            )
 
             self.assertEqual(player_after_gm_context.contract["visibility_mode"], "player")
             self.assertNotIn(HIDDEN_PROBE_TOKEN, player_after_gm_json)
@@ -1340,10 +1390,56 @@ class CurrentNativeVisibilityTests(FormalCurrentSaveReadOnlyTestCase):
             self.assertNotIn("disc:test-hidden-context-probe", player_json)
             self.assertNotIn("disc:test-hidden-subject-context-probe", player_json)
             self.assertNotIn("world:test-hidden-context-probe", player_json)
+            player_quality_blob = json.dumps(
+                [player_after_gm_quality, player_quality],
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+            self.assertNotIn(HIDDEN_PROBE_TOKEN, player_quality_blob)
+            self.assertNotIn("item:test-hidden-context-probe", player_quality_blob)
+            self.assertNotIn("rel:test-hidden-context-probe", player_quality_blob)
+            self.assertNotIn("world:test-hidden-context-probe", player_quality_blob)
+            player_high_value_blob = json.dumps(
+                [
+                    item
+                    for item in player_context.completeness["missing_signal_evidence"]
+                    if item.get("code") in {
+                        "high_value_budget_omission",
+                        "required_budget_overflow",
+                    }
+                ],
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+            self.assertNotIn(HIDDEN_PROBE_TOKEN, player_high_value_blob)
+            self.assertNotIn("item:test-hidden-context-probe", player_high_value_blob)
+            absent_high_value = [
+                item
+                for item in absent_context.completeness["missing_signal_evidence"]
+                if item.get("code") in {
+                    "high_value_budget_omission",
+                    "required_budget_overflow",
+                }
+            ]
+            hidden_only_high_value = [
+                item
+                for item in hidden_only_context.completeness["missing_signal_evidence"]
+                if item.get("code") in {
+                    "high_value_budget_omission",
+                    "required_budget_overflow",
+                }
+            ]
+            self.assertTrue(absent_high_value, absent_context.completeness)
+            self.assertEqual(hidden_only_quality, absent_quality)
+            self.assertEqual(hidden_only_high_value, absent_high_value)
             self.assertEqual(audit_payload_after_gm["contract"]["visibility_mode"], "player")
             self.assertEqual(audit_payload_after_maintenance["contract"]["visibility_mode"], "player")
             self.assertNotIn(HIDDEN_PROBE_TOKEN, json.dumps(audit_payload_after_gm, ensure_ascii=False))
             self.assertNotIn(HIDDEN_PROBE_TOKEN, json.dumps(audit_payload_after_maintenance, ensure_ascii=False))
+            self.assertNotIn(
+                "item:test-hidden-context-probe",
+                json.dumps(audit_payload_after_maintenance["completeness"]["quality_diagnostics"], ensure_ascii=False),
+            )
             invariants = {
                 item["source"]: item
                 for item in player_context.contract.get("visibility_invariants", [])

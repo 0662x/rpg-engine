@@ -19,6 +19,11 @@ from .context.collectors import (
     run_context_collectors,
 )
 from .context.budget import context_budget_policy
+from .context.diagnostics import (
+    build_budget_evidence,
+    build_quality_diagnostics,
+    high_value_missing_signals,
+)
 from .context.pipeline import ContextPipeline, ContextPipelineStep
 from .context.procedure import render_required_procedure, render_template_text
 from .context.rendering import (
@@ -437,12 +442,18 @@ def template_for(mode: str, submode: str) -> str:
 def filter_plot_signals_for_selected_sections(
     state: BuildState,
     selected: list[ContextSection],
+    omitted_sections: list[ContextSection],
     selected_section_keys: set[str],
 ) -> None:
     if not getattr(state, "plot_signals", None):
         return
     kept: list[dict[str, Any]] = []
     omitted: list[dict[str, Any]] = []
+    budget_omitted_section_keys = {
+        section.key
+        for section in omitted_sections
+        if section.omitted_reason == "token budget"
+    }
     for signal in state.plot_signals:
         required = {
             str(value)
@@ -451,11 +462,26 @@ def filter_plot_signals_for_selected_sections(
         }
         missing_required = missing_required_section_keys(required, selected_section_keys)
         if missing_required:
+            reason_code = (
+                "over_budget"
+                if set(missing_required).issubset(budget_omitted_section_keys)
+                else "unavailable"
+            )
+            reason = (
+                "plot signal omitted because source section was omitted by token budget"
+                if reason_code == "over_budget"
+                else "plot signal omitted because a required source section is unavailable"
+            )
+            budget_reason = (
+                "source section omitted by token budget"
+                if reason_code == "over_budget"
+                else "required source section unavailable"
+            )
             evidence = dict(signal)
             evidence.update(
                 {
-                    "reason": "plot signal omitted because source section was omitted by token budget",
-                    "reason_code": "over_budget",
+                    "reason": reason,
+                    "reason_code": reason_code,
                 }
             )
             evidence.pop("detail_text", None)
@@ -463,7 +489,8 @@ def filter_plot_signals_for_selected_sections(
             budget.update(
                 {
                     "included": False,
-                    "reason": "source section omitted by token budget",
+                    "reason": budget_reason,
+                    "reason_code": reason_code,
                     "required_sections": sorted(required),
                     "selected_sections": sorted(selected_section_keys),
                     "missing_required_sections": missing_required,
@@ -482,7 +509,14 @@ def filter_plot_signals_for_selected_sections(
             continue
         replacement = plot_signals_section(state)
         if replacement is None:
+            section.omitted_reason = (
+                "source section omitted by token budget"
+                if omitted
+                and all(item.get("reason_code") == "over_budget" for item in omitted)
+                else "required source section unavailable"
+            )
             selected[:] = [item for item in selected if item.key != "plot_signals"]
+            omitted_sections.append(section)
             selected_section_keys.discard("plot_signals")
         else:
             section.content = replacement.content
@@ -538,9 +572,12 @@ def _render_context_result_once(state: BuildState) -> ContextBuildResult:
     sections = build_sections(state)
     selected, omitted = apply_budget(sections, state.budget_limit)
     selected_section_keys = {section.key for section in selected}
-    filter_plot_signals_for_selected_sections(state, selected, selected_section_keys)
-    included_tokens = sum(section.estimated_tokens for section in selected)
-    section_token_map = {section.key: section.estimated_tokens for section in selected}
+    filter_plot_signals_for_selected_sections(
+        state,
+        selected,
+        omitted,
+        selected_section_keys,
+    )
     intent_blocked = bool(
         state.intent
         and (
@@ -616,15 +653,6 @@ def _render_context_result_once(state: BuildState) -> ContextBuildResult:
             "decision": state.intent.decision_trace.get("intent_ai", {}).get("decision") if state.intent else None,
         },
     }
-    completeness = {
-        "confidence": confidence,
-        "allow_proceed": allow_proceed,
-        "missing_required": state.missing_required,
-        "missing_signal_evidence": missing_signal_evidence(state),
-        "needs_user_confirmation": state.needs_user_confirmation,
-        "clarification": clarification,
-        "assumptions": state.assumptions,
-    }
     omitted_section_keys = {section.key for section in omitted}
     loaded_items = [section_item_evidence(section, context_view, included=True) for section in selected]
     loaded_items.extend(
@@ -689,15 +717,37 @@ def _render_context_result_once(state: BuildState) -> ContextBuildResult:
             },
         }
     )
-    budget = {
-        "limit": state.budget_limit,
-        "requested": state.requested_budget,
-        "campaign_default": state.campaign_budget,
-        "policy_profile": state.budget_policy_profile,
-        "policy_reason": state.budget_policy_reason,
-        "estimated": included_tokens,
-        "sections": section_token_map,
-        "trimmed": bool(omitted),
+    budget = build_budget_evidence(
+        sections=sections,
+        selected=selected,
+        omitted=omitted,
+        limit=state.budget_limit,
+        requested=state.requested_budget,
+        campaign_default=state.campaign_budget,
+        policy_profile=state.budget_policy_profile,
+        policy_reason=state.budget_policy_reason,
+    )
+    completeness = {
+        "confidence": confidence,
+        "allow_proceed": allow_proceed,
+        "missing_required": state.missing_required,
+        "missing_signal_evidence": [
+            *missing_signal_evidence(state),
+            *high_value_missing_signals(
+                budget=budget,
+                omitted_items=omitted_items,
+            ),
+        ],
+        "quality_diagnostics": build_quality_diagnostics(
+            state=state,
+            budget=budget,
+            loaded_items=loaded_items,
+            omitted_items=omitted_items,
+            context_view=context_view,
+        ),
+        "needs_user_confirmation": state.needs_user_confirmation,
+        "clarification": clarification,
+        "assumptions": state.assumptions,
     }
     if should_redact:
         contract = redact_player_context_value(state.conn, contract)
@@ -941,11 +991,20 @@ def section_item_evidence(
     included: bool,
 ) -> dict[str, Any]:
     metadata = section_source_metadata(section)
+    omission_reason = section.omitted_reason or "token budget"
+    reason_code = (
+        None
+        if included
+        else "over_budget"
+        if omission_reason in {"token budget", "source section omitted by token budget"}
+        else "unavailable"
+    )
     return {
         "id": f"section:{section.key}",
         "kind": "section",
         "name": section.title,
-        "reason": "selected for context output" if included else section.omitted_reason or "budget",
+        "reason": "selected for context output" if included else omission_reason,
+        "reason_code": reason_code,
         "priority": section.priority,
         "depth": None,
         "estimated_tokens": section.estimated_tokens,
@@ -957,7 +1016,8 @@ def section_item_evidence(
             "behavior": metadata["budget_behavior"],
             "priority": section.priority,
             "estimated_tokens": section.estimated_tokens,
-            "reason": None if included else section.omitted_reason or "budget",
+            "reason": None if included else omission_reason,
+            "reason_code": reason_code,
         },
     }
 
@@ -1030,6 +1090,7 @@ def collector_item_omission_evidence(
         {
             "included": False,
             "reason": "source section omitted by token budget",
+            "reason_code": "over_budget",
             "section_keys": sorted(section_keys),
             "selected_sections": sorted(selected_section_keys),
         }
@@ -1045,6 +1106,7 @@ def collector_item_omission_evidence(
     evidence.update(
         {
             "reason": "source section omitted by token budget",
+            "reason_code": "over_budget",
             "provenance": provenance,
             "budget": budget,
             "estimated_tokens": evidence.get("estimated_tokens"),

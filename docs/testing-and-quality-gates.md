@@ -69,6 +69,24 @@ GM / maintenance sanitized omission categories、context audit rows 和 `advisor
 都可检查，且 plot signals 不变成 facts、clock ticks、proposal approval 或 mandatory storylets，也不会引用
 budget-omitted relationship / progress source。
 
+Story 3.6 context budget / quality diagnostics 的可复现 focused gate：
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q \
+  tests/test_context_quality.py \
+  tests/test_current_native_context.py \
+  tests/test_current_native_visibility.py \
+  tests/test_relationship_access.py \
+  tests/test_progress_access.py \
+  -p no:cacheprovider
+```
+
+该 gate 必须覆盖 section decisions、required overflow、最多 8 条 high-value missing signals、最多 32 条
+quality warnings、unavailable sentinel 上限保留、canonical alias 批量查询、relationship/progress/memory 结构缺口、audit token rows，以及
+context audit TEMP-shadow 防护与 hidden-only/absent non-oracle。Story 3.5 compatibility evidence 另运行
+`tests/test_maintenance_tooling_coverage.py tests/test_projection_service.py tests/test_runtime.py`；diagnostics patch、
+review patch 或文档后仍需重跑 repository full suite、canonical campaigns、Markdown links 与静态 gates。
+
 Player-safe context / query / prompt hidden-boundary 变更还应覆盖 `tests/test_current_native_visibility.py`。
 测试需要证明 hidden entities、relationships、world settings、discovery states、memory summaries、events、
 scene output、ordinary query 和 player-safe helper prompt 输入都不会泄露 hidden material；trusted

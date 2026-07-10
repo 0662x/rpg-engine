@@ -406,8 +406,8 @@ prompt context。
 | `contract` | Context contract metadata：`id=ContextBuildResult`、版本、visibility mode、audit tables、pipeline steps、collector sources 和 authority note。 |
 | `scope` | 本次 request scope：玩家文本、mode/submode、visibility mode、预算、event/depth 限制、AI helper 设置和来源。 |
 | `request` | 路由、intent、turn contract、decision trace、visibility 和 helper trace。 |
-| `budget` | 请求预算、策略 profile/reason、section token evidence 和 trimmed 状态。 |
-| `completeness` | allow/confidence、missing required、missing-signal evidence、confirmation needs、clarification 和 assumptions。 |
+| `budget` | 请求/effective 预算、策略 profile/reason、section token evidence、included/omitted keys、确定性 `decisions`、overflow/utilization 和 trimmed 状态。 |
+| `completeness` | allow/confidence、missing required、high-value `missing_signal_evidence`、有界 `quality_diagnostics`、confirmation needs、clarification 和 assumptions。 |
 | `loaded_items` | included item evidence；每项包含 `id`、`kind`、`source`、`provenance`、`reason`、`visibility`、`priority`、`depth` 和 budget evidence。 |
 | `omitted_items` | omitted/default-forbidden evidence；每项同样包含 source/provenance/visibility/budget reason。 |
 | `sections` | 已选 context sections 的 render text。 |
@@ -421,6 +421,24 @@ evidence 中。如果合法内容 id 与同 run 内其他 evidence 的 `(item_id
 会使用 audit-only disambiguation；原始 evidence id 保留在 `context_runs.output_json`。Context audit 是
 opt-in 诊断证据：默认 `build_context()`、`GMRuntime.start_turn()` 和普通 query 不写 audit rows；启用
 `audit_context=True` 也不能推进 turn、event 或 gameplay facts。
+
+`budget.decisions` 的每项固定记录 section key、required、priority、estimated tokens、included、reason 与稳定
+`reason_code`；`trimmed` 只表示至少一个 `reason_code=over_budget` 的真实 token trimming，dependency unavailable
+仍会出现在 `omitted_sections`，但不会改变旧 `trimmed` 语义。
+`over_limit` / `overflow_tokens` 对最终 included tokens 与 effective limit 计算，required section 自身超限另以
+`required_over_limit` / `required_overflow_tokens` 记录。Token-budget omitted evidence 的 effective priority
+至少为 70，或 required sections 自身超限时，才会产生 high-value advisory；按 `(code, source, signal)` 去重、
+确定性排序且最多 8 条，只进入 `completeness.missing_signal_evidence`。
+
+`completeness.quality_diagnostics` 每项固定包含 `code`、`severity`、`source`、`subject_kind`、安全
+`subject_id`、`missing_fields`、`reason`、`visibility`、`provenance` 与 `advisory_only=true`。它只描述本次
+visibility-safe context 的 missing summary/alias、relationship endpoint、progress metadata、memory freshness 或
+结构化 budget tradeoff；按稳定 key 去重排序且最多 32 条，不做 prose/taste scoring。该 evidence 不是 SQLite
+事实权威，不能改变 allow/confidence/confirmation 或写入授权。`context_runs.output_json` 保存这些最终字段；
+source 诊断异常使用优先保留的 `severity=error` unavailable sentinel，但仍保持 `advisory_only=true`；
+`context_items.estimated_tokens` 对 included 与 omitted rows 都保存 item 已有的安全 token evidence，仍不新增事实表，
+audit 也继续保持 opt-in、同 snapshot、同 view、同 budget pass。所有 context audit DDL/DML 显式限定 canonical
+`main.context_runs` / `main.context_items`；TEMP shadow 不得接收、覆盖或分流 audit evidence。
 
 新增 context source 必须声明 visibility、provenance 和 budget behavior，并通过 `ContextBuildResult`
 输出和 audit 记录，不得绕过 `visibility.py`、context pipeline 或 access contracts。

@@ -24,3 +24,11 @@
 ## Deferred from: code review of 3-3-派生玩家视图与检索产物的隐藏信息边界 (2026-07-09)
 
 - `rpg_engine/audit.py` hidden clock audit still recognizes only exact `hidden`; this is a pre-existing audit/reporting gap outside Story 3.3 player-facing derived read-model scope.
+
+## Deferred from: code review of 3-6-context-budget-and-quality-diagnostics (2026-07-10)
+
+- `filter_plot_signals_for_selected_sections` 在初次 budget pass 后删除或缩小派生 plot section 时，不会重新选择先前 omitted 的较低优先级 source section；这是 Story 3.4 已存在的 dependency-aware budget selection/priority policy 缺口，修复会改变既有 selection 策略，故不作为 Story 3.6 diagnostics evidence patch 处理。
+
+## Deferred from: second code review of 3-6-context-budget-and-quality-diagnostics (2026-07-10)
+
+- Reaffirmed：plot post-filter 释放容量后不重新选择较低优先级 source section 仍是 Story 3.4 的 pre-existing dependency-aware budget policy 缺口；第二轮未发现新的 Story 3.6-specific 修复依据，继续 defer。

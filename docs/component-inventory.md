@@ -81,6 +81,7 @@
 | --- | --- | --- |
 | Context Builder | `rpg_engine/context_builder.py` | 上下文构建主入口 |
 | Collectors | `rpg_engine/context/collectors.py` | 事实收集 |
+| Context Diagnostics | `rpg_engine/context/diagnostics.py` | 有界 budget decision/high-value omission 与 visibility-safe advisory quality warnings |
 | Resolution | `rpg_engine/context/resolution.py` | 引用和冲突解析 |
 | Budget | `rpg_engine/context/budget.py` | 上下文预算 |
 | Semantic | `rpg_engine/context/semantic.py` | 语义建议 |

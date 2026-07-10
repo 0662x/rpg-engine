@@ -10,7 +10,7 @@ from .db import utc_now
 def ensure_context_audit_tables(conn: sqlite3.Connection) -> None:
     conn.executescript(
         """
-        create table if not exists context_runs (
+        create table if not exists main.context_runs (
           id text primary key,
           created_at text not null,
           user_text text not null,
@@ -25,7 +25,7 @@ def ensure_context_audit_tables(conn: sqlite3.Connection) -> None:
           output_json text not null
         );
 
-        create table if not exists context_items (
+        create table if not exists main.context_items (
           context_run_id text not null,
           item_id text not null,
           item_kind text not null,
@@ -40,7 +40,7 @@ def ensure_context_audit_tables(conn: sqlite3.Connection) -> None:
           foreign key(context_run_id) references context_runs(id) on delete cascade
         );
 
-        create index if not exists idx_context_runs_created on context_runs(created_at);
+        create index if not exists main.idx_context_runs_created on context_runs(created_at);
         """
     )
 
@@ -61,7 +61,7 @@ def write_context_audit(
 
     conn.execute(
         """
-        insert into context_runs
+        insert into main.context_runs
         (id, created_at, user_text, mode, submode, budget_limit, estimated_tokens,
          allow_proceed, confidence, missing_required_json, needs_confirmation_json, output_json)
         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -93,14 +93,14 @@ def write_context_audit(
             result.to_json_text(),
         ),
     )
-    conn.execute("delete from context_items where context_run_id = ?", (audit_id,))
+    conn.execute("delete from main.context_items where context_run_id = ?", (audit_id,))
     seen_item_keys: set[tuple[str, str]] = set()
     for item in result.loaded_items:
         source = str(item.get("source", "loaded"))
         item_id = context_item_audit_id(item, source, seen_item_keys)
         conn.execute(
             """
-            insert into context_items
+            insert into main.context_items
             (context_run_id, item_id, item_kind, source, reason, priority, estimated_tokens,
              included, omitted_reason, depth)
             values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -112,7 +112,7 @@ def write_context_audit(
                 source,
                 str(item.get("reason", "")),
                 int(item.get("priority", 0)),
-                None,
+                _audit_estimated_tokens(item),
                 1,
                 None,
                 item.get("depth"),
@@ -123,7 +123,7 @@ def write_context_audit(
         item_id = context_item_audit_id(item, source, seen_item_keys)
         conn.execute(
             """
-            insert into context_items
+            insert into main.context_items
             (context_run_id, item_id, item_kind, source, reason, priority, estimated_tokens,
              included, omitted_reason, depth)
             values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -135,7 +135,7 @@ def write_context_audit(
                 source,
                 str(item.get("reason", "")),
                 int(item.get("priority", 0)),
-                item.get("estimated_tokens"),
+                _audit_estimated_tokens(item),
                 0,
                 str(item.get("reason", "")),
                 item.get("depth"),
@@ -143,6 +143,17 @@ def write_context_audit(
         )
     conn.commit()
     return audit_id
+
+
+def _audit_estimated_tokens(item: dict[str, Any]) -> int | None:
+    value = item.get("estimated_tokens")
+    if value is None:
+        budget = item.get("budget")
+        if isinstance(budget, dict):
+            value = budget.get("estimated_tokens")
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return min(value, (1 << 63) - 1)
 
 
 def context_item_audit_id(

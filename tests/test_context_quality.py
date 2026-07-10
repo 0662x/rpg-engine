@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import sqlite3
 import unittest
 from types import SimpleNamespace
 from typing import Any
@@ -11,6 +13,11 @@ from rpg_engine.context.collectors import (
     plot_signal_omission_item,
     progress_is_active,
 )
+from rpg_engine.context.diagnostics import (
+    build_budget_evidence,
+    build_quality_diagnostics,
+    high_value_missing_signals,
+)
 from rpg_engine.context.resolution import dedupe_texts, extract_entity_ids, sanitize_fts_query
 from rpg_engine.context.sections import ContextSection, apply_budget, estimate_tokens
 from rpg_engine.context.semantic import normalize_semantic_suggestion, parse_semantic_json
@@ -18,6 +25,7 @@ from rpg_engine.context_builder import (
     apply_semantic_request_decision,
     collector_item_omitted_by_budget,
     default_context_pipeline,
+    filter_plot_signals_for_selected_sections,
     section_item_evidence,
     section_source_metadata,
     semantic_request_decision,
@@ -163,6 +171,981 @@ class ContextBuilderUnitTests(unittest.TestCase):
         self.assertIn(useful, selected)
         self.assertIn(low, omitted)
         self.assertEqual(low.omitted_reason, "token budget")
+
+    def test_budget_evidence_records_effective_limit_decisions_and_required_overflow(self) -> None:
+        required = ContextSection(
+            key="current_scene",
+            title="Scene",
+            content="x" * 1320,
+            priority=100,
+            required=True,
+        )
+        useful = ContextSection(
+            key="relationships",
+            title="Relationships",
+            content="y" * 220,
+            priority=73,
+        )
+        for section in (required, useful):
+            section.estimated_tokens = estimate_tokens(section.content)
+
+        selected, omitted = apply_budget([required, useful], limit=500)
+        evidence = build_budget_evidence(
+            sections=[required, useful],
+            selected=selected,
+            omitted=omitted,
+            limit=500,
+            requested=100,
+            campaign_default=3000,
+            policy_profile="explicit",
+            policy_reason="explicit budget 500",
+        )
+
+        self.assertEqual(evidence["limit"], 500)
+        self.assertEqual(evidence["requested"], 100)
+        self.assertTrue(evidence["over_limit"])
+        self.assertEqual(evidence["overflow_tokens"], evidence["estimated"] - 500)
+        self.assertTrue(evidence["required_over_limit"])
+        self.assertEqual(evidence["required_overflow_tokens"], evidence["required_tokens"] - 500)
+        self.assertGreater(evidence["utilization"], 1.0)
+        self.assertEqual(evidence["included_sections"], ["current_scene"])
+        self.assertEqual(evidence["omitted_sections"], ["relationships"])
+        self.assertEqual(
+            [decision["section"] for decision in evidence["decisions"]],
+            ["current_scene", "relationships"],
+        )
+        self.assertEqual(evidence["decisions"][0]["reason"], "required")
+        self.assertEqual(evidence["decisions"][1]["reason"], "token budget")
+        self.assertEqual(evidence["sections"], {"current_scene": required.estimated_tokens})
+
+    def test_budget_evidence_bounds_json_numeric_edges(self) -> None:
+        required = ContextSection(
+            key="current_scene",
+            title="Scene",
+            content="scene",
+            priority=100,
+            required=True,
+            estimated_tokens=10**100,
+        )
+
+        evidence = build_budget_evidence(
+            sections=[required],
+            selected=[required],
+            omitted=[],
+            limit=10**100,
+            requested=10**100,
+            campaign_default=10**100,
+            policy_profile="explicit",
+            policy_reason="numeric edge",
+        )
+
+        json.dumps(evidence, allow_nan=False)
+        self.assertEqual(evidence["limit"], (1 << 53) - 1)
+        self.assertEqual(evidence["requested"], (1 << 53) - 1)
+        self.assertEqual(evidence["estimated"], (1 << 53) - 1)
+        self.assertEqual(evidence["campaign_default"], (1 << 53) - 1)
+
+    def test_budget_evidence_preserves_signed_request_and_compares_before_saturation(self) -> None:
+        maximum = (1 << 53) - 1
+        required_a = ContextSection(
+            key="required_a",
+            title="Required A",
+            content="a",
+            priority=100,
+            required=True,
+            estimated_tokens=maximum,
+        )
+        required_b = ContextSection(
+            key="required_b",
+            title="Required B",
+            content="b",
+            priority=99,
+            required=True,
+            estimated_tokens=1,
+        )
+
+        evidence = build_budget_evidence(
+            sections=[required_a, required_b],
+            selected=[required_a, required_b],
+            omitted=[],
+            limit=maximum,
+            requested=-9,
+            campaign_default=3000,
+            policy_profile="explicit",
+            policy_reason="signed and saturated edge",
+        )
+
+        self.assertEqual(evidence["requested"], -9)
+        self.assertEqual(evidence["estimated"], maximum)
+        self.assertEqual(evidence["required_tokens"], maximum)
+        self.assertTrue(evidence["over_limit"])
+        self.assertEqual(evidence["overflow_tokens"], 1)
+        self.assertTrue(evidence["required_over_limit"])
+        self.assertEqual(evidence["required_overflow_tokens"], 1)
+
+    def test_plot_signal_reconciliation_records_removed_section_as_omitted(self) -> None:
+        section = ContextSection(
+            key="plot_signals",
+            title="Plot Signals",
+            content="plot",
+            priority=82,
+            estimated_tokens=4,
+        )
+        selected = [section]
+        relationship_section = ContextSection(
+            key="relationships",
+            title="Relationships",
+            content="relationships",
+            priority=83,
+            estimated_tokens=20,
+            omitted_reason="token budget",
+        )
+        omitted = [relationship_section]
+        selected_keys = {"plot_signals"}
+        state = SimpleNamespace(
+            mode="action",
+            plot_signals=[
+                {
+                    "id": "plot:relationship:missing-source",
+                    "signal_type": "relationship",
+                    "reason": "relevant relationship",
+                    "priority": 82,
+                    "source_refs": ["rel:missing-source"],
+                    "required_section_keys": ["relationships"],
+                    "budget": {"included": True, "priority": 82},
+                }
+            ],
+            plot_signal_omissions=[],
+        )
+
+        filter_plot_signals_for_selected_sections(
+            state,
+            selected,
+            omitted,
+            selected_keys,
+        )
+
+        self.assertEqual(selected, [])
+        self.assertEqual(selected_keys, set())
+        self.assertEqual(omitted, [relationship_section, section])
+        self.assertEqual(section.omitted_reason, "source section omitted by token budget")
+        self.assertEqual(state.plot_signal_omissions[0]["reason_code"], "over_budget")
+
+    def test_plot_signal_reconciliation_uses_unavailable_reason_without_budget_omission(self) -> None:
+        section = ContextSection(
+            key="plot_signals",
+            title="Plot Signals",
+            content="plot",
+            priority=82,
+            estimated_tokens=4,
+        )
+        selected = [section]
+        omitted: list[ContextSection] = []
+        selected_keys = {"plot_signals"}
+        state = SimpleNamespace(
+            mode="action",
+            plot_signals=[
+                {
+                    "id": "plot:relationship:unavailable-source",
+                    "signal_type": "relationship",
+                    "reason": "relationship dependency",
+                    "priority": 82,
+                    "source_refs": ["rel:unavailable-source"],
+                    "required_section_keys": ["relationships"],
+                    "budget": {"included": True, "priority": 82},
+                }
+            ],
+            plot_signal_omissions=[],
+        )
+
+        filter_plot_signals_for_selected_sections(
+            state,
+            selected,
+            omitted,
+            selected_keys,
+        )
+
+        self.assertEqual(selected, [])
+        self.assertEqual(omitted, [section])
+        self.assertEqual(section.omitted_reason, "required source section unavailable")
+        self.assertEqual(state.plot_signal_omissions[0]["reason_code"], "unavailable")
+        self.assertNotIn("budget", state.plot_signal_omissions[0]["reason"])
+
+    def test_unavailable_section_does_not_set_trimmed_or_budget_tradeoff(self) -> None:
+        selected_section = ContextSection(
+            key="low_priority_context",
+            title="Low Priority",
+            content="selected",
+            priority=20,
+            estimated_tokens=10,
+        )
+        unavailable_section = ContextSection(
+            key="plot_signals",
+            title="Plot Signals",
+            content="unavailable",
+            priority=82,
+            estimated_tokens=40,
+            omitted_reason="required source section unavailable",
+        )
+        budget = build_budget_evidence(
+            sections=[selected_section, unavailable_section],
+            selected=[selected_section],
+            omitted=[unavailable_section],
+            limit=500,
+            requested=500,
+            campaign_default=3000,
+            policy_profile="explicit",
+            policy_reason="unavailable dependency",
+        )
+
+        self.assertFalse(budget["trimmed"])
+        unavailable_decision = next(
+            item for item in budget["decisions"] if item["section"] == "plot_signals"
+        )
+        self.assertEqual(unavailable_decision["reason_code"], "unavailable")
+
+        state = SimpleNamespace(
+            conn=None,
+            entity_hits=[],
+            semantic_alias_gaps=[],
+            world_settings=[],
+            relationships=[],
+            relationship_omissions=[],
+            progress_context=[],
+            progress_omissions=[],
+        )
+        diagnostics = build_quality_diagnostics(
+            state=state,
+            budget=budget,
+            loaded_items=[],
+            omitted_items=[],
+            context_view="maintenance",
+        )
+        self.assertFalse(
+            any(item["code"] == "low_value_budget_tradeoff" for item in diagnostics),
+            diagnostics,
+        )
+
+    def test_high_value_missing_signals_are_thresholded_deduped_sorted_and_bounded(self) -> None:
+        omitted_items = [
+            {
+                "id": f"item:{index}",
+                "source": "relationships" if index % 2 else "progress_context",
+                "priority": 70 + index,
+                "reason": "source section omitted by token budget",
+                "reason_code": "over_budget",
+                "budget": {
+                    "included": False,
+                    "reason": "source section omitted by token budget",
+                    "reason_code": "over_budget",
+                    "priority": 70 + index,
+                    "estimated_tokens": 20 + index,
+                },
+            }
+            for index in range(12)
+        ]
+        omitted_items.extend(
+            [
+                dict(omitted_items[-1]),
+                {
+                    "id": "item:low",
+                    "source": "recent_events",
+                    "priority": 69,
+                    "reason": "source section omitted by token budget",
+                    "reason_code": "over_budget",
+                    "budget": {
+                        "included": False,
+                        "reason": "source section omitted by token budget",
+                        "reason_code": "over_budget",
+                    },
+                },
+                {
+                    "id": "item:not-budget",
+                    "source": "memory_summaries",
+                    "priority": 99,
+                    "reason": "stale",
+                    "budget": {"included": False, "reason": "stale"},
+                },
+            ]
+        )
+        budget = {
+            "limit": 500,
+            "required_tokens": 620,
+            "required_over_limit": True,
+            "required_overflow_tokens": 120,
+        }
+
+        signals = high_value_missing_signals(budget=budget, omitted_items=omitted_items)
+
+        self.assertEqual(len(signals), 8)
+        self.assertEqual(signals[0]["code"], "required_budget_overflow")
+        self.assertEqual(signals[0]["signal"], "required_sections")
+        self.assertEqual(
+            [signal["priority"] for signal in signals],
+            sorted((signal["priority"] for signal in signals), reverse=True),
+        )
+        keys = [(signal["code"], signal["source"], signal["signal"]) for signal in signals]
+        self.assertEqual(len(keys), len(set(keys)))
+        self.assertNotIn("item:low", {signal["signal"] for signal in signals})
+        self.assertNotIn("item:not-budget", {signal["signal"] for signal in signals})
+        self.assertTrue(all(signal["severity"] == "advisory" for signal in signals))
+
+    def test_high_value_signals_use_structured_budget_reason_and_reserve_required_overflow(self) -> None:
+        omitted_items = [
+            {
+                "id": f"item:structured-{index}",
+                "source": "progress_context",
+                "priority": 101 + index,
+                "reason": "over limit",
+                "reason_code": "over_budget",
+                "budget": {
+                    "included": False,
+                    "reason": "over limit",
+                    "reason_code": "over_budget",
+                    "priority": 101 + index,
+                },
+            }
+            for index in range(8)
+        ]
+        omitted_items.append(
+            {
+                "id": "item:false-budget-text",
+                "source": "memory_summaries",
+                "priority": 999,
+                "reason": "budget diagnostics unavailable",
+                "budget": {
+                    "included": False,
+                    "reason": "budget diagnostics unavailable",
+                    "priority": 999,
+                },
+            }
+        )
+        omitted_items.append(
+            {
+                "id": "item:collector-cap",
+                "source": "relationships",
+                "priority": 998,
+                "reason": "relationship omitted by collector-local relevance cap",
+                "reason_code": "over_budget",
+                "budget": {
+                    "included": False,
+                    "reason": "relationship omitted by collector-local relevance cap",
+                    "priority": 998,
+                },
+            }
+        )
+
+        signals = high_value_missing_signals(
+            budget={
+                "limit": 500,
+                "required_tokens": 520,
+                "required_over_limit": True,
+                "required_overflow_tokens": 20,
+            },
+            omitted_items=omitted_items,
+        )
+
+        self.assertEqual(len(signals), 8)
+        self.assertIn("required_budget_overflow", {item["code"] for item in signals})
+        self.assertNotIn("item:false-budget-text", {item["signal"] for item in signals})
+        self.assertNotIn("item:collector-cap", {item["signal"] for item in signals})
+        self.assertEqual(
+            [item["priority"] for item in signals],
+            sorted((item["priority"] for item in signals), reverse=True),
+        )
+
+    def test_quality_diagnostics_cover_structural_context_gaps_without_taste_scoring(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        self.addCleanup(conn.close)
+        conn.execute(
+            "create table aliases(alias text not null, entity_id text not null, kind text not null default 'name')"
+        )
+        state = SimpleNamespace(
+            conn=conn,
+            entity_hits=[
+                SimpleNamespace(
+                    id="char:missing-context",
+                    type="character",
+                    summary="",
+                )
+            ],
+            world_settings=[
+                {
+                    "row": {
+                        "entity_id": "world:missing-summary",
+                        "entity_summary": "",
+                    }
+                }
+            ],
+            relationships=[
+                {
+                    "record": SimpleNamespace(
+                        id="rel:missing-endpoint",
+                        summary="",
+                        endpoint_issues=("target_id: missing entity char:absent",),
+                    )
+                },
+                {
+                    "record": SimpleNamespace(
+                        id="rel:missing-endpoint",
+                        summary="",
+                        endpoint_issues=("target_id: missing entity char:absent",),
+                    )
+                },
+            ],
+            relationship_omissions=[],
+            progress_context=[
+                {
+                    "record": SimpleNamespace(
+                        id="clock:missing-metadata",
+                        summary="",
+                        scope=None,
+                        kind="countdown",
+                        clock_type="",
+                        segments_total=0,
+                        segments_filled=1,
+                        tick_rules={},
+                        trigger_when_full="",
+                    )
+                }
+            ],
+            progress_omissions=[],
+        )
+        omitted_items = [
+            {
+                "id": "memory:stale-context",
+                "kind": "memory",
+                "source": "memory_summaries",
+                "reason": "subject_updated_after_summary",
+                "freshness": {
+                    "status": "stale",
+                    "reason": "subject_updated_after_summary",
+                },
+            }
+        ]
+        budget = {
+            "limit": 500,
+            "decisions": [
+                {
+                    "section": "oversized_context",
+                    "required": False,
+                    "priority": 90,
+                    "estimated_tokens": 900,
+                    "included": False,
+                    "reason": "token budget",
+                    "reason_code": "over_budget",
+                },
+                {
+                    "section": "low_value_context",
+                    "required": False,
+                    "priority": 20,
+                    "estimated_tokens": 10,
+                    "included": True,
+                    "reason": "selected by priority within token budget",
+                    "reason_code": "selected",
+                },
+            ],
+        }
+
+        diagnostics = build_quality_diagnostics(
+            state=state,
+            budget=budget,
+            loaded_items=[],
+            omitted_items=omitted_items,
+            context_view="maintenance",
+        )
+
+        codes = {item["code"] for item in diagnostics}
+        self.assertTrue(
+            {
+                "missing_summary",
+                "missing_aliases",
+                "missing_endpoint_reference",
+                "missing_progress_metadata",
+                "stale_summary_evidence",
+                "oversized_context_section",
+                "low_value_budget_tradeoff",
+            }.issubset(codes),
+            diagnostics,
+        )
+        expected_fields = {
+            "code",
+            "severity",
+            "source",
+            "subject_kind",
+            "subject_id",
+            "missing_fields",
+            "reason",
+            "visibility",
+            "provenance",
+            "advisory_only",
+        }
+        self.assertTrue(all(set(item) == expected_fields for item in diagnostics))
+        self.assertTrue(all(item["advisory_only"] is True for item in diagnostics))
+        self.assertEqual(
+            diagnostics,
+            sorted(
+                diagnostics,
+                key=lambda item: (
+                    item["severity"],
+                    item["code"],
+                    item["source"],
+                    item["subject_id"],
+                    tuple(item["missing_fields"]),
+                ),
+            ),
+        )
+        dedupe_keys = [
+            (
+                item["code"],
+                item["source"],
+                item["subject_kind"],
+                item["subject_id"],
+                tuple(item["missing_fields"]),
+            )
+            for item in diagnostics
+        ]
+        self.assertEqual(len(dedupe_keys), len(set(dedupe_keys)))
+        serialized = json.dumps(diagnostics, ensure_ascii=False, sort_keys=True)
+        self.assertNotIn("prose", serialized.lower())
+        self.assertNotIn("taste", serialized.lower())
+        self.assertNotIn("quality_score", serialized.lower())
+        progress_warning = next(
+            item
+            for item in diagnostics
+            if item["code"] == "missing_progress_metadata"
+            and item["subject_id"] == "clock:missing-metadata"
+        )
+        self.assertNotIn("clock_type", progress_warning["missing_fields"])
+        self.assertNotIn("clock_type_or_kind", progress_warning["missing_fields"])
+
+    def test_quality_diagnostics_use_final_loaded_memory_evidence(self) -> None:
+        state = SimpleNamespace(
+            conn=None,
+            entity_hits=[],
+            world_settings=[],
+            relationships=[],
+            relationship_omissions=[],
+            progress_context=[],
+            progress_omissions=[],
+        )
+        loaded_items = [
+            {
+                "id": "memory:loaded-stale",
+                "kind": "memory",
+                "source": "memory_summaries",
+                "freshness": {"status": "stale"},
+            },
+            {
+                "id": "memory:loaded-missing-freshness",
+                "kind": "memory",
+                "source": "memory_summaries",
+            },
+            {
+                "id": "memory:loaded-unverifiable",
+                "kind": "memory",
+                "source": "memory_summaries",
+                "freshness": {"status": "unverifiable"},
+            },
+            {
+                "id": "section:memory_summaries",
+                "kind": "section",
+                "source": "memory_summaries",
+            },
+        ]
+
+        diagnostics = build_quality_diagnostics(
+            state=state,
+            budget={"limit": 500, "decisions": []},
+            loaded_items=loaded_items,
+            omitted_items=[],
+            context_view="maintenance",
+        )
+
+        self.assertTrue(
+            any(
+                item["code"] == "stale_summary_evidence"
+                and item["subject_id"] == "memory:loaded-stale"
+                for item in diagnostics
+            ),
+            diagnostics,
+        )
+        stale_subjects = {
+            item["subject_id"]
+            for item in diagnostics
+            if item["code"] == "stale_summary_evidence"
+        }
+        self.assertNotIn("section:memory_summaries", stale_subjects)
+        self.assertTrue(
+            {
+                "memory:loaded-stale",
+                "memory:loaded-missing-freshness",
+                "memory:loaded-unverifiable",
+            }.issubset(stale_subjects),
+            diagnostics,
+        )
+
+    def test_quality_diagnostics_isolate_source_failures(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        self.addCleanup(conn.close)
+        conn.execute(
+            "create table aliases(alias text not null, entity_id text not null, kind text not null default 'name')"
+        )
+        state = SimpleNamespace(
+            conn=conn,
+            entity_hits=[
+                SimpleNamespace(
+                    id="char:valid-warning",
+                    type="character",
+                    summary="",
+                )
+            ],
+            semantic_alias_gaps=[],
+            world_settings=[],
+            relationships=[
+                {
+                    "record": SimpleNamespace(
+                        id="rel:corrupt-issues",
+                        summary="summary",
+                        endpoint_issues=1,
+                    )
+                }
+            ],
+            relationship_omissions=[],
+            progress_context=[],
+            progress_omissions=[],
+        )
+
+        diagnostics = build_quality_diagnostics(
+            state=state,
+            budget={"limit": 500, "decisions": []},
+            loaded_items=[],
+            omitted_items=[],
+            context_view="maintenance",
+        )
+
+        self.assertTrue(
+            any(
+                item["code"] == "missing_summary"
+                and item["subject_id"] == "char:valid-warning"
+                for item in diagnostics
+            ),
+            diagnostics,
+        )
+        self.assertTrue(
+            any(
+                item["code"] == "quality_diagnostics_unavailable"
+                and item["source"] == "relationships"
+                for item in diagnostics
+            ),
+            diagnostics,
+        )
+
+    def test_quality_diagnostics_preserve_source_failure_with_thirty_two_item_cap(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        self.addCleanup(conn.close)
+        conn.execute(
+            "create table aliases(alias text not null, entity_id text not null, kind text not null default 'name')"
+        )
+        hits = [
+            SimpleNamespace(
+                id=f"char:missing-summary-{index:02d}",
+                type="character",
+                summary="",
+            )
+            for index in range(40)
+        ]
+        conn.executemany(
+            "insert into aliases(alias, entity_id) values (?, ?)",
+            [(f"Alias {index}", hit.id) for index, hit in enumerate(hits)],
+        )
+        state = SimpleNamespace(
+            conn=conn,
+            entity_hits=hits,
+            semantic_alias_gaps=[],
+            world_settings=[],
+            relationships=[
+                {
+                    "record": SimpleNamespace(
+                        id="rel:corrupt-capped",
+                        summary="summary",
+                        endpoint_issues=1,
+                    )
+                }
+            ],
+            relationship_omissions=[],
+            progress_context=[],
+            progress_omissions=[],
+        )
+
+        diagnostics = build_quality_diagnostics(
+            state=state,
+            budget={"limit": 500, "decisions": []},
+            loaded_items=[],
+            omitted_items=[],
+            context_view="maintenance",
+        )
+
+        self.assertEqual(len(diagnostics), 32)
+        unavailable = next(
+            item
+            for item in diagnostics
+            if item["code"] == "quality_diagnostics_unavailable"
+            and item["source"] == "relationships"
+        )
+        self.assertEqual(unavailable["severity"], "error")
+        self.assertTrue(
+            any(
+                item["code"] == "quality_diagnostics_unavailable"
+                and item["source"] == "relationships"
+                for item in diagnostics
+            ),
+            diagnostics,
+        )
+
+    def test_quality_diagnostics_report_conflict_progress_omission(self) -> None:
+        state = SimpleNamespace(
+            conn=None,
+            entity_hits=[],
+            semantic_alias_gaps=[],
+            world_settings=[],
+            relationships=[],
+            relationship_omissions=[],
+            progress_context=[],
+            progress_omissions=[
+                {
+                    "id": "clock:invalid-segments",
+                    "reason_code": "conflict",
+                }
+            ],
+        )
+
+        diagnostics = build_quality_diagnostics(
+            state=state,
+            budget={"limit": 500, "decisions": []},
+            loaded_items=[],
+            omitted_items=[],
+            context_view="maintenance",
+        )
+
+        warning = next(
+            item
+            for item in diagnostics
+            if item["code"] == "missing_progress_metadata"
+            and item["subject_id"] == "clock:invalid-segments"
+        )
+        self.assertEqual(warning["missing_fields"], ["segments_or_status"])
+
+    def test_scope_only_tick_rules_do_not_count_as_tick_metadata(self) -> None:
+        state = SimpleNamespace(
+            conn=None,
+            entity_hits=[],
+            semantic_alias_gaps=[],
+            world_settings=[],
+            relationships=[],
+            relationship_omissions=[],
+            progress_context=[
+                {
+                    "record": SimpleNamespace(
+                        id="clock:scope-only-rules",
+                        summary="summary",
+                        scope=["loc:known"],
+                        kind="project",
+                        clock_type="project",
+                        segments_total=4,
+                        segments_filled=1,
+                        tick_rules={"scope": ["loc:known"]},
+                        trigger_when_full="",
+                    )
+                }
+            ],
+            progress_omissions=[],
+        )
+
+        diagnostics = build_quality_diagnostics(
+            state=state,
+            budget={"limit": 500, "decisions": []},
+            loaded_items=[],
+            omitted_items=[],
+            context_view="maintenance",
+        )
+
+        warning = next(
+            item
+            for item in diagnostics
+            if item["code"] == "missing_progress_metadata"
+            and item["subject_id"] == "clock:scope-only-rules"
+        )
+        self.assertIn("tick_rules_or_trigger_when_full", warning["missing_fields"])
+
+    def test_quality_diagnostics_emit_generic_semantic_alias_gap(self) -> None:
+        state = SimpleNamespace(
+            conn=None,
+            entity_hits=[],
+            semantic_alias_gaps=[
+                {
+                    "label": "PRIVATE_UNRESOLVED_LABEL",
+                    "status": "unresolved",
+                    "candidates": [],
+                }
+            ],
+            world_settings=[],
+            relationships=[],
+            relationship_omissions=[],
+            progress_context=[],
+            progress_omissions=[],
+        )
+
+        diagnostics = build_quality_diagnostics(
+            state=state,
+            budget={"limit": 500, "decisions": []},
+            loaded_items=[],
+            omitted_items=[],
+            context_view="player",
+        )
+
+        warning = next(
+            item
+            for item in diagnostics
+            if item["code"] == "missing_aliases"
+            and item["source"] == "semantic_resolution"
+        )
+        self.assertEqual(warning["subject_id"], "semantic_alias_gap")
+        self.assertNotIn("PRIVATE_UNRESOLVED_LABEL", json.dumps(warning, sort_keys=True))
+
+    def test_blank_alias_does_not_count_as_lookup_alias(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        self.addCleanup(conn.close)
+        conn.execute(
+            "create table aliases(alias text not null, entity_id text not null, kind text not null default 'name')"
+        )
+        conn.execute(
+            "insert into aliases(alias, entity_id) values ('   ', 'char:blank-alias')"
+        )
+        state = SimpleNamespace(
+            conn=conn,
+            entity_hits=[
+                SimpleNamespace(
+                    id="char:blank-alias",
+                    type="character",
+                    summary="summary",
+                )
+            ],
+            semantic_alias_gaps=[],
+            world_settings=[],
+            relationships=[],
+            relationship_omissions=[],
+            progress_context=[],
+            progress_omissions=[],
+        )
+
+        diagnostics = build_quality_diagnostics(
+            state=state,
+            budget={"limit": 500, "decisions": []},
+            loaded_items=[],
+            omitted_items=[],
+            context_view="player",
+        )
+
+        self.assertTrue(
+            any(
+                item["code"] == "missing_aliases"
+                and item["subject_id"] == "char:blank-alias"
+                for item in diagnostics
+            ),
+            diagnostics,
+        )
+
+    def test_alias_diagnostics_batch_read_canonical_main_table(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        self.addCleanup(conn.close)
+        conn.execute(
+            "create table aliases(alias text not null, entity_id text not null, kind text not null default 'name')"
+        )
+        conn.executemany(
+            "insert into main.aliases(alias, entity_id) values (?, ?)",
+            [(f"Alias {index}", f"char:alias-{index}") for index in range(3)],
+        )
+        conn.execute(
+            "create temp table aliases(alias text not null, entity_id text not null, kind text not null default 'name')"
+        )
+        statements: list[str] = []
+        conn.set_trace_callback(statements.append)
+        self.addCleanup(conn.set_trace_callback, None)
+        state = SimpleNamespace(
+            conn=conn,
+            entity_hits=[
+                SimpleNamespace(
+                    id=f"char:alias-{index}",
+                    type="character",
+                    summary="summary",
+                )
+                for index in range(3)
+            ],
+            world_settings=[],
+            relationships=[],
+            relationship_omissions=[],
+            progress_context=[],
+            progress_omissions=[],
+        )
+
+        diagnostics = build_quality_diagnostics(
+            state=state,
+            budget={"limit": 500, "decisions": []},
+            loaded_items=[],
+            omitted_items=[],
+            context_view="player",
+        )
+
+        self.assertFalse(
+            any(item["code"] == "missing_aliases" for item in diagnostics),
+            diagnostics,
+        )
+        alias_queries = [
+            statement
+            for statement in statements
+            if "from main.aliases" in statement.lower()
+        ]
+        self.assertEqual(len(alias_queries), 1, statements)
+
+    def test_quality_diagnostics_are_bounded_to_thirty_two_items(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        self.addCleanup(conn.close)
+        conn.execute(
+            "create table aliases(alias text not null, entity_id text not null, kind text not null default 'name')"
+        )
+        state = SimpleNamespace(
+            conn=conn,
+            entity_hits=[
+                SimpleNamespace(
+                    id=f"char:missing-{index:02d}",
+                    type="character",
+                    summary="",
+                )
+                for index in range(40)
+            ],
+            world_settings=[],
+            relationships=[],
+            relationship_omissions=[],
+            progress_context=[],
+            progress_omissions=[],
+        )
+
+        diagnostics = build_quality_diagnostics(
+            state=state,
+            budget={"limit": 500, "decisions": []},
+            loaded_items=[],
+            omitted_items=[],
+            context_view="player",
+        )
+
+        self.assertEqual(len(diagnostics), 32)
 
     def test_default_context_collectors_are_registered_in_stable_order(self) -> None:
         self.assertEqual(

@@ -380,6 +380,15 @@ class CurrentNativeContextTests(FormalCurrentSaveReadOnlyTestCase):
                 for item in result.completeness["missing_signal_evidence"]
             )
         )
+        self.assertTrue(
+            any(
+                item.get("code") == "stale_summary_evidence"
+                and item.get("subject_id") == "memory:test-stale-subject"
+                and item.get("advisory_only") is True
+                for item in result.completeness["quality_diagnostics"]
+            ),
+            result.completeness["quality_diagnostics"],
+        )
         self.assertNotIn("OLD MEMORY SUMMARY", result.markdown)
         self.assertIn("NEW AUTHORITATIVE ENTITY SUMMARY", result.markdown)
 
@@ -587,6 +596,8 @@ class CurrentNativeContextTests(FormalCurrentSaveReadOnlyTestCase):
                 self.assertEqual(payload["request"]["context_audit_run_id"], "context:current-native-audit")
                 self.assertIn("Context Packet", payload["markdown"])
                 self.assertIn("missing_signal_evidence", payload["completeness"])
+                self.assertIn("quality_diagnostics", payload["completeness"])
+                self.assertTrue(payload["budget"]["decisions"])
                 self.assertTrue(payload["loaded_items"])
                 loaded = payload["loaded_items"][0]
                 for field in ("source", "provenance", "visibility", "budget", "depth"):
@@ -597,7 +608,7 @@ class CurrentNativeContextTests(FormalCurrentSaveReadOnlyTestCase):
                 self.assertTrue(all("depth" in item for item in payload["omitted_items"]))
                 active_clocks = conn.execute(
                     """
-                    select source, reason
+                    select source, reason, estimated_tokens
                     from context_items
                     where context_run_id='context:current-native-audit'
                       and item_id='section:active_clocks'
@@ -607,6 +618,8 @@ class CurrentNativeContextTests(FormalCurrentSaveReadOnlyTestCase):
                 assert active_clocks is not None
                 self.assertEqual(active_clocks["source"], "active_clocks")
                 self.assertTrue(active_clocks["reason"])
+                self.assertIsInstance(active_clocks["estimated_tokens"], int)
+                self.assertGreater(active_clocks["estimated_tokens"], 0)
                 direct_hit = conn.execute(
                     """
                     select source, reason
@@ -673,6 +686,54 @@ class CurrentNativeContextTests(FormalCurrentSaveReadOnlyTestCase):
             self.assertIn("section:routes", [row["item_id"] for row in rows if row["item_kind"] == "section"])
             self.assertIn("audit:route:section:routes", [row["item_id"] for row in rows if row["item_kind"] == "route"])
             self.assertEqual(len(rows), len({row["item_id"] for row in rows}))
+
+    def test_context_audit_writes_canonical_main_tables_under_temp_shadow(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            save = copy_current_packages(tmp)
+            campaign = load_campaign(save)
+            with connect(campaign) as conn:
+                conn.execute(
+                    "create temp table context_runs as select * from main.context_runs where 0"
+                )
+                conn.execute(
+                    "create temp table context_items as select * from main.context_items where 0"
+                )
+
+                packet = build_context(
+                    campaign,
+                    conn,
+                    user_text="检查终极复合弩",
+                    mode="query",
+                    submode="entity",
+                    view="player",
+                    audit_context=True,
+                    audit_context_run_id="context:temp-shadow-audit",
+                )
+
+                self.assertEqual(
+                    conn.execute(
+                        "select count(*) from main.context_runs where id='context:temp-shadow-audit'"
+                    ).fetchone()[0],
+                    1,
+                )
+                self.assertGreater(
+                    conn.execute(
+                        "select count(*) from main.context_items where context_run_id='context:temp-shadow-audit'"
+                    ).fetchone()[0],
+                    0,
+                )
+                self.assertEqual(
+                    conn.execute("select count(*) from temp.context_runs").fetchone()[0],
+                    0,
+                )
+                self.assertEqual(
+                    conn.execute("select count(*) from temp.context_items").fetchone()[0],
+                    0,
+                )
+                self.assertEqual(
+                    packet.request["context_audit_run_id"],
+                    "context:temp-shadow-audit",
+                )
 
     def test_current_entity_query_matrix_covers_inventory_people_threats_and_clocks(self) -> None:
         runtime = GMRuntime.from_path(SAVE_ROOT)
@@ -917,6 +978,23 @@ class CurrentNativeContextTests(FormalCurrentSaveReadOnlyTestCase):
                 upsert_clock(
                     conn,
                     {
+                        "id": "clock:test-context-hidden-scope",
+                        "name": "可见进度外壳",
+                        "summary": "该可见进度引用 player 不可读的 scope。",
+                        "clock_type": "project",
+                        "segments_total": 4,
+                        "segments_filled": 1,
+                        "visibility": "visible",
+                        "trigger_when_full": "完成可见进度。",
+                        "tick_rules": {
+                            "scope": ["char:test-context-secret"],
+                            "tick_when": ["完成安全步骤"],
+                        },
+                    },
+                )
+                upsert_clock(
+                    conn,
+                    {
                         "id": "clock:test-context-complete",
                         "name": "已完成证据计划",
                         "summary": "这个计划已经完成，不应作为 active progress loaded。",
@@ -1080,6 +1158,64 @@ class CurrentNativeContextTests(FormalCurrentSaveReadOnlyTestCase):
                     missing_ref_player_packet.omitted_items,
                 )
 
+                hidden_endpoint_player_packet = build_context(
+                    campaign,
+                    conn,
+                    user_text="检查 rel:test-context-hidden-endpoint",
+                    mode="query",
+                    submode="context",
+                    view="player",
+                    budget=4200,
+                )
+                hidden_endpoint_quality = hidden_endpoint_player_packet.completeness[
+                    "quality_diagnostics"
+                ]
+                self.assertFalse(
+                    any(
+                        item.get("code") == "missing_endpoint_reference"
+                        and item.get("subject_id") == "rel:test-context-hidden-endpoint"
+                        for item in hidden_endpoint_quality
+                    ),
+                    hidden_endpoint_quality,
+                )
+                self.assertNotIn(
+                    "char:test-context-secret",
+                    json.dumps(hidden_endpoint_quality, ensure_ascii=False),
+                )
+
+                hidden_scope_player_packet = build_context(
+                    campaign,
+                    conn,
+                    user_text="检查 clock:test-context-hidden-scope",
+                    mode="query",
+                    submode="context",
+                    view="player",
+                    budget=4200,
+                )
+                hidden_scope_quality = hidden_scope_player_packet.completeness[
+                    "quality_diagnostics"
+                ]
+                self.assertFalse(
+                    any(
+                        item.get("code") == "missing_progress_metadata"
+                        and item.get("subject_id") == "clock:test-context-hidden-scope"
+                        for item in hidden_scope_quality
+                    ),
+                    hidden_scope_quality,
+                )
+                self.assertFalse(
+                    any(
+                        item.get("source") == "progress_context"
+                        and item.get("id") == "clock:test-context-hidden-scope"
+                        for item in hidden_scope_player_packet.omitted_items
+                    ),
+                    hidden_scope_player_packet.omitted_items,
+                )
+                self.assertNotIn(
+                    "char:test-context-secret",
+                    json.dumps(hidden_scope_quality, ensure_ascii=False),
+                )
+
                 maintenance_packet = build_context(
                     campaign,
                     conn,
@@ -1115,6 +1251,23 @@ class CurrentNativeContextTests(FormalCurrentSaveReadOnlyTestCase):
                 self.assertEqual(
                     maintenance_omissions[("progress_context", "clock:test-context-archived")]["reason_code"],
                     "archived",
+                )
+                quality_diagnostics = maintenance_packet.completeness["quality_diagnostics"]
+                self.assertTrue(
+                    any(
+                        item.get("code") == "missing_endpoint_reference"
+                        and item.get("subject_id") == "rel:test-context-missing-endpoint"
+                        for item in quality_diagnostics
+                    ),
+                    quality_diagnostics,
+                )
+                self.assertTrue(
+                    any(
+                        item.get("code") == "missing_progress_metadata"
+                        and item.get("subject_id") == "clock:test-context-missing-ref"
+                        for item in quality_diagnostics
+                    ),
+                    quality_diagnostics,
                 )
                 maintenance_keys = [
                     (item.get("source"), item.get("id"), item.get("reason_code"))
@@ -1166,6 +1319,12 @@ class CurrentNativeContextTests(FormalCurrentSaveReadOnlyTestCase):
 
                 packet = build_context(campaign, conn, user_text="询问预算伙伴和预算计划", mode="auto", budget=500)
 
+                self.assertEqual(packet.budget["limit"], 500)
+                self.assertEqual(packet.budget["requested"], 500)
+                self.assertTrue(packet.budget["trimmed"])
+                self.assertIn("decisions", packet.budget)
+                self.assertIn("relationships", packet.budget["omitted_sections"])
+                self.assertIn("progress_context", packet.budget["omitted_sections"])
                 self.assertNotIn("relationships", packet.sections)
                 self.assertNotIn("progress_context", packet.sections)
                 self.assertFalse(
@@ -1192,6 +1351,22 @@ class CurrentNativeContextTests(FormalCurrentSaveReadOnlyTestCase):
                 target_progress = next(item for item in progress_omissions if item["id"] == "clock:test-budget-goal")
                 self.assertEqual(target_relationship["budget"]["reason"], "source section omitted by token budget")
                 self.assertEqual(target_progress["budget"]["reason"], "source section omitted by token budget")
+                high_value_signals = [
+                    item
+                    for item in packet.completeness["missing_signal_evidence"]
+                    if item.get("code") == "high_value_budget_omission"
+                ]
+                high_value_ids = {item["signal"] for item in high_value_signals}
+                self.assertIn("rel:test-budget-ally", high_value_ids)
+                self.assertIn("clock:test-budget-goal", high_value_ids)
+                self.assertLessEqual(len(high_value_signals), 8)
+                self.assertIn("quality_diagnostics", packet.completeness)
+                self.assertTrue(
+                    all(
+                        item.get("advisory_only") is True
+                        for item in packet.completeness["quality_diagnostics"]
+                    )
+                )
                 self.assertFalse(
                     any(
                         item.get("source") == "plot_signals"
