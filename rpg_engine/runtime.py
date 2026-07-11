@@ -20,7 +20,7 @@ from .ai.defaults import (
     DEFAULT_STATE_AUDIT_ENABLED,
     DEFAULT_STATE_AUDIT_TIMEOUT_SECONDS,
 )
-from .ai.provider import public_ai_helper_result_dict
+from .ai.provider import AIHelperResult, public_ai_helper_result_dict
 from .campaign import Campaign, load_campaign
 from .capabilities import ACTION_CAPABILITIES, CAPABILITY_INTENTS, capability_for_action
 from .commit_service import commit_turn_proposal
@@ -56,6 +56,7 @@ from .preflight_cache import (
     mark_intent_preflight_failed,
     mark_intent_preflight_ready,
     normalize_identity_profile,
+    validate_preflight_creation_identity,
 )
 from .proposal import TurnProposal, intent_context_id_from_intent, preflight_id_from_intent, turn_proposal_from_dict
 from .redaction import redact_player_hidden_material
@@ -716,7 +717,13 @@ class GMRuntime:
         try:
             effective_intent_backend = normalize_backend(intent_backend, "direct")
             effective_intent_fallback_backend = normalize_fallback_backend(intent_fallback_backend, "off")
-            effective_identity_profile = normalize_identity_profile(preflight_identity_profile)
+            effective_identity_profile = validate_preflight_creation_identity(
+                normalize_identity_profile(preflight_identity_profile),
+                platform=platform,
+                session_key=session_key,
+                message_id=message_id,
+                source_user_text_hash=resolved_hash,
+            )
         except ValueError as exc:
             return IntentPreflightResult(
                 campaign_id=self.campaign.campaign_id,
@@ -780,21 +787,32 @@ class GMRuntime:
                 ttl_seconds=ttl_seconds,
             )
             conn.commit()
-            helper = collect_internal_intent_candidate(
-                self.campaign,
-                conn,
-                text,
-                external_candidate=helper_external,
-                rule_candidate=rule_candidate,
-                backend=effective_intent_backend,
-                provider=intent_provider,
-                model=intent_model,
-                timeout=intent_timeout,
-                base_url=intent_base_url,
-                api_key_env=intent_api_key_env,
-                fallback_backend=effective_intent_fallback_backend,
-                execution_class="background",
-            )
+            try:
+                helper = collect_internal_intent_candidate(
+                    self.campaign,
+                    conn,
+                    text,
+                    external_candidate=helper_external,
+                    rule_candidate=rule_candidate,
+                    backend=effective_intent_backend,
+                    provider=intent_provider,
+                    model=intent_model,
+                    timeout=intent_timeout,
+                    base_url=intent_base_url,
+                    api_key_env=intent_api_key_env,
+                    fallback_backend=effective_intent_fallback_backend,
+                    execution_class="background",
+                )
+            except Exception:
+                helper = AIHelperResult(
+                    task="internal_intent_review",
+                    backend=effective_intent_backend,
+                    provider=intent_provider,
+                    model=intent_model,
+                    status="error",
+                    error="internal_intent_review ai unavailable",
+                    failure_reason="unavailable",
+                )
             if helper.ok and helper.parsed:
                 final_status = mark_intent_preflight_ready(
                     conn,

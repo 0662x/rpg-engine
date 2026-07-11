@@ -298,6 +298,10 @@ Preflight 是 advisory internal-review cache。它可以让正式入口少等一
 - provider / model / backend / fallback
 - schema / task
 
+Helper identity 必须使用 SQLite 已有的 `provider`、`model`、`backend`、`fallback_backend`
+逐字段对账；组合 `model_version` 只保留兼容 evidence，不能作为唯一命中权威，避免带分隔符的字段值
+形成拼接碰撞。`preflight_id` 使用 `preflight:<32 lowercase hex>` 的唯一随机形状。
+
 ### `message_only`
 
 用于平台消息先到、external AI 尚未产出 candidate 的情况。
@@ -312,7 +316,9 @@ Preflight 是 advisory internal-review cache。它可以让正式入口少等一
 `message_only` 创建 preflight 时必须隔离 external candidate。当前实现中
 `GMRuntime.preflight_intent()` 会在 `preflight_identity_profile == "message_only"` 时把
 `helper_external` 设为 `None`，`preflight_cache.create_pending_intent_preflight()` 也会对
-`message_only` 清空 stored external candidate。
+`message_only` 清空 stored external candidate。Runtime 和最内层 cache service 都会在写 pending row 或
+调用 helper 前要求非空 `platform`、`session_key`、`message_id`；`source_user_text_hash` 由 NFKC/trim 后的
+玩家原文生成，调用方声明 hash 时必须精确匹配。失败不得留下 cache row 或启动 internal review。
 
 ### Cache hit 规则
 
@@ -324,6 +330,11 @@ arbiter -> binder -> resolver / preview -> validation -> pending action -> playe
 
 Miss、pending timeout、queue full、AI timeout、failed、expired、rejected、ambiguous、
 late ready 或 already used 都必须降级为正常 live processing 或安全失败。
+
+Ready 消费使用 SQLite 条件更新实现 single-use；并发连接中只有一个 consumer 可以得到 hit，其他 consumer
+必须观察 authoritative `used`。`used` 不能被迟到 reject/expire 覆盖，expired 或 bypassed row 也不能被
+late-ready 重新激活。公开 trace 只保留 hashed session identity 与 allowlisted helper evidence，不返回 raw
+session key、raw prompt、provider body、helper audit、hidden content 或 private reasoning。
 
 Preflight cache 可能包含原始玩家输入、platform/session/message 标识、internal review 和 helper
 audit。它是敏感运行数据，不进入公开仓库。

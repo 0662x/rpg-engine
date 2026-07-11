@@ -9,6 +9,7 @@ from ..ai.provider import AIHelperResult, public_ai_helper_result_dict
 from ..ai.policy import normalize_timeout
 from ..ai.schema_validation import validate_ai_output_schema
 from ..campaign import Campaign
+from ..db import connect
 from ..preflight_cache import (
     PreflightLookupResult,
     consume_intent_preflight,
@@ -119,22 +120,36 @@ class AIIntentRouter:
 
         if intent_ai_mode == "consensus":
             if preflight_id or message_id:
-                preflight_lookup = self.lookup_preflight(
-                    campaign,
-                    user_text,
-                    preflight_id=preflight_id,
-                    provider=provider,
-                    model=model,
-                    backend=backend,
-                    fallback_backend=fallback_backend,
-                    message_id=message_id,
-                    platform=platform,
-                    session_key=session_key,
-                    source_user_text_hash=source_user_text_hash,
-                    external_candidate=external.to_dict() if external else None,
-                    rule_candidate=rule.to_dict(),
-                    pending_wait_ms=preflight_pending_wait_ms,
-                )
+                if self.conn.in_transaction:
+                    preflight_lookup = PreflightLookupResult(
+                        "unavailable",
+                        reason="preflight cache unavailable",
+                    )
+                else:
+                    try:
+                        preflight_lookup = self.lookup_preflight(
+                            campaign,
+                            user_text,
+                            preflight_id=preflight_id,
+                            provider=provider,
+                            model=model,
+                            backend=backend,
+                            fallback_backend=fallback_backend,
+                            message_id=message_id,
+                            platform=platform,
+                            session_key=session_key,
+                            source_user_text_hash=source_user_text_hash,
+                            external_candidate=external.to_dict() if external else None,
+                            rule_candidate=rule.to_dict(),
+                            pending_wait_ms=preflight_pending_wait_ms,
+                        )
+                    except sqlite3.OperationalError as exc:
+                        if not sqlite_busy_error(exc):
+                            raise
+                        preflight_lookup = PreflightLookupResult(
+                            "unavailable",
+                            reason="preflight cache unavailable",
+                        )
                 if preflight_lookup.hit and preflight_lookup.internal_review is not None:
                     cached_helper = ai_helper_result_from_preflight(preflight_lookup, provider=provider, model=model)
                     if cached_helper.ok:
@@ -145,8 +160,6 @@ class AIIntentRouter:
                 else:
                     guards.append(f"intent preflight cache not used: {preflight_lookup.status} {preflight_lookup.reason}".strip())
             if internal_helper is None:
-                if preflight_lookup is not None:
-                    self.conn.commit()
                 internal_helper = collect_internal_intent_candidate(
                     campaign,
                     self.conn,
@@ -300,12 +313,30 @@ class AIIntentRouter:
         rule_candidate: dict[str, Any] | None = None,
         pending_wait_ms: int = 0,
     ) -> PreflightLookupResult:
-        if preflight_id:
-            return consume_intent_preflight(
-                self.conn,
+        with connect(campaign) as cache_conn:
+            cache_conn.execute("pragma busy_timeout=0")
+            if preflight_id:
+                return consume_intent_preflight(
+                    cache_conn,
+                    campaign,
+                    user_text,
+                    preflight_id=preflight_id,
+                    provider=provider,
+                    model=model,
+                    backend=backend,
+                    fallback_backend=fallback_backend,
+                    message_id=message_id,
+                    platform=platform,
+                    session_key=session_key,
+                    source_user_text_hash=source_user_text_hash,
+                    external_candidate=external_candidate,
+                    rule_candidate=rule_candidate,
+                    pending_wait_ms=pending_wait_ms,
+                )
+            return consume_intent_preflight_by_message(
+                cache_conn,
                 campaign,
                 user_text,
-                preflight_id=preflight_id,
                 provider=provider,
                 model=model,
                 backend=backend,
@@ -318,22 +349,6 @@ class AIIntentRouter:
                 rule_candidate=rule_candidate,
                 pending_wait_ms=pending_wait_ms,
             )
-        return consume_intent_preflight_by_message(
-            self.conn,
-            campaign,
-            user_text,
-            provider=provider,
-            model=model,
-            backend=backend,
-            fallback_backend=fallback_backend,
-            message_id=message_id,
-            platform=platform,
-            session_key=session_key,
-            source_user_text_hash=source_user_text_hash,
-            external_candidate=external_candidate,
-            rule_candidate=rule_candidate,
-            pending_wait_ms=pending_wait_ms,
-        )
 
     def action_intent_from_bound(self, bound: BoundIntent, *, source: str = "ai_consensus") -> ActionIntent:
         return action_intent_from_bound(bound, source=source)
@@ -551,3 +566,8 @@ def summarize_internal_review_metadata(metadata: dict[str, Any] | None) -> dict[
         "external_candidate_quality": metadata.get("external_candidate_quality"),
         "disagreements": [str(item).strip() for item in disagreement_items if str(item).strip()],
     }
+
+
+def sqlite_busy_error(exc: sqlite3.OperationalError) -> bool:
+    message = str(exc).lower()
+    return "locked" in message or "busy" in message

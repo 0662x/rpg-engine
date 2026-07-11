@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import sqlite3
 import tempfile
 import unittest
 from contextlib import contextmanager
@@ -90,6 +91,23 @@ def sidecar_config(
     )
 
 
+def gameplay_authority_snapshot(save_path: Path) -> dict[str, object]:
+    conn = sqlite3.connect(save_path / "data" / "game.sqlite")
+    try:
+        current_turn = conn.execute(
+            "select value from meta where key='current_turn_id'"
+        ).fetchone()
+        facts = conn.execute("select * from facts order by rowid").fetchall()
+        events = conn.execute("select * from events order by rowid").fetchall()
+    finally:
+        conn.close()
+    return {
+        "current_turn_id": str(current_turn[0]) if current_turn else "",
+        "facts": tuple(tuple(row) for row in facts),
+        "events": tuple(tuple(row) for row in events),
+    }
+
+
 class TimeoutRuntime:
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -162,12 +180,20 @@ class PlatformAISimulationTests(unittest.TestCase):
                 "text": "休息到早上",
                 "actor_id": "user:1",
             }
+            binding = sidecar.binding_store.get(platform="qq", session_key="qq:user:1")
+            self.assertIsNotNone(binding)
+            if binding is None:
+                self.fail("active platform binding is required")
+            save_path = _root / binding.active_save
+            before_prewarm = gameplay_authority_snapshot(save_path)
             with temporary_env("AIGM_AI_FAKE_RESPONSE", fake_internal_review("rest", {"until": "morning"})):
                 prewarm = sidecar.handle_message_event(event).to_dict()
                 worker_results = [item.to_dict() for item in sidecar.drain_prewarm()]
+            after_prewarm = gameplay_authority_snapshot(save_path)
 
             with temporary_env("AIGM_AI_FAKE_RESPONSE", None), temporary_env("AIGM_TEST_MISSING_KEY", None):
                 acted = sidecar.player_act_from_message(event).to_dict()
+            before_confirm = gameplay_authority_snapshot(save_path)
 
             confirmed = sidecar.player_confirm_from_message(
                 {
@@ -179,6 +205,7 @@ class PlatformAISimulationTests(unittest.TestCase):
                 },
                 session_id=acted.get("session_id") or "",
             ).to_dict()
+            after_confirm = gameplay_authority_snapshot(save_path)
             metrics = sidecar.metrics_snapshot()
 
             self.assertTrue(prewarm["enqueued"], prewarm)
@@ -188,8 +215,12 @@ class PlatformAISimulationTests(unittest.TestCase):
             self.assertEqual(acted["action"], "rest")
             self.assertNotIn("missing API key", json.dumps(acted, ensure_ascii=False))
             self.assertEqual(metrics["preflight_cache"]["message_only_used_count"], 1)
+            self.assertEqual(after_prewarm, before_prewarm)
+            self.assertEqual(before_confirm, before_prewarm)
             self.assertTrue(confirmed["ok"], confirmed)
             self.assertTrue(confirmed["saved"], confirmed)
+            self.assertNotEqual(after_confirm["current_turn_id"], before_confirm["current_turn_id"])
+            self.assertGreater(len(after_confirm["events"]), len(before_confirm["events"]))
         finally:
             tmp.cleanup()
 

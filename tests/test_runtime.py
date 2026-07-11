@@ -382,6 +382,279 @@ class GMRuntimeTests(unittest.TestCase):
             self.assertFalse(consumed_winner.ok)
             self.assertEqual(consumed_winner.status, "used")
 
+    def test_preflight_unexpected_helper_exception_is_sanitized_and_finalized(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = GMRuntime.from_path(copy_minimal_campaign(tmp))
+            with patch(
+                "rpg_engine.runtime.collect_internal_intent_candidate",
+                side_effect=RuntimeError("SECRET provider body"),
+            ):
+                result = runtime.preflight_intent(
+                    "休息到早上",
+                    message_id="msg:unexpected-helper-error",
+                )
+
+            payload = json.dumps(result.to_dict(), ensure_ascii=False)
+            with connect(runtime.campaign) as conn:
+                row = conn.execute(
+                    "select status, error from intent_preflight_cache where id=?",
+                    (result.preflight_id,),
+                ).fetchone()
+
+            self.assertFalse(result.ok)
+            self.assertEqual(result.status, "failed")
+            self.assertEqual(result.errors, ("internal_intent_review ai unavailable",))
+            self.assertEqual(row["status"], "failed")
+            self.assertEqual(row["error"], "internal_intent_review ai unavailable")
+            self.assertNotIn("SECRET", payload)
+            self.assertNotIn("SECRET", str(tuple(row)))
+
+    def test_consumed_preflight_stays_used_when_downstream_routing_raises(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = GMRuntime.from_path(copy_minimal_campaign(tmp))
+            old_fake = os.environ.get("AIGM_AI_FAKE_RESPONSE")
+            os.environ["AIGM_AI_FAKE_RESPONSE"] = json.dumps(
+                {
+                    "kind": "single",
+                    "mode": "action",
+                    "action": "rest",
+                    "slots": {"until": "morning"},
+                    "plan": [],
+                    "confidence": "high",
+                    "missing_slots": [],
+                    "needs_confirmation": [],
+                    "safety_flags": [],
+                    "reason": "cached review",
+                    "agreement_with_external": "no_external",
+                    "disagreements": [],
+                    "external_candidate_quality": "no_external",
+                },
+                ensure_ascii=False,
+            )
+            try:
+                preflight = runtime.preflight_intent(
+                    "休息到早上",
+                    intent_backend="direct",
+                    message_id="msg:downstream-rollback",
+                )
+            finally:
+                if old_fake is None:
+                    os.environ.pop("AIGM_AI_FAKE_RESPONSE", None)
+                else:
+                    os.environ["AIGM_AI_FAKE_RESPONSE"] = old_fake
+
+            self.assertTrue(preflight.ok, preflight.to_dict())
+            with patch(
+                "rpg_engine.ai_intent.router.AIIntentRouter.decide",
+                side_effect=RuntimeError("downstream routing failed"),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "downstream routing failed"):
+                    runtime.preview_from_text(
+                        "休息到早上",
+                        intent_ai="consensus",
+                        intent_backend="direct",
+                        preflight_id=preflight.preflight_id,
+                        message_id="msg:downstream-rollback",
+                        source_user_text_hash=preflight.source_user_text_hash,
+                    )
+
+            with connect(runtime.campaign) as conn:
+                row = conn.execute(
+                    "select status, used_at from intent_preflight_cache where id=?",
+                    (preflight.preflight_id,),
+                ).fetchone()
+            self.assertEqual(row["status"], "used")
+            self.assertTrue(row["used_at"])
+
+    def test_preflight_lookup_never_commits_caller_owned_transaction(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = GMRuntime.from_path(copy_minimal_campaign(tmp))
+            review = {
+                "kind": "single",
+                "mode": "action",
+                "action": "rest",
+                "slots": {"until": "morning"},
+                "plan": [],
+                "confidence": "high",
+                "missing_slots": [],
+                "needs_confirmation": [],
+                "safety_flags": [],
+                "reason": "safe review",
+                "agreement_with_external": "no_external",
+                "disagreements": [],
+                "external_candidate_quality": "no_external",
+            }
+            helper = AIHelperResult(
+                task="internal_intent_review",
+                backend="direct",
+                provider="deepseek",
+                model="deepseek-v4-flash",
+                status="ok",
+                parsed=review,
+            )
+            with patch(
+                "rpg_engine.runtime.collect_internal_intent_candidate",
+                return_value=helper,
+            ):
+                preflight = runtime.preflight_intent(
+                    "休息到早上",
+                    intent_backend="direct",
+                    message_id="msg:caller-transaction",
+                )
+            self.assertTrue(preflight.ok, preflight.to_dict())
+
+            with connect(runtime.campaign) as caller:
+                before = caller.execute(
+                    "select value from meta where key='current_game_day'"
+                ).fetchone()["value"]
+                caller.execute(
+                    "update meta set value='UNCOMMITTED' where key='current_game_day'"
+                )
+                with patch(
+                    "rpg_engine.ai_intent.router.collect_internal_intent_candidate",
+                    return_value=helper,
+                ):
+                    with patch(
+                        "rpg_engine.ai_intent.router.AIIntentRouter.decide",
+                        side_effect=RuntimeError("downstream routing failed"),
+                    ):
+                        with self.assertRaisesRegex(RuntimeError, "downstream routing failed"):
+                            route_intent(
+                                runtime.campaign,
+                                caller,
+                                "休息到早上",
+                                intent_ai="consensus",
+                                intent_backend="direct",
+                                preflight_id=preflight.preflight_id,
+                                message_id="msg:caller-transaction",
+                                source_user_text_hash=preflight.source_user_text_hash,
+                            )
+                caller.rollback()
+
+            with connect(runtime.campaign) as conn:
+                day = conn.execute(
+                    "select value from meta where key='current_game_day'"
+                ).fetchone()["value"]
+                cache_status = conn.execute(
+                    "select status from intent_preflight_cache where id=?",
+                    (preflight.preflight_id,),
+                ).fetchone()["status"]
+            self.assertEqual(day, before)
+            self.assertEqual(cache_status, "ready")
+
+    def test_preflight_database_lock_degrades_to_live_internal_review(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = GMRuntime.from_path(copy_minimal_campaign(tmp))
+            helper = AIHelperResult(
+                task="internal_intent_review",
+                backend="direct",
+                provider="deepseek",
+                model="deepseek-v4-flash",
+                status="ok",
+                parsed={
+                    "kind": "single",
+                    "mode": "action",
+                    "action": "rest",
+                    "slots": {"until": "morning"},
+                    "plan": [],
+                    "confidence": "high",
+                    "missing_slots": [],
+                    "needs_confirmation": [],
+                    "safety_flags": [],
+                    "reason": "live review after cache contention",
+                    "agreement_with_external": "no_external",
+                    "disagreements": [],
+                    "external_candidate_quality": "no_external",
+                },
+            )
+            with patch(
+                "rpg_engine.runtime.collect_internal_intent_candidate",
+                return_value=helper,
+            ):
+                preflight = runtime.preflight_intent(
+                    "休息到早上",
+                    intent_backend="direct",
+                    message_id="msg:real-lock",
+                )
+            self.assertTrue(preflight.ok, preflight.to_dict())
+
+            live_called = threading.Event()
+
+            def live_review(*_args: object, **_kwargs: object) -> AIHelperResult:
+                self.assertTrue(locker.in_transaction)
+                live_called.set()
+                return helper
+
+            with connect(runtime.campaign) as locker:
+                locker.execute("begin immediate")
+                with patch(
+                    "rpg_engine.ai_intent.router.collect_internal_intent_candidate",
+                    side_effect=live_review,
+                ):
+                    result = runtime.preview_from_text(
+                        "休息到早上",
+                        intent_ai="consensus",
+                        intent_backend="direct",
+                        preflight_id=preflight.preflight_id,
+                        message_id="msg:real-lock",
+                        source_user_text_hash=preflight.source_user_text_hash,
+                    )
+                self.assertTrue(live_called.is_set())
+                locker.rollback()
+
+            trace = result.interpretation["intent"]["decision_trace"]["intent_ai"]
+            self.assertTrue(result.ready_to_save, result.to_dict())
+            self.assertEqual(trace["preflight"]["status"], "unavailable")
+            self.assertEqual(trace["preflight"]["reason"], "preflight cache unavailable")
+            self.assertEqual(trace["internal_helper"]["backend"], "direct")
+            with connect(runtime.campaign) as conn:
+                cache_status = conn.execute(
+                    "select status from intent_preflight_cache where id=?",
+                    (preflight.preflight_id,),
+                ).fetchone()["status"]
+            self.assertEqual(cache_status, "ready")
+
+    def test_message_only_preflight_rejects_incomplete_identity_before_write_or_helper(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = GMRuntime.from_path(copy_minimal_campaign(tmp))
+            cases = (
+                {"platform": "", "session_key": "session:1", "message_id": "message:1"},
+                {"platform": "qq", "session_key": "", "message_id": "message:1"},
+                {"platform": "qq", "session_key": "session:1", "message_id": ""},
+            )
+            with connect(runtime.campaign) as conn:
+                before = conn.execute("select count(*) from intent_preflight_cache").fetchone()[0]
+
+            with patch("rpg_engine.runtime.collect_internal_intent_candidate") as helper:
+                for identity in cases:
+                    with self.subTest(identity=identity):
+                        result = runtime.preflight_intent(
+                            "  ＡＢＣ  ",
+                            intent_backend="direct",
+                            source_user_text_hash=hash_text("ABC"),
+                            preflight_identity_profile="message_only",
+                            **identity,
+                        )
+                        self.assertFalse(result.ok)
+                        self.assertEqual(result.status, "failed")
+                        self.assertTrue(any("message_only preflight requires" in error for error in result.errors))
+                forged_hash = runtime.preflight_intent(
+                    "  ＡＢＣ  ",
+                    intent_backend="direct",
+                    source_user_text_hash=hash_text("different text"),
+                    preflight_identity_profile="message_only",
+                    platform="qq",
+                    session_key="session:1",
+                    message_id="message:forged-hash",
+                )
+                self.assertFalse(forged_hash.ok)
+                self.assertEqual(forged_hash.errors, ("source_user_text_hash mismatch",))
+
+            with connect(runtime.campaign) as conn:
+                after = conn.execute("select count(*) from intent_preflight_cache").fetchone()[0]
+            self.assertEqual(after, before)
+            helper.assert_not_called()
+
     def test_start_turn_builds_v1_context_contract(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             runtime = GMRuntime.from_path(copy_minimal_campaign(tmp))
@@ -2215,6 +2488,8 @@ class GMRuntimeTests(unittest.TestCase):
                     intent_backend="direct",
                     external_intent_candidate=external,
                     message_id="qq:message-only-reuse",
+                    platform="qq",
+                    session_key="qq:user:reuse",
                     preflight_identity_profile="message_only",
                 )
 
@@ -2250,6 +2525,8 @@ class GMRuntimeTests(unittest.TestCase):
                     intent_backend="direct",
                     external_intent_candidate={"kind": "single"},
                     message_id="qq:message-only-invalid-external",
+                    platform="qq",
+                    session_key="qq:user:invalid-external",
                     preflight_identity_profile="message_only",
                 )
 
@@ -2378,6 +2655,7 @@ class GMRuntimeTests(unittest.TestCase):
                     message_id="qq:lock-release",
                     platform="qq",
                     session_key="qq:user:1",
+                    source_user_text_hash=hash_text("休息到早上"),
                     identity_profile=PREFLIGHT_IDENTITY_MESSAGE_ONLY,
                 )
                 conn.commit()

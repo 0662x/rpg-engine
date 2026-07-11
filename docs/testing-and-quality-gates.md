@@ -175,6 +175,11 @@ python3 -m pytest -q \
   tests/test_context_quality.py
 ```
 
+Preflight boundary 变更还必须覆盖 provider/model/backend/fallback 逐字段 mismatch、分隔符碰撞拒绝、
+`message_only` 缺 platform/session/message 时在 cache 写入与 helper 调用前失败、NFKC/trim text hash 不可伪造、
+双连接并发消费只有一个 hit 且其他连接观察 `used`，以及 late reject/expire 不能覆盖 used。公开
+preflight/player/prewarm evidence 不得包含 raw session key、raw prompt、helper audit/provider body 或 hidden token。
+
 Surface / intent 基线材料：
 
 - `tests/fixtures/intent_router_gold_set.yaml`

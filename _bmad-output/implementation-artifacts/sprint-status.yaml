@@ -81,7 +81,7 @@ development_status:
   epic-4: in-progress
   4-1-low-trust-intent-candidate-contract: done
   4-2-ai-latency-policy-and-safe-degradation: done
-  4-3-advisory-preflight-cache-boundary: backlog
+  4-3-advisory-preflight-cache-boundary: done
   4-4-resident-ai-advisory-envelope-contract: backlog
   4-5-resident-ai-advisory-代表性适配: backlog
   4-6-entity-relationship-and-progress-advisory-review: backlog

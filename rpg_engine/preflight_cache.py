@@ -42,6 +42,10 @@ class PreflightContextIdentity:
     base_turn_id: str
     context_hash: str
     intent_context_id: str
+    provider: str
+    model: str
+    backend: str
+    fallback_backend: str
     model_version: str
     schema_version: str
     external_candidate_hash: str
@@ -56,6 +60,10 @@ class PreflightContextIdentity:
             "base_turn_id": self.base_turn_id,
             "context_hash": self.context_hash,
             "intent_context_id": self.intent_context_id,
+            "provider": self.provider,
+            "model": self.model,
+            "backend": self.backend,
+            "fallback_backend": self.fallback_backend,
             "model_version": self.model_version,
             "schema_version": self.schema_version,
             "external_candidate_hash": self.external_candidate_hash,
@@ -137,7 +145,14 @@ def create_pending_intent_preflight(
     identity_profile: str = PREFLIGHT_IDENTITY_CANDIDATE_BOUND,
     ttl_seconds: int = PREFLIGHT_TTL_SECONDS,
 ) -> PreflightRecord:
-    profile = normalize_identity_profile(identity_profile)
+    profile = validate_preflight_creation_identity(
+        identity_profile,
+        platform=platform,
+        session_key=session_key,
+        message_id=message_id,
+        source_user_text_hash=source_user_text_hash,
+    )
+    assert_declared_text_hash(user_text, source_user_text_hash)
     stored_external_candidate = None if profile == PREFLIGHT_IDENTITY_MESSAGE_ONLY else external_candidate
     identity = build_preflight_identity(
         conn,
@@ -151,7 +166,6 @@ def create_pending_intent_preflight(
         rule_candidate=rule_candidate,
         identity_profile=profile,
     )
-    assert_declared_text_hash(user_text, source_user_text_hash)
     preflight_id = f"preflight:{uuid.uuid4().hex}"
     now = utc_now()
     expires_at = (datetime.now(timezone.utc) + timedelta(seconds=max(1, int(ttl_seconds)))).isoformat()
@@ -368,42 +382,44 @@ def consume_intent_preflight_by_message(
         rule_candidate=rule_candidate,
         identity_profile=PREFLIGHT_IDENTITY_MESSAGE_ONLY,
     )
-    rows = conn.execute(
-        """
-        select * from intent_preflight_cache
-        where identity_profile=?
-          and save_id=?
-          and base_turn_id=?
-          and source_user_text_hash=?
-          and context_hash=?
-          and intent_context_id=?
-          and model_version=?
-          and schema_version=?
-          and task_version=?
-          and platform=?
-          and session_key=?
-          and message_id=?
-          and status in (?, ?)
-          and bypassed_at is null
-        order by created_at asc
-        """,
-        (
-            PREFLIGHT_IDENTITY_MESSAGE_ONLY,
-            expected.save_id,
-            expected.base_turn_id,
-            expected.source_user_text_hash,
-            expected.context_hash,
-            expected.intent_context_id,
-            expected.model_version,
-            expected.schema_version,
-            expected.task_version,
-            clean(platform),
-            clean(session_key),
-            clean(message_id),
-            PREFLIGHT_PENDING,
-            PREFLIGHT_READY,
-        ),
-    ).fetchall()
+    rows = message_preflight_rows(
+        conn,
+        expected,
+        platform=platform,
+        session_key=session_key,
+        message_id=message_id,
+    )
+    if not rows:
+        return PreflightLookupResult("miss", reason="message preflight not found")
+    if (
+        len(rows) == 1
+        and str(rows[0]["status"]) == PREFLIGHT_PENDING
+        and not is_expired(str(rows[0]["expires_at"]))
+        and pending_wait_ms > 0
+    ):
+        wait_for_preflight_ready(conn, str(rows[0]["id"]), pending_wait_ms)
+
+    if not conn.in_transaction:
+        conn.execute("begin immediate")
+    expected = build_preflight_identity(
+        conn,
+        campaign,
+        user_text,
+        provider=provider,
+        model=model,
+        backend=backend,
+        fallback_backend=fallback_backend,
+        external_candidate=external_candidate,
+        rule_candidate=rule_candidate,
+        identity_profile=PREFLIGHT_IDENTITY_MESSAGE_ONLY,
+    )
+    rows = message_preflight_rows(
+        conn,
+        expected,
+        platform=platform,
+        session_key=session_key,
+        message_id=message_id,
+    )
     if not rows:
         return PreflightLookupResult("miss", reason="message preflight not found")
     active_rows: list[sqlite3.Row] = []
@@ -422,16 +438,12 @@ def consume_intent_preflight_by_message(
         active_rows.append(candidate)
     if not active_rows:
         return PreflightLookupResult(PREFLIGHT_EXPIRED, record=expired_record, reason="preflight expired")
-    rows = active_rows
-    if len(rows) > 1:
+    if len(active_rows) > 1:
         return PreflightLookupResult("ambiguous", reason="multiple message preflights matched")
-    row = rows[0]
-    if str(row["status"]) == PREFLIGHT_PENDING and pending_wait_ms > 0:
-        row = wait_for_preflight_ready(conn, str(row["id"]), pending_wait_ms) or row
     return consume_intent_preflight_row(
         conn,
         campaign,
-        row,
+        active_rows[0],
         user_text,
         provider=provider,
         model=model,
@@ -444,6 +456,64 @@ def consume_intent_preflight_by_message(
         external_candidate=external_candidate,
         rule_candidate=rule_candidate,
     )
+
+
+def message_preflight_rows(
+    conn: sqlite3.Connection,
+    expected: PreflightContextIdentity,
+    *,
+    platform: str,
+    session_key: str,
+    message_id: str,
+) -> list[sqlite3.Row]:
+    return conn.execute(
+        """
+        select * from intent_preflight_cache
+        where identity_profile=?
+          and save_id=?
+          and base_turn_id=?
+          and source_user_text_hash=?
+          and context_hash=?
+          and intent_context_id=?
+          and provider=?
+          and model=?
+          and backend=?
+          and fallback_backend=?
+          and model_version=?
+          and schema_version=?
+          and task_version=?
+          and external_candidate_hash=?
+          and rule_candidate_hash=?
+          and platform=?
+          and session_key=?
+          and message_id=?
+          and status in (?, ?)
+          and bypassed_at is null
+        order by created_at asc
+        """,
+        (
+            PREFLIGHT_IDENTITY_MESSAGE_ONLY,
+            expected.save_id,
+            expected.base_turn_id,
+            expected.source_user_text_hash,
+            expected.context_hash,
+            expected.intent_context_id,
+            expected.provider,
+            expected.model,
+            expected.backend,
+            expected.fallback_backend,
+            expected.model_version,
+            expected.schema_version,
+            expected.task_version,
+            expected.external_candidate_hash,
+            expected.rule_candidate_hash,
+            clean(platform),
+            clean(session_key),
+            clean(message_id),
+            PREFLIGHT_PENDING,
+            PREFLIGHT_READY,
+        ),
+    ).fetchall()
 
 
 def consume_intent_preflight_row(
@@ -494,6 +564,25 @@ def consume_intent_preflight_row(
     if record.status != PREFLIGHT_READY:
         return PreflightLookupResult(record.status, record=record, reason=f"preflight is {record.status}")
 
+    if not conn.in_transaction:
+        conn.execute("begin immediate")
+    latest = conn.execute("select * from intent_preflight_cache where id=?", (record.id,)).fetchone()
+    if latest is None:
+        return PreflightLookupResult("miss", reason="preflight id not found")
+    row = latest
+    record = record_from_row(row)
+    if record.status != PREFLIGHT_READY:
+        return PreflightLookupResult(record.status, record=record, reason=f"preflight is {record.status}")
+    if is_expired(record.expires_at):
+        update_preflight_status(
+            conn,
+            record.id,
+            PREFLIGHT_EXPIRED,
+            reason="expired",
+            current_status=PREFLIGHT_READY,
+        )
+        return preflight_lookup_after_lost_transition(conn, record.id, record)
+
     declared_hash_mismatch = declared_text_hash_mismatch(user_text, source_user_text_hash)
     if declared_hash_mismatch:
         if update_preflight_status(conn, record.id, PREFLIGHT_REJECTED, reason=declared_hash_mismatch):
@@ -527,16 +616,29 @@ def consume_intent_preflight_row(
 
     internal_review = json_object(row["internal_review_json"])
     helper_audit = json_object(row["helper_audit_json"])
+    consume_at = utc_now()
     cursor = conn.execute(
         """
         update intent_preflight_cache
         set status=?, used_at=?, updated_at=?
-        where id=? and status=? and used_at is null
+        where id=? and status=? and used_at is null and expires_at > ?
         """,
-        (PREFLIGHT_USED, utc_now(), utc_now(), record.id, PREFLIGHT_READY),
+        (PREFLIGHT_USED, consume_at, consume_at, record.id, PREFLIGHT_READY, consume_at),
     )
     if cursor.rowcount != 1:
-        return PreflightLookupResult(PREFLIGHT_USED, record=record, reason="preflight already consumed")
+        latest = conn.execute("select * from intent_preflight_cache where id=?", (record.id,)).fetchone()
+        if latest is None:
+            return PreflightLookupResult("miss", reason="preflight id not found")
+        latest_record = record_from_row(latest)
+        if latest_record.status == PREFLIGHT_READY and is_expired(latest_record.expires_at):
+            update_preflight_status(
+                conn,
+                latest_record.id,
+                PREFLIGHT_EXPIRED,
+                reason="expired",
+                current_status=PREFLIGHT_READY,
+            )
+        return preflight_lookup_after_lost_transition(conn, record.id, latest_record)
     return PreflightLookupResult("hit", record=record, internal_review=internal_review, helper_audit=helper_audit)
 
 
@@ -588,6 +690,12 @@ def build_preflight_identity(
 ) -> PreflightContextIdentity:
     profile = normalize_identity_profile(identity_profile)
     resolved_hash = hash_text(user_text)
+    helper_identity = {
+        "provider": clean(provider),
+        "model": clean(model),
+        "backend": clean(backend),
+        "fallback_backend": clean(fallback_backend or "off"),
+    }
     if profile == PREFLIGHT_IDENTITY_MESSAGE_ONLY:
         external_hash = ""
         rule_hash = ""
@@ -608,9 +716,9 @@ def build_preflight_identity(
     }
     context_hash = hash_json(context_seed)
     model_version = (
-        f"{clean(provider)}:{clean(model)}"
-        f":backend={clean(backend)}"
-        f":fallback={clean(fallback_backend or 'off')}"
+        f"{helper_identity['provider']}:{helper_identity['model']}"
+        f":backend={helper_identity['backend']}"
+        f":fallback={helper_identity['fallback_backend']}"
     )
     schema_version = hash_text(schema_resource_text("internal_intent_review.schema.json"))
     intent_context_id = hash_json(
@@ -620,6 +728,7 @@ def build_preflight_identity(
             "schema_version": schema_version,
             "task_version": PREFLIGHT_TASK_VERSION,
             "model_version": model_version,
+            "helper_identity": helper_identity,
         }
     )
     return PreflightContextIdentity(
@@ -629,6 +738,10 @@ def build_preflight_identity(
         base_turn_id=base_turn_id,
         context_hash=context_hash,
         intent_context_id=intent_context_id,
+        provider=helper_identity["provider"],
+        model=helper_identity["model"],
+        backend=helper_identity["backend"],
+        fallback_backend=helper_identity["fallback_backend"],
         model_version=model_version,
         schema_version=schema_version,
         external_candidate_hash=external_hash,
@@ -644,6 +757,10 @@ def record_from_row(row: sqlite3.Row) -> PreflightRecord:
         base_turn_id=str(row["base_turn_id"]),
         context_hash=str(row["context_hash"]),
         intent_context_id=str(row["intent_context_id"]),
+        provider=str(row["provider"]),
+        model=str(row["model"]),
+        backend=str(row["backend"]),
+        fallback_backend=str(row["fallback_backend"] or "off"),
         model_version=str(row["model_version"]),
         schema_version=str(row["schema_version"]),
         external_candidate_hash=str(row["external_candidate_hash"] or ""),
@@ -683,6 +800,15 @@ def identity_mismatch(
         row_value = str(row[key] or "")
         provided_value = clean(provided)
         if (row_value or provided_value) and row_value != provided_value:
+            return f"{key} mismatch"
+    helper_checks = {
+        "provider": expected.provider,
+        "model": expected.model,
+        "backend": expected.backend,
+        "fallback_backend": expected.fallback_backend,
+    }
+    for key, expected_value in helper_checks.items():
+        if str(row[key] or ("off" if key == "fallback_backend" else "")) != expected_value:
             return f"{key} mismatch"
     checks = {
         "save_id": expected.save_id,
@@ -792,6 +918,32 @@ def normalize_identity_profile(value: str) -> str:
     profile = clean(value) or PREFLIGHT_IDENTITY_CANDIDATE_BOUND
     if profile not in PREFLIGHT_IDENTITY_PROFILES:
         raise ValueError(f"unsupported preflight identity_profile: {profile}")
+    return profile
+
+
+def validate_preflight_creation_identity(
+    identity_profile: str,
+    *,
+    platform: str = "",
+    session_key: str = "",
+    message_id: str = "",
+    source_user_text_hash: str = "",
+) -> str:
+    profile = normalize_identity_profile(identity_profile)
+    if profile != PREFLIGHT_IDENTITY_MESSAGE_ONLY:
+        return profile
+    missing = [
+        key
+        for key, value in (
+            ("platform", platform),
+            ("session_key", session_key),
+            ("message_id", message_id),
+            ("source_user_text_hash", source_user_text_hash),
+        )
+        if not clean(value)
+    ]
+    if missing:
+        raise ValueError("message_only preflight requires " + ", ".join(missing))
     return profile
 
 
