@@ -9,6 +9,7 @@ from pathlib import Path
 from rpg_engine.game_session import ACTIVE_GAME, PlatformMessage, hash_identity
 from rpg_engine.platform_prewarm import (
     DROP_AI_TIMEOUT,
+    DROP_AI_FAILED,
     DROP_DUPLICATE_MESSAGE,
     DROP_FEATURE_DISABLED,
     DROP_MISSING_PLATFORM,
@@ -21,6 +22,8 @@ from rpg_engine.platform_prewarm import (
     PrewarmQueue,
     PrewarmWorker,
 )
+from rpg_engine.ai.defaults import DEFAULT_BACKGROUND_TARGET_MAX_SECONDS, DEFAULT_INTENT_TIMEOUT_SECONDS
+from rpg_engine.platform_sidecar import PlatformSidecarConfig
 
 
 def active_until() -> str:
@@ -45,7 +48,7 @@ class FakeRuntime:
 
     def preflight_intent(self, user_text: str, **kwargs: object) -> dict[str, object]:
         self.calls.append({"path": self.path, "user_text": user_text, **kwargs})
-        return {"ok": True, "status": "ready", "preflight_id": "preflight:test", "errors": []}
+        return {"ok": True, "status": "ready", "preflight_id": f"preflight:{'a' * 32}", "errors": []}
 
 
 class TimeoutRuntime:
@@ -53,7 +56,120 @@ class TimeoutRuntime:
         raise TimeoutError("internal AI timed out")
 
 
+class PrivateFailureRuntime:
+    def preflight_intent(self, user_text: str, **kwargs: object) -> dict[str, object]:
+        return {
+            "ok": False,
+            "status": "failed",
+            "errors": ["HTTP body: hidden fact and private reasoning"],
+        }
+
+
+class StructuredTimeoutRuntime:
+    def preflight_intent(self, user_text: str, **kwargs: object) -> dict[str, object]:
+        return {
+            "ok": False,
+            "status": "failed",
+            "preflight_id": "preflight:timeout",
+            "errors": ["provider unavailable"],
+            "internal_helper": {
+                "status": "error",
+                "failure_reason": None,
+                "hard_timeout": True,
+            },
+        }
+
+
+class StructuredLateRuntime:
+    def preflight_intent(self, user_text: str, **kwargs: object) -> dict[str, object]:
+        return {
+            "ok": False,
+            "status": "failed",
+            "preflight_id": "preflight:late",
+            "errors": ["late result ignored"],
+            "internal_helper": {
+                "status": "error",
+                "failure_reason": None,
+                "late_discarded": True,
+            },
+        }
+
+
+class StringFalseTimeoutRuntime:
+    def preflight_intent(self, user_text: str, **kwargs: object) -> dict[str, object]:
+        return {
+            "ok": False,
+            "status": "failed",
+            "preflight_id": "preflight:not-timeout",
+            "errors": ["provider unavailable"],
+            "internal_helper": {
+                "status": "error",
+                "failure_reason": None,
+                "hard_timeout": "false",
+                "late_discarded": 0,
+            },
+        }
+
+
+class StringFalseOkRuntime:
+    def preflight_intent(self, user_text: str, **kwargs: object) -> dict[str, object]:
+        return {"ok": "false", "status": "failed", "errors": ["provider unavailable"]}
+
+
+class StringFalseOkWithoutStatusRuntime:
+    def preflight_intent(self, user_text: str, **kwargs: object) -> dict[str, object]:
+        return {"ok": "false", "errors": ["provider unavailable"]}
+
+
+class MalformedPublicMetadataRuntime:
+    def preflight_intent(self, user_text: str, **kwargs: object) -> dict[str, object]:
+        return {
+            "ok": False,
+            "status": {"raw_prompt": "SECRET_STATUS"},
+            "preflight_id": {"private_reasoning": "SECRET_ID"},
+            "errors": ["provider unavailable"],
+        }
+
+
+class ContradictorySuccessRuntime:
+    def preflight_intent(self, user_text: str, **kwargs: object) -> dict[str, object]:
+        return {"ok": True, "status": "expired", "errors": []}
+
+
+class FalseReadyRuntime:
+    def preflight_intent(self, user_text: str, **kwargs: object) -> dict[str, object]:
+        return {"ok": False, "status": "ready", "preflight_id": "preflight:deadbeef", "errors": []}
+
+
+class ReadyWithoutIdRuntime:
+    def preflight_intent(self, user_text: str, **kwargs: object) -> dict[str, object]:
+        return {"ok": True, "status": "ready", "errors": []}
+
+
+class ReadyWithoutStatusRuntime:
+    def preflight_intent(self, user_text: str, **kwargs: object) -> dict[str, object]:
+        return {"ok": True, "preflight_id": f"preflight:{'b' * 32}", "errors": []}
+
+
+class ReadyWithTimeoutEvidenceRuntime:
+    def preflight_intent(self, user_text: str, **kwargs: object) -> dict[str, object]:
+        return {
+            "ok": True,
+            "status": "ready",
+            "preflight_id": f"preflight:{'c' * 32}",
+            "errors": [],
+            "internal_helper": {"failure_reason": "timeout", "hard_timeout": True},
+        }
+
+
 class PlatformPrewarmTests(unittest.TestCase):
+    def test_background_default_timeout_does_not_expand_player_deadline(self) -> None:
+        prewarm = PlatformPrewarmConfig()
+        sidecar = PlatformSidecarConfig.from_prewarm_config(prewarm)
+
+        self.assertEqual(prewarm.intent_timeout, DEFAULT_BACKGROUND_TARGET_MAX_SECONDS)
+        self.assertEqual(sidecar.player_intent_timeout, DEFAULT_INTENT_TIMEOUT_SECONDS)
+
     def test_binding_store_persists_hashes_without_raw_platform_ids(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -187,7 +303,112 @@ class PlatformPrewarmTests(unittest.TestCase):
             timeout = timeout_worker.process(request)
             self.assertFalse(timeout.ok)
             self.assertEqual(timeout.reason, DROP_AI_TIMEOUT)
+            self.assertEqual(timeout.errors, ("AI prewarm timed out.",))
             self.assertGreaterEqual(metrics.snapshot()["prewarm_finish_count"], 2)
+
+            structured_timeout = PrewarmWorker(
+                config=PlatformPrewarmConfig(enabled=True),
+                metrics=metrics,
+                runtime_factory=lambda path: StructuredTimeoutRuntime(),
+            ).process(request)
+            self.assertFalse(structured_timeout.ok)
+            self.assertEqual(structured_timeout.reason, DROP_AI_TIMEOUT)
+
+            structured_late = PrewarmWorker(
+                config=PlatformPrewarmConfig(enabled=True),
+                metrics=metrics,
+                runtime_factory=lambda path: StructuredLateRuntime(),
+            ).process(request)
+            self.assertFalse(structured_late.ok)
+            self.assertEqual(structured_late.reason, DROP_AI_TIMEOUT)
+
+            string_false = PrewarmWorker(
+                config=PlatformPrewarmConfig(enabled=True),
+                metrics=metrics,
+                runtime_factory=lambda path: StringFalseTimeoutRuntime(),
+            ).process(request)
+            self.assertFalse(string_false.ok)
+            self.assertEqual(string_false.reason, DROP_AI_FAILED)
+
+            private_failure = PrewarmWorker(
+                config=PlatformPrewarmConfig(enabled=True),
+                metrics=metrics,
+                runtime_factory=lambda path: PrivateFailureRuntime(),
+            ).process(request)
+            self.assertEqual(private_failure.errors, ("AI prewarm unavailable.",))
+            self.assertNotIn("hidden fact", str(private_failure.to_dict()))
+            self.assertNotIn("private reasoning", str(private_failure.to_dict()))
+
+            string_false_ok = PrewarmWorker(
+                config=PlatformPrewarmConfig(enabled=True),
+                metrics=metrics,
+                runtime_factory=lambda path: StringFalseOkRuntime(),
+            ).process(request)
+            self.assertFalse(string_false_ok.ok)
+            self.assertEqual(string_false_ok.reason, DROP_AI_FAILED)
+
+            missing_status = PrewarmWorker(
+                config=PlatformPrewarmConfig(enabled=True),
+                metrics=metrics,
+                runtime_factory=lambda path: StringFalseOkWithoutStatusRuntime(),
+            ).process(request)
+            self.assertFalse(missing_status.ok)
+            self.assertEqual(missing_status.status, "failed")
+            self.assertEqual(missing_status.reason, DROP_AI_FAILED)
+
+            malformed_metadata = PrewarmWorker(
+                config=PlatformPrewarmConfig(enabled=True),
+                metrics=metrics,
+                runtime_factory=lambda path: MalformedPublicMetadataRuntime(),
+            ).process(request)
+            self.assertEqual(malformed_metadata.status, "failed")
+            self.assertEqual(malformed_metadata.preflight_id, "")
+            self.assertNotIn("SECRET", str(malformed_metadata.to_dict()))
+
+            contradictory = PrewarmWorker(
+                config=PlatformPrewarmConfig(enabled=True),
+                metrics=metrics,
+                runtime_factory=lambda path: ContradictorySuccessRuntime(),
+            ).process(request)
+            self.assertFalse(contradictory.ok)
+            self.assertEqual(contradictory.status, "expired")
+            self.assertEqual(contradictory.reason, DROP_AI_FAILED)
+
+            false_ready = PrewarmWorker(
+                config=PlatformPrewarmConfig(enabled=True),
+                metrics=metrics,
+                runtime_factory=lambda path: FalseReadyRuntime(),
+            ).process(request)
+            self.assertFalse(false_ready.ok)
+            self.assertEqual(false_ready.status, "failed")
+            self.assertEqual(false_ready.preflight_id, "")
+
+            missing_id = PrewarmWorker(
+                config=PlatformPrewarmConfig(enabled=True),
+                metrics=metrics,
+                runtime_factory=lambda path: ReadyWithoutIdRuntime(),
+            ).process(request)
+            self.assertFalse(missing_id.ok)
+            self.assertEqual(missing_id.status, "failed")
+            self.assertEqual(missing_id.preflight_id, "")
+
+            missing_status = PrewarmWorker(
+                config=PlatformPrewarmConfig(enabled=True),
+                metrics=metrics,
+                runtime_factory=lambda path: ReadyWithoutStatusRuntime(),
+            ).process(request)
+            self.assertFalse(missing_status.ok)
+            self.assertEqual(missing_status.status, "failed")
+            self.assertEqual(missing_status.preflight_id, "")
+
+            contradictory_timeout = PrewarmWorker(
+                config=PlatformPrewarmConfig(enabled=True),
+                metrics=metrics,
+                runtime_factory=lambda path: ReadyWithTimeoutEvidenceRuntime(),
+            ).process(request)
+            self.assertFalse(contradictory_timeout.ok)
+            self.assertEqual(contradictory_timeout.reason, DROP_AI_TIMEOUT)
+            self.assertEqual(contradictory_timeout.preflight_id, "")
 
 
 if __name__ == "__main__":

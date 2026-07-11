@@ -5,7 +5,7 @@ import re
 from typing import Any
 
 from ..ai.tasks import AIHelperTask
-from ..ai.provider import run_ai_helper_json
+from ..ai.provider import public_ai_helper_result_dict, run_ai_helper_json
 from ..db import entity_subtype_visibility_sql, get_meta
 from ..redaction import redact_hidden_entity_id_substrings, redact_hidden_entity_refs
 from ..visibility import (
@@ -39,9 +39,10 @@ def collect_semantic_suggestion(state: Any) -> None:
         model=state.semantic_model,
         timeout=state.semantic_timeout,
     )
-    state.semantic_audit = result.audit
+    public_result = public_ai_helper_result_dict(result)
+    state.semantic_audit = public_result["audit"]
     if not result.ok or result.parsed is None:
-        state.semantic_error = result.error or "semantic ai returned no usable suggestion"
+        state.semantic_error = public_result["error"] or "semantic ai returned no usable suggestion"
         return
     state.semantic_suggestion = result.parsed
     apply_semantic_entity_hints(state)

@@ -292,7 +292,7 @@ class LowLevelConditionCoverageTests(unittest.TestCase):
                 with mock.patch("rpg_engine.context.semantic.run_ai_helper_json", return_value=SimpleNamespace(ok=False, parsed=None, audit={"id": 1}, error="")):
                     semantic.collect_semantic_suggestion(state)
                 self.assertEqual(state.semantic_error, "semantic ai returned no usable suggestion")
-                self.assertEqual(state.semantic_audit, {"id": 1})
+                self.assertEqual(state.semantic_audit, {})
 
                 parsed = {"mode": "ACTION", "submode": "rest", "targets": ["a", "a", "", "b"], "confidence": "HIGH"}
                 with (

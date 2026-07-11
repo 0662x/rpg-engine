@@ -73,6 +73,8 @@ BMAD 是本仓库的强流程层。后续开发不是“想改哪里就改哪里
 - preflight production 复用同一套 candidate preparation
 - Runtime、ContextBuilder、MCP、SaveManager、CLI 的 intent 参数已逐步 bundling
 - platform prewarm / sidecar 已验证保持 advisory / forwarding 边界
+- player-facing intent helper 使用约 8 秒 soft wait evidence 与 15 秒 hard total deadline；primary/fallback
+  共享预算，timeout/unavailable 不会把 enabled mode 偷换为 `off`
 - Phase 1-4 已通过最终回归门禁
 
 这不代表未来 `IntentCoordinator` 已经实现。真正的 coordinator / package split 仍是后续工作。

@@ -35,7 +35,7 @@ from rpg_engine.preflight_cache import (
 )
 from rpg_engine.proposal import turn_proposal_from_dict, validate_turn_proposal
 from rpg_engine.response_lint import lint_response
-from rpg_engine.runtime import GMRuntime
+from rpg_engine.runtime import GMRuntime, ai_helper_result_to_dict
 
 
 ENGINE_ROOT = Path(__file__).resolve().parents[1]
@@ -112,6 +112,276 @@ def dataclass_snapshot(value):
 
 
 class GMRuntimeTests(unittest.TestCase):
+    def test_ai_helper_result_serialization_keeps_legacy_duck_type_compatible(self) -> None:
+        helper = type(
+            "LegacyHelper",
+            (),
+            {
+                "task": "legacy",
+                "backend": "off",
+                "provider": "",
+                "model": "",
+                "status": "off",
+                "error": None,
+                "elapsed_ms": 0,
+                "audit": {},
+            },
+        )()
+
+        result = ai_helper_result_to_dict(helper)
+
+        self.assertIsNone(result["failure_reason"])
+        self.assertFalse(result["soft_wait_exceeded"])
+        self.assertFalse(result["hard_timeout"])
+        self.assertFalse(result["late_discarded"])
+        self.assertIsNone(result["timeout_seconds"])
+
+    def test_ai_helper_result_serialization_redacts_private_failure_detail(self) -> None:
+        helper = type(
+            "PrivateFailureHelper",
+            (),
+            {
+                "task": "internal_intent_review",
+                "backend": "direct",
+                "provider": "deepseek",
+                "model": "test",
+                "status": "error",
+                "error": "HTTP 500 hidden fact",
+                "elapsed_ms": 1,
+                "failure_reason": "private reason SECRET1",
+                "timeout_seconds": {"raw_prompt": "SECRET2"},
+                "audit": {"error": "private exception", "output_summary": "private reasoning"},
+            },
+        )()
+
+        result = ai_helper_result_to_dict(helper)
+
+        self.assertEqual(result["error"], "internal_intent_review ai unavailable")
+        self.assertEqual(result["audit"]["output_summary"], "")
+        self.assertNotIn("hidden fact", str(result))
+        self.assertNotIn("private exception", str(result))
+        self.assertNotIn("private reasoning", str(result))
+        self.assertNotIn("SECRET1", str(result))
+        self.assertNotIn("SECRET2", str(result))
+        self.assertEqual(result["failure_reason"], "unavailable")
+        self.assertIsNone(result["timeout_seconds"])
+
+        helper.failure_reason = {"raw_prompt": "SECRET3"}
+        malformed = ai_helper_result_to_dict(helper)
+        self.assertEqual(malformed["failure_reason"], "unavailable")
+        self.assertNotIn("SECRET3", str(malformed))
+
+    def test_preflight_failure_redacts_public_and_cached_helper_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = GMRuntime.from_path(copy_minimal_campaign(tmp))
+            helper = AIHelperResult(
+                task="internal_intent_review",
+                backend="direct",
+                provider="deepseek",
+                model="test",
+                status="error",
+                error="HTTP 500 hidden_fact=vault private_reasoning=chain",
+                audit={"error": "hidden_fact=vault", "output_summary": "private_reasoning=chain"},
+            )
+
+            with patch("rpg_engine.runtime.collect_internal_intent_candidate", return_value=helper):
+                result = runtime.preflight_intent("休息到早上", message_id="msg:redacted-preflight")
+
+            payload = result.to_dict()
+            encoded = json.dumps(payload, ensure_ascii=False)
+            self.assertEqual(payload["errors"], ["internal_intent_review ai unavailable"])
+            self.assertNotIn("hidden_fact", encoded)
+            self.assertNotIn("private_reasoning", encoded)
+
+            malformed_status = type(
+                "MalformedStatusHelper",
+                (),
+                {
+                    "ok": False,
+                    "parsed": None,
+                    "task": "internal_intent_review",
+                    "backend": "direct",
+                    "provider": "deepseek",
+                    "model": "test",
+                    "status": "PRIVATE_STATUS_PAYLOAD",
+                    "error": None,
+                    "elapsed_ms": 0,
+                    "audit": {},
+                },
+            )()
+            with patch(
+                "rpg_engine.runtime.collect_internal_intent_candidate",
+                return_value=malformed_status,
+            ):
+                sanitized_status = runtime.preflight_intent(
+                    "休息到早上",
+                    message_id="msg:malformed-status",
+                )
+            sanitized_payload = sanitized_status.to_dict()
+            self.assertEqual(sanitized_payload["errors"], ["internal_intent_review ai unavailable"])
+            self.assertNotIn("PRIVATE_STATUS_PAYLOAD", json.dumps(sanitized_payload))
+            with connect(runtime.campaign) as conn:
+                row = conn.execute(
+                    "select error from intent_preflight_cache where id=?",
+                    (sanitized_status.preflight_id,),
+                ).fetchone()
+            self.assertEqual(row["error"], "internal_intent_review ai unavailable")
+
+            timeout_helper = replace(helper, failure_reason="timeout", hard_timeout=True)
+            with patch("rpg_engine.runtime.collect_internal_intent_candidate", return_value=timeout_helper):
+                with patch("rpg_engine.runtime.mark_intent_preflight_failed", return_value="expired"):
+                    expired = runtime.preflight_intent(
+                        "休息到早上",
+                        message_id="msg:expired-timeout",
+                    )
+            self.assertEqual(expired.status, "expired")
+            self.assertEqual(expired.internal_helper["failure_reason"], "timeout")
+            self.assertTrue(expired.internal_helper["hard_timeout"])
+
+            with patch("rpg_engine.runtime.collect_internal_intent_candidate", return_value=helper):
+                with patch("rpg_engine.runtime.mark_intent_preflight_failed", return_value="ready"):
+                    lost_ready = runtime.preflight_intent(
+                        "休息到早上",
+                        message_id="msg:lost-ready-without-record",
+                    )
+            self.assertFalse(lost_ready.ok)
+            self.assertEqual(lost_ready.status, "pending")
+
+            ready_helper = replace(
+                helper,
+                status="ok",
+                parsed={
+                    "kind": "single",
+                    "mode": "action",
+                    "action": "rest",
+                    "slots": {"until": "morning"},
+                    "plan": [],
+                    "confidence": "high",
+                    "missing_slots": [],
+                    "needs_confirmation": [],
+                    "safety_flags": [],
+                    "reason": "late review",
+                    "agreement_with_external": "no_external",
+                    "disagreements": [],
+                    "external_candidate_quality": "no_external",
+                },
+                error=None,
+            )
+
+            def expire_ready_record(*args: object, **kwargs: object) -> str:
+                conn = args[0]
+                preflight_id = args[1]
+                conn.execute(
+                    """
+                    update intent_preflight_cache
+                    set status='ready', expires_at='2000-01-01T00:00:00+00:00', internal_review_json=?
+                    where id=?
+                    """,
+                    (json.dumps(ready_helper.parsed, ensure_ascii=False), preflight_id),
+                )
+                return "ready"
+
+            with patch("rpg_engine.runtime.collect_internal_intent_candidate", return_value=helper):
+                with patch("rpg_engine.runtime.mark_intent_preflight_failed", side_effect=expire_ready_record):
+                    expired_ready = runtime.preflight_intent(
+                        "休息到早上",
+                        message_id="msg:lost-expired-ready",
+                    )
+            self.assertFalse(expired_ready.ok)
+            self.assertEqual(expired_ready.status, "expired")
+            self.assertEqual(expired_ready.expires_at, "2000-01-01T00:00:00+00:00")
+            self.assertIsNone(expired_ready.internal_review)
+
+            with patch("rpg_engine.runtime.collect_internal_intent_candidate", return_value=ready_helper):
+                with patch("rpg_engine.runtime.mark_intent_preflight_ready", return_value="expired"):
+                    late_ready = runtime.preflight_intent(
+                        "休息到早上",
+                        message_id="msg:expired-ready",
+                    )
+            self.assertFalse(late_ready.ok)
+            self.assertEqual(late_ready.status, "expired")
+            self.assertIsNone(late_ready.internal_review)
+
+            winning_review = dict(ready_helper.parsed or {})
+            winning_review["reason"] = "authoritative winner"
+
+            def win_ready_race(*args: object, **kwargs: object) -> str:
+                conn = args[0]
+                preflight_id = args[1]
+                conn.execute(
+                    """
+                    update intent_preflight_cache
+                    set status='ready', internal_review_json=?
+                    where id=?
+                    """,
+                    (json.dumps(winning_review, ensure_ascii=False), preflight_id),
+                )
+                return "ready"
+
+            with patch("rpg_engine.runtime.collect_internal_intent_candidate", return_value=ready_helper):
+                with patch("rpg_engine.runtime.mark_intent_preflight_ready", side_effect=win_ready_race):
+                    won_elsewhere = runtime.preflight_intent(
+                        "休息到早上",
+                        message_id="msg:ready-winner",
+                    )
+            self.assertTrue(won_elsewhere.ok)
+            self.assertEqual(won_elsewhere.internal_review, winning_review)
+            self.assertIsNone(won_elsewhere.internal_helper)
+
+            identical_review = dict(ready_helper.parsed or {})
+
+            def win_identical_ready_race(*args: object, **kwargs: object) -> str:
+                conn = args[0]
+                preflight_id = args[1]
+                conn.execute(
+                    """
+                    update intent_preflight_cache
+                    set status='ready', internal_review_json=?, helper_audit_json=?
+                    where id=?
+                    """,
+                    (
+                        json.dumps(identical_review, ensure_ascii=False),
+                        json.dumps({"winner": "audit"}),
+                        preflight_id,
+                    ),
+                )
+                return "ready"
+
+            losing_same_review = replace(ready_helper, audit={"loser": "audit"})
+            with patch(
+                "rpg_engine.runtime.collect_internal_intent_candidate",
+                return_value=losing_same_review,
+            ):
+                with patch(
+                    "rpg_engine.runtime.mark_intent_preflight_ready",
+                    side_effect=win_identical_ready_race,
+                ):
+                    identical_winner = runtime.preflight_intent(
+                        "休息到早上",
+                        message_id="msg:identical-ready-winner",
+                    )
+            self.assertTrue(identical_winner.ok)
+            self.assertEqual(identical_winner.internal_review, identical_review)
+            self.assertIsNone(identical_winner.internal_helper)
+
+            def consume_ready_race(*args: object, **kwargs: object) -> str:
+                conn = args[0]
+                preflight_id = args[1]
+                conn.execute(
+                    "update intent_preflight_cache set status='used' where id=?",
+                    (preflight_id,),
+                )
+                return "ready"
+
+            with patch("rpg_engine.runtime.collect_internal_intent_candidate", return_value=ready_helper):
+                with patch("rpg_engine.runtime.mark_intent_preflight_ready", side_effect=consume_ready_race):
+                    consumed_winner = runtime.preflight_intent(
+                        "休息到早上",
+                        message_id="msg:consumed-ready-winner",
+                    )
+            self.assertFalse(consumed_winner.ok)
+            self.assertEqual(consumed_winner.status, "used")
+
     def test_start_turn_builds_v1_context_contract(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             runtime = GMRuntime.from_path(copy_minimal_campaign(tmp))
@@ -1362,6 +1632,31 @@ class GMRuntimeTests(unittest.TestCase):
                 any("AI 语义判断仅记录" in item for item in intent.decision_trace.get("overrides", [])),
                 intent.decision_trace,
             )
+
+    def test_player_context_redacts_semantic_provider_failure_detail(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = GMRuntime.from_path(copy_minimal_campaign(tmp))
+            private_failure = AIHelperResult(
+                task="semantic",
+                backend="direct",
+                provider="deepseek",
+                model="test",
+                status="error",
+                error="HTTP 500 PRIVATE_REASONING_SENTINEL raw prompt echoed",
+                audit={
+                    "error": "PRIVATE_REASONING_SENTINEL",
+                    "output_summary": "raw prompt echoed",
+                },
+            )
+
+            with patch("rpg_engine.context.semantic.run_ai_helper_json", return_value=private_failure):
+                result = runtime.start_turn("查看周围", mode="query", semantic_ai="direct")
+
+            encoded = json.dumps(result.to_dict(), ensure_ascii=False)
+            self.assertNotIn("PRIVATE_REASONING_SENTINEL", encoded)
+            self.assertNotIn("raw prompt echoed", encoded)
+            self.assertNotIn("PRIVATE_REASONING_SENTINEL", result.markdown)
+            self.assertNotIn("raw prompt echoed", result.markdown)
 
     def test_system_maintenance_text_stays_outside_player_turn_preview(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -4,6 +4,7 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from rpg_engine.campaign import load_campaign
 from rpg_engine.db import connect, init_database
@@ -445,7 +446,7 @@ class PreflightCacheTests(unittest.TestCase):
                     model="deepseek-v4-flash",
                     backend="direct",
                 )
-                mark_intent_preflight_failed(conn, record.id, error="timeout")
+                self.assertEqual(mark_intent_preflight_failed(conn, record.id, error="timeout"), "failed")
                 failed = consume_intent_preflight(
                     conn,
                     campaign,
@@ -459,6 +460,30 @@ class PreflightCacheTests(unittest.TestCase):
 
             self.assertEqual(failed.status, "failed")
             self.assertEqual(failed.reason, "preflight is failed")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(self.copy_campaign(tmp))
+            with connect(campaign) as conn:
+                record = create_pending_intent_preflight(
+                    conn,
+                    campaign,
+                    "休息到早上",
+                    provider="deepseek",
+                    model="deepseek-v4-flash",
+                    backend="direct",
+                )
+                conn.execute(
+                    "update intent_preflight_cache set expires_at=? where id=?",
+                    ("2000-01-01T00:00:00+00:00", record.id),
+                )
+                final_status = mark_intent_preflight_failed(conn, record.id, error="ai timed out")
+                row = conn.execute(
+                    "select status from intent_preflight_cache where id=?",
+                    (record.id,),
+                ).fetchone()
+
+            self.assertEqual(final_status, "expired")
+            self.assertEqual(row["status"], "expired")
 
     def test_late_reject_transition_cannot_overwrite_used_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -502,9 +527,86 @@ class PreflightCacheTests(unittest.TestCase):
                     model="deepseek-v4-flash",
                     backend="direct",
                 )
-                mark_intent_preflight_ready(conn, record.id, internal_review=cached_rest_review())
-                with self.assertRaisesRegex(ValueError, "not pending"):
-                    mark_intent_preflight_ready(conn, record.id, internal_review=cached_rest_review())
+                self.assertEqual(
+                    mark_intent_preflight_ready(conn, record.id, internal_review=cached_rest_review()),
+                    "ready",
+                )
+                self.assertEqual(
+                    mark_intent_preflight_ready(conn, record.id, internal_review=cached_rest_review()),
+                    "ready",
+                )
+
+    def test_expired_late_ready_returns_final_status_without_storing_review(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(self.copy_campaign(tmp))
+            with connect(campaign) as conn:
+                record = create_pending_intent_preflight(
+                    conn,
+                    campaign,
+                    "休息到早上",
+                    provider="deepseek",
+                    model="deepseek-v4-flash",
+                    backend="direct",
+                )
+                conn.execute(
+                    "update intent_preflight_cache set expires_at=? where id=?",
+                    ("2000-01-01T00:00:00+00:00", record.id),
+                )
+                final_status = mark_intent_preflight_ready(
+                    conn,
+                    record.id,
+                    internal_review=cached_rest_review(),
+                )
+                row = conn.execute(
+                    "select status, internal_review_json from intent_preflight_cache where id=?",
+                    (record.id,),
+                ).fetchone()
+
+            self.assertEqual(final_status, "expired")
+            self.assertEqual(row["status"], "expired")
+            self.assertEqual(row["internal_review_json"], "{}")
+
+    def test_expired_transition_lost_race_returns_database_final_status(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(self.copy_campaign(tmp))
+            for transition, raced_status in (("ready", "failed"), ("failed", "ready")):
+                with self.subTest(transition=transition, raced_status=raced_status):
+                    with connect(campaign) as conn:
+                        record = create_pending_intent_preflight(
+                            conn,
+                            campaign,
+                            f"休息到早上 {transition}",
+                            provider="deepseek",
+                            model="deepseek-v4-flash",
+                            backend="direct",
+                        )
+                        conn.execute(
+                            "update intent_preflight_cache set expires_at=? where id=?",
+                            ("2000-01-01T00:00:00+00:00", record.id),
+                        )
+
+                        def lose_expire_race(*args: object, **kwargs: object) -> bool:
+                            conn.execute(
+                                "update intent_preflight_cache set status=? where id=?",
+                                (raced_status, record.id),
+                            )
+                            return False
+
+                        with patch(
+                            "rpg_engine.preflight_cache.update_preflight_status",
+                            side_effect=lose_expire_race,
+                        ):
+                            final_status = (
+                                mark_intent_preflight_ready(
+                                    conn,
+                                    record.id,
+                                    internal_review=cached_rest_review(),
+                                )
+                                if transition == "ready"
+                                else mark_intent_preflight_failed(conn, record.id, error="timeout")
+                            )
+
+                    self.assertEqual(final_status, raced_status)
 
     def test_message_only_preflight_consumes_by_message_with_later_external_candidate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

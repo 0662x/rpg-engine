@@ -16,6 +16,7 @@ from unittest import mock
 import yaml
 
 from rpg_engine.ai.defaults import DEFAULT_AI_MODEL, DEFAULT_AI_PROVIDER
+from rpg_engine.ai.provider import AIHelperResult
 from rpg_engine.backup import list_backups
 from rpg_engine.db import connect, upsert_entity
 from rpg_engine.game_session import hash_identity
@@ -95,7 +96,27 @@ def authoritative_save_snapshot(save_path: Path) -> dict[str, object]:
         "current_location_id": inspected.get("current_location_id"),
         "schemas": table_schema,
         "tables": table_rows,
+        "projection_files": {
+            relative: (save_path / relative).read_bytes()
+            for relative in ("data/events.jsonl", "save.yaml", "snapshots/current.json", "cards/current.md")
+            if (save_path / relative).is_file()
+        },
     }
+
+
+def registry_authority_snapshot(path: Path) -> object:
+    def strip_timestamps(value: object) -> object:
+        if isinstance(value, dict):
+            return {
+                key: strip_timestamps(item)
+                for key, item in value.items()
+                if key not in {"last_played_at", "last_inspected_at"}
+            }
+        if isinstance(value, list):
+            return [strip_timestamps(item) for item in value]
+        return value
+
+    return strip_timestamps(json.loads(path.read_text(encoding="utf-8")))
 
 
 class SaveManagerTests(unittest.TestCase):
@@ -1215,6 +1236,49 @@ class SaveManagerTests(unittest.TestCase):
             self.assertEqual(trace["base_url"], "https://ai.example.test/v1")
             self.assertEqual(trace["api_key_env"], "AIGM_TEST_KEY")
             self.assertEqual(trace["fallback_backend"], "off")
+
+    def test_consensus_timeout_for_non_fast_action_does_not_mutate_facts_or_pending(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            campaign_dir = root / "campaigns" / "official"
+            shutil.copytree(OFFICIAL_EXAMPLE, campaign_dir)
+            manager = SaveManager(root, default_campaign="campaigns/official")
+            started = manager.start_or_continue(campaign="campaigns/official")
+            save_path = root / started["save"]["path"]
+            external = consensus_candidate("gather", {"target": "Moon Herb"}, reason="external gather")
+            timeout = AIHelperResult(
+                task="internal_intent_review",
+                backend="direct",
+                provider=DEFAULT_AI_PROVIDER,
+                model=DEFAULT_AI_MODEL,
+                status="error",
+                error="provider unavailable",
+                failure_reason="timeout",
+                soft_wait_exceeded=True,
+                hard_timeout=True,
+                timeout_seconds=15,
+                audit={"latency": {"classification": "hard_timeout"}},
+            )
+
+            before = authoritative_save_snapshot(save_path)
+            registry_path = root / ".aigm" / "save-registry.json"
+            before_registry = registry_authority_snapshot(registry_path)
+            with mock.patch("rpg_engine.ai_intent.router.collect_internal_intent_candidate", return_value=timeout):
+                result = manager.player_turn(
+                    user_text="采集 Moon Herb",
+                    external_intent_candidate=external,
+                    intent_ai="consensus",
+                    intent_backend="direct",
+                    intent_timeout=15,
+                )
+            after = authoritative_save_snapshot(save_path)
+            after_registry = registry_authority_snapshot(registry_path)
+
+            self.assertFalse(result["saved"], result)
+            self.assertFalse(result["ready_to_confirm"], result)
+            self.assertEqual(before, after)
+            self.assertEqual(before_registry, after_registry)
+            self.assertFalse((root / ".aigm" / "pending-player-action.json").exists())
 
     def test_player_turn_standard_entry_covers_all_manifest_actions(self) -> None:
         cases = [

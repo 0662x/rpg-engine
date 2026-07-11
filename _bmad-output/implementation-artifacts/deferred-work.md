@@ -36,3 +36,7 @@
 ## Deferred from: code review of 4-1-low-trust-intent-candidate-contract (2026-07-11)
 
 - `SaveManager.player_turn()` 在解析新的玩家请求前会清理已有 pending action；malformed external candidate 也会取消旧 pending。这是既有“新 turn 取代旧 pending”的生命周期策略，不由 Story 4.1 引入；改变它需要独立确认 pending replacement / retry 语义。
+
+## Deferred from: code review of 4-2-ai-latency-policy-and-safe-degradation (2026-07-11)
+
+- Reaffirmed：`SaveManager.player_turn()` 在解析新请求前清理已有 pending action 的行为是 Story 4.1 已记录的 pre-existing lifecycle policy；本 Story 的 timeout policy 不改变 pending replacement / retry 语义。

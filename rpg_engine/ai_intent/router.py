@@ -5,7 +5,8 @@ from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Any
 
 from ..actions import ActionResolverRegistry
-from ..ai.provider import AIHelperResult
+from ..ai.provider import AIHelperResult, public_ai_helper_result_dict
+from ..ai.policy import normalize_timeout
 from ..ai.schema_validation import validate_ai_output_schema
 from ..campaign import Campaign
 from ..preflight_cache import (
@@ -99,6 +100,10 @@ class AIIntentRouter:
         preflight_pending_wait_ms: int = 0,
         view: str = PLAYER_VIEW,
     ) -> AIIntentRouteResult:
+        try:
+            trace_timeout: int | None = normalize_timeout(timeout)
+        except (TypeError, ValueError):
+            trace_timeout = None
         internal_candidate: IntentCandidate | None = None
         internal_helper: AIHelperResult | None = None
         guards: list[str] = []
@@ -165,11 +170,12 @@ class AIIntentRouter:
                     user_text=user_text,
                 )
             else:
-                guards.append(
-                    "intent AI internal review unavailable"
-                    if not internal_helper.error
-                    else f"intent AI internal review unavailable: {internal_helper.error}"
+                unavailable_label = (
+                    "intent AI internal review timed out"
+                    if internal_helper.failure_reason == "timeout"
+                    else "intent AI internal review unavailable"
                 )
+                guards.append(unavailable_label)
 
         decision = self.decide(
             external_candidate=external,
@@ -245,7 +251,7 @@ class AIIntentRouter:
             "backend": backend,
             "provider": provider,
             "model": model,
-            "timeout": timeout,
+            "timeout": trace_timeout,
             "base_url": base_url,
             "api_key_env": api_key_env,
             "fallback_backend": fallback_backend,
@@ -473,18 +479,7 @@ def coerce_route_candidate(
 def summarize_ai_helper_result(result: AIHelperResult | None) -> dict[str, Any] | None:
     if result is None:
         return None
-    return {
-        "task": result.task,
-        "backend": result.backend,
-        "provider": result.provider,
-        "model": result.model,
-        "status": result.status,
-        "error": result.error,
-        "elapsed_ms": result.elapsed_ms,
-        "advisory": result.advisory,
-        "no_direct_writes": result.no_direct_writes,
-        "audit": result.audit,
-    }
+    return public_ai_helper_result_dict(result)
 
 
 def preflight_trace_for_intent(

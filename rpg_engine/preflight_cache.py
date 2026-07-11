@@ -240,12 +240,28 @@ def mark_intent_preflight_ready(
         ),
     )
     if cursor.rowcount != 1:
-        raise ValueError("preflight is not pending or has expired")
+        row = conn.execute("select status, expires_at from intent_preflight_cache where id=?", (preflight_id,)).fetchone()
+        if row is None:
+            raise ValueError("preflight does not exist")
+        status = str(row["status"])
+        if status == PREFLIGHT_PENDING and is_expired(str(row["expires_at"])):
+            expired = update_preflight_status(
+                conn,
+                preflight_id,
+                PREFLIGHT_EXPIRED,
+                reason="expired",
+                current_status=PREFLIGHT_PENDING,
+            )
+            if expired:
+                return PREFLIGHT_EXPIRED
+            final_row = conn.execute("select status from intent_preflight_cache where id=?", (preflight_id,)).fetchone()
+            return str(final_row["status"]) if final_row else status
+        return status
     row = conn.execute("select status from intent_preflight_cache where id=?", (preflight_id,)).fetchone()
     return str(row["status"]) if row else PREFLIGHT_READY
 
 
-def mark_intent_preflight_failed(conn: sqlite3.Connection, preflight_id: str, *, error: str) -> None:
+def mark_intent_preflight_failed(conn: sqlite3.Connection, preflight_id: str, *, error: str) -> str:
     cursor = conn.execute(
         """
         update intent_preflight_cache
@@ -254,8 +270,25 @@ def mark_intent_preflight_failed(conn: sqlite3.Connection, preflight_id: str, *,
         """,
         (PREFLIGHT_FAILED, clean(error), utc_now(), preflight_id, PREFLIGHT_PENDING, utc_now()),
     )
-    if cursor.rowcount != 1:
-        raise ValueError("preflight is not pending or has expired")
+    if cursor.rowcount == 1:
+        return PREFLIGHT_FAILED
+    row = conn.execute("select status, expires_at from intent_preflight_cache where id=?", (preflight_id,)).fetchone()
+    if row is None:
+        raise ValueError("preflight does not exist")
+    status = str(row["status"])
+    if status == PREFLIGHT_PENDING and is_expired(str(row["expires_at"])):
+        expired = update_preflight_status(
+            conn,
+            preflight_id,
+            PREFLIGHT_EXPIRED,
+            reason="expired",
+            current_status=PREFLIGHT_PENDING,
+        )
+        if expired:
+            return PREFLIGHT_EXPIRED
+        final_row = conn.execute("select status from intent_preflight_cache where id=?", (preflight_id,)).fetchone()
+        return str(final_row["status"]) if final_row else status
+    return status
 
 
 def consume_intent_preflight(

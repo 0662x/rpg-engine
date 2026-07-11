@@ -68,6 +68,39 @@ def delta_from_markdown(markdown: str) -> dict[str, object]:
 
 
 class V1CliTests(unittest.TestCase):
+    def test_platform_cli_explicit_timeout_applies_to_player_and_prewarm_paths(self) -> None:
+        from rpg_engine.platform_prewarm import PlatformPrewarmConfig
+
+        args = Namespace(
+            root="/tmp/platform-root",
+            enable_prewarm=True,
+            prewarm_queue_size=None,
+            prewarm_workers=None,
+            intent_ai="consensus",
+            intent_backend=None,
+            intent_provider=None,
+            intent_model=None,
+            intent_timeout=23,
+            intent_base_url=None,
+            intent_api_key_env=None,
+            intent_fallback_backend=None,
+            active_ttl_seconds=1800,
+            preflight_pending_wait_ms=200,
+        )
+
+        with patch.object(PlatformPrewarmConfig, "from_env", return_value=PlatformPrewarmConfig()):
+            sidecar = cli_v1.build_platform_sidecar(args)
+
+        self.assertEqual(sidecar.config.prewarm.intent_timeout, 23)
+        self.assertEqual(sidecar.config.player_intent_timeout, 23)
+
+        args.intent_timeout = 0
+        with patch.object(PlatformPrewarmConfig, "from_env", return_value=PlatformPrewarmConfig()):
+            zero_sidecar = cli_v1.build_platform_sidecar(args)
+
+        self.assertEqual(zero_sidecar.config.prewarm.intent_timeout, 0)
+        self.assertEqual(zero_sidecar.config.player_intent_timeout, 0)
+
     def test_cli_help_separates_player_safe_and_trusted_low_level_groups(self) -> None:
         help_text = run_cli("--help").stdout
 

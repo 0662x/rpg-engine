@@ -3,13 +3,18 @@ from __future__ import annotations
 import json
 import os
 import queue
+import re
 import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
-from .ai.defaults import DEFAULT_AI_MODEL, DEFAULT_AI_PROVIDER, DEFAULT_INTENT_TIMEOUT_SECONDS
+from .ai.defaults import (
+    DEFAULT_AI_MODEL,
+    DEFAULT_AI_PROVIDER,
+    DEFAULT_BACKGROUND_TARGET_MAX_SECONDS,
+)
 from .atomic_io import write_text_atomic
 from .db import utc_now
 from .game_session import (
@@ -75,7 +80,7 @@ class PlatformPrewarmConfig:
     intent_backend: str = "direct"
     intent_provider: str = DEFAULT_AI_PROVIDER
     intent_model: str = DEFAULT_AI_MODEL
-    intent_timeout: int = DEFAULT_INTENT_TIMEOUT_SECONDS
+    intent_timeout: int = DEFAULT_BACKGROUND_TARGET_MAX_SECONDS
     intent_base_url: str = ""
     intent_api_key_env: str = ""
     intent_fallback_backend: str = "off"
@@ -94,7 +99,7 @@ class PlatformPrewarmConfig:
             or DEFAULT_AI_MODEL,
             intent_timeout=env_int(
                 "AIGM_PLATFORM_PREWARM_INTENT_TIMEOUT",
-                DEFAULT_INTENT_TIMEOUT_SECONDS,
+                DEFAULT_BACKGROUND_TARGET_MAX_SECONDS,
                 minimum=3,
                 maximum=120,
             ),
@@ -461,21 +466,60 @@ class PrewarmWorker:
             )
             data = result.to_dict() if hasattr(result, "to_dict") else dict(result)
             duration_ms = elapsed_ms(started)
-            status = str(data.get("status") or ("ready" if data.get("ok") else "failed"))
+            source_ok = data.get("ok") is True
+            source_status = data.get("status")
+            status = (
+                source_status
+                if isinstance(source_status, str) and source_status in {"ready", "failed", "expired", "rejected"}
+                else "failed"
+            )
+            if not source_ok and status == "ready":
+                status = "failed"
+            preflight_id = public_preflight_id(data.get("preflight_id"))
+            ok = source_ok and status == "ready" and bool(preflight_id)
+            if not ok and status == "ready":
+                status = "failed"
             errors = tuple(str(item) for item in data.get("errors", []) if str(item).strip())
-            ok = bool(data.get("ok"))
-            reason = status if ok else (DROP_AI_TIMEOUT if is_timeout_error(errors, status) else DROP_AI_FAILED)
+            internal_helper = data.get("internal_helper")
+            helper_failure_reason = (
+                str(internal_helper.get("failure_reason") or "") if isinstance(internal_helper, dict) else ""
+            )
+            helper_hard_timeout = (
+                internal_helper.get("hard_timeout") is True if isinstance(internal_helper, dict) else False
+            )
+            helper_late_discarded = (
+                internal_helper.get("late_discarded") is True if isinstance(internal_helper, dict) else False
+            )
+            helper_timeout = helper_failure_reason == "timeout" or helper_hard_timeout or helper_late_discarded
+            if ok and helper_timeout:
+                ok = False
+                status = "failed"
+            reason = (
+                status
+                if ok
+                else (
+                    DROP_AI_TIMEOUT
+                    if is_timeout_error(
+                        errors,
+                        status,
+                        failure_reason=helper_failure_reason,
+                        hard_timeout=helper_hard_timeout,
+                        late_discarded=helper_late_discarded,
+                    )
+                    else DROP_AI_FAILED
+                )
+            )
             self.metrics.record_finish(reason if not ok else status, duration_ms=duration_ms)
             return PlatformPrewarmWorkerResult(
                 ok=ok,
                 status=status,
                 reason=reason,
                 message_id=clean(request.message.message_id),
-                preflight_id=str(data.get("preflight_id") or ""),
+                preflight_id=preflight_id if ok else "",
                 duration_ms=duration_ms,
-                errors=errors,
+                errors=public_prewarm_errors(reason) if not ok else (),
             )
-        except TimeoutError as exc:
+        except TimeoutError:
             duration_ms = elapsed_ms(started)
             self.metrics.record_finish(DROP_AI_TIMEOUT, duration_ms=duration_ms)
             return PlatformPrewarmWorkerResult(
@@ -484,9 +528,9 @@ class PrewarmWorker:
                 reason=DROP_AI_TIMEOUT,
                 message_id=clean(request.message.message_id),
                 duration_ms=duration_ms,
-                errors=(str(exc),),
+                errors=public_prewarm_errors(DROP_AI_TIMEOUT),
             )
-        except Exception as exc:  # pragma: no cover - worker must never break the host adapter
+        except Exception:  # pragma: no cover - worker must never break the host adapter
             duration_ms = elapsed_ms(started)
             self.metrics.record_finish(DROP_WORKER_ERROR, duration_ms=duration_ms)
             return PlatformPrewarmWorkerResult(
@@ -495,7 +539,7 @@ class PrewarmWorker:
                 reason=DROP_WORKER_ERROR,
                 message_id=clean(request.message.message_id),
                 duration_ms=duration_ms,
-                errors=(str(exc),),
+                errors=public_prewarm_errors(DROP_WORKER_ERROR),
             )
 
 
@@ -709,9 +753,30 @@ def elapsed_ms(started: float) -> int:
     return max(0, int((time.monotonic() - started) * 1000))
 
 
-def is_timeout_error(errors: tuple[str, ...], status: str) -> bool:
+def is_timeout_error(
+    errors: tuple[str, ...],
+    status: str,
+    *,
+    failure_reason: str = "",
+    hard_timeout: bool = False,
+    late_discarded: bool = False,
+) -> bool:
+    if failure_reason.strip().lower() == "timeout" or hard_timeout or late_discarded:
+        return True
     text = " ".join((*errors, status)).lower()
     return "timeout" in text or "timed out" in text
+
+
+def public_prewarm_errors(reason: str) -> tuple[str, ...]:
+    if reason == DROP_AI_TIMEOUT:
+        return ("AI prewarm timed out.",)
+    if reason == DROP_WORKER_ERROR:
+        return ("AI prewarm worker unavailable.",)
+    return ("AI prewarm unavailable.",)
+
+
+def public_preflight_id(value: Any) -> str:
+    return value if isinstance(value, str) and re.fullmatch(r"preflight:[0-9a-f]{32}", value) else ""
 
 
 def env_flag(name: str, *, default: bool) -> bool:

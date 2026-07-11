@@ -20,6 +20,7 @@ from .ai.defaults import (
     DEFAULT_STATE_AUDIT_ENABLED,
     DEFAULT_STATE_AUDIT_TIMEOUT_SECONDS,
 )
+from .ai.provider import public_ai_helper_result_dict
 from .campaign import Campaign, load_campaign
 from .capabilities import ACTION_CAPABILITIES, CAPABILITY_INTENTS, capability_for_action
 from .commit_service import commit_turn_proposal
@@ -44,11 +45,14 @@ from .intent_router import (
     turn_contract_for_intent,
 )
 from .preflight_cache import (
+    PREFLIGHT_EXPIRED,
+    PREFLIGHT_FAILED,
     PREFLIGHT_IDENTITY_CANDIDATE_BOUND,
     PREFLIGHT_IDENTITY_MESSAGE_ONLY,
     PREFLIGHT_READY,
     create_pending_intent_preflight,
     hash_text,
+    is_expired,
     mark_intent_preflight_failed,
     mark_intent_preflight_ready,
     normalize_identity_profile,
@@ -341,16 +345,7 @@ def context_to_dict(context: ContextBuildResult | None) -> dict[str, Any] | None
 
 
 def ai_helper_result_to_dict(helper: Any) -> dict[str, Any]:
-    return {
-        "task": helper.task,
-        "backend": helper.backend,
-        "provider": helper.provider,
-        "model": helper.model,
-        "status": helper.status,
-        "error": helper.error,
-        "elapsed_ms": helper.elapsed_ms,
-        "audit": helper.audit,
-    }
+    return public_ai_helper_result_dict(helper)
 
 
 def normalize_turn_proposal(proposal: dict[str, Any] | TurnProposal | None) -> TurnProposal | None:
@@ -798,6 +793,7 @@ class GMRuntime:
                 base_url=intent_base_url,
                 api_key_env=intent_api_key_env,
                 fallback_backend=effective_intent_fallback_backend,
+                execution_class="background",
             )
             if helper.ok and helper.parsed:
                 final_status = mark_intent_preflight_ready(
@@ -817,7 +813,38 @@ class GMRuntime:
                         message_id=record.message_id,
                         identity_profile=record.identity.identity_profile,
                         expires_at=record.expires_at,
-                        internal_review=helper.parsed,
+                        internal_review=None,
+                        internal_helper=ai_helper_result_to_dict(helper),
+                        errors=("late_ready_unused",),
+                    )
+                ready_row = conn.execute(
+                    "select status, expires_at, internal_review_json from intent_preflight_cache where id=?",
+                    (record.id,),
+                ).fetchone()
+                try:
+                    authoritative_review = json.loads(str(ready_row["internal_review_json"])) if ready_row else None
+                except (json.JSONDecodeError, TypeError):
+                    authoritative_review = None
+                authoritative_expires_at = str(ready_row["expires_at"]) if ready_row else record.expires_at
+                if (
+                    ready_row is None
+                    or str(ready_row["status"]) != PREFLIGHT_READY
+                    or is_expired(authoritative_expires_at)
+                    or not isinstance(authoritative_review, dict)
+                    or not authoritative_review
+                ):
+                    authoritative_status = str(ready_row["status"]) if ready_row else PREFLIGHT_FAILED
+                    return IntentPreflightResult(
+                        campaign_id=self.campaign.campaign_id,
+                        ok=False,
+                        preflight_id=record.id,
+                        status=(
+                            PREFLIGHT_EXPIRED if is_expired(authoritative_expires_at) else authoritative_status
+                        ),
+                        source_user_text_hash=record.identity.source_user_text_hash,
+                        message_id=record.message_id,
+                        identity_profile=record.identity.identity_profile,
+                        expires_at=authoritative_expires_at,
                         internal_helper=ai_helper_result_to_dict(helper),
                         errors=("late_ready_unused",),
                     )
@@ -829,23 +856,60 @@ class GMRuntime:
                     source_user_text_hash=record.identity.source_user_text_hash,
                     message_id=record.message_id,
                     identity_profile=record.identity.identity_profile,
-                    expires_at=record.expires_at,
-                    internal_review=helper.parsed,
-                    internal_helper=ai_helper_result_to_dict(helper),
+                    expires_at=authoritative_expires_at,
+                    internal_review=authoritative_review,
+                    internal_helper=None,
                 )
-            error = helper.error or helper.status
-            mark_intent_preflight_failed(conn, record.id, error=error)
+            public_helper = ai_helper_result_to_dict(helper)
+            error = str(public_helper.get("error") or "internal_intent_review ai unavailable")
+            final_status = mark_intent_preflight_failed(conn, record.id, error=error)
             conn.commit()
+            result_expires_at = record.expires_at
+            if final_status == PREFLIGHT_READY:
+                ready_row = conn.execute(
+                    "select status, expires_at, internal_review_json from intent_preflight_cache where id=?",
+                    (record.id,),
+                ).fetchone()
+                if ready_row:
+                    result_expires_at = str(ready_row["expires_at"])
+                try:
+                    authoritative_review = json.loads(str(ready_row["internal_review_json"])) if ready_row else None
+                except (json.JSONDecodeError, TypeError):
+                    authoritative_review = None
+                authoritative_ready = (
+                    ready_row is not None
+                    and str(ready_row["status"]) == PREFLIGHT_READY
+                    and not is_expired(result_expires_at)
+                )
+                if authoritative_ready and isinstance(authoritative_review, dict) and authoritative_review:
+                    return IntentPreflightResult(
+                        campaign_id=self.campaign.campaign_id,
+                        ok=True,
+                        preflight_id=record.id,
+                        status=PREFLIGHT_READY,
+                        source_user_text_hash=record.identity.source_user_text_hash,
+                        message_id=record.message_id,
+                        identity_profile=record.identity.identity_profile,
+                        expires_at=result_expires_at,
+                        internal_review=authoritative_review,
+                    )
+                final_status = (
+                    PREFLIGHT_EXPIRED
+                    if ready_row and is_expired(result_expires_at)
+                    else str(ready_row["status"])
+                    if ready_row
+                    else PREFLIGHT_FAILED
+                )
             return IntentPreflightResult(
                 campaign_id=self.campaign.campaign_id,
                 ok=False,
                 preflight_id=record.id,
-                status="failed",
+                status=final_status,
                 source_user_text_hash=record.identity.source_user_text_hash,
                 message_id=record.message_id,
                 identity_profile=record.identity.identity_profile,
-                expires_at=record.expires_at,
-                internal_helper=ai_helper_result_to_dict(helper),
+                expires_at=result_expires_at,
+                internal_helper=public_helper,
                 errors=(error,),
             )
 

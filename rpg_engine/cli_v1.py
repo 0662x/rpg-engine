@@ -1195,7 +1195,7 @@ def build_platform_sidecar(args: argparse.Namespace) -> Any:
         intent_backend=args.intent_backend or env_config.intent_backend,
         intent_provider=args.intent_provider or env_config.intent_provider,
         intent_model=args.intent_model or env_config.intent_model,
-        intent_timeout=args.intent_timeout or env_config.intent_timeout,
+        intent_timeout=args.intent_timeout if args.intent_timeout is not None else env_config.intent_timeout,
         intent_base_url=args.intent_base_url if args.intent_base_url is not None else env_config.intent_base_url,
         intent_api_key_env=args.intent_api_key_env if args.intent_api_key_env is not None else env_config.intent_api_key_env,
         intent_fallback_backend=args.intent_fallback_backend or env_config.intent_fallback_backend,
@@ -1204,6 +1204,9 @@ def build_platform_sidecar(args: argparse.Namespace) -> Any:
     config = PlatformSidecarConfig.from_prewarm_config(
         prewarm,
         player_intent_ai=args.intent_ai,
+        player_intent_timeout=(
+            args.intent_timeout if args.intent_timeout is not None else DEFAULT_INTENT_TIMEOUT_SECONDS
+        ),
         active_ttl_seconds=args.active_ttl_seconds,
         preflight_pending_wait_ms=args.preflight_pending_wait_ms,
     )

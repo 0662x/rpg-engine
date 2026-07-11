@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .campaign import Campaign
+from .ai.policy import normalize_timeout
 from .context.collectors import (
     DEFAULT_CONTEXT_COLLECTORS,
     build_collector_sections,
@@ -226,8 +227,8 @@ def build_context(
     budget_limit = max(500, int(budget if budget is not None else campaign.context_budget or 2500))
     max_events_value = max(0, int(max_events))
     max_depth_value = max(0, int(max_depth))
-    semantic_timeout_value = max(3, int(semantic_timeout))
-    intent_timeout_value = max(3, int(intent_timeout))
+    semantic_timeout_value = normalize_timeout(semantic_timeout)
+    intent_timeout_value = normalize_timeout(intent_timeout)
     intent_base_url_value = str(intent_base_url or "")
     intent_api_key_env_value = str(intent_api_key_env or "")
     intent_fallback_backend_value = str(intent_fallback_backend or "off")

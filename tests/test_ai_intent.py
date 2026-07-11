@@ -1,16 +1,18 @@
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 from types import SimpleNamespace
 
 from rpg_engine.ai.defaults import DEFAULT_AI_MODEL, DEFAULT_AI_PROVIDER
-from rpg_engine.ai.provider import run_ai_helper_json
+from rpg_engine.ai.provider import AIHelperResult, run_ai_helper_json
 from rpg_engine.ai.tasks import AIHelperTask
-from rpg_engine.ai_intent.router import ai_helper_result_from_preflight
+from rpg_engine.ai_intent.router import ai_helper_result_from_preflight, summarize_ai_helper_result
 from rpg_engine.ai_intent import (
     AIIntentRouter,
     ConsensusDecision,
@@ -33,6 +35,27 @@ from rpg_engine.resource_paths import read_resource_text
 
 
 class AIIntentTests(unittest.TestCase):
+    def test_router_helper_summary_keeps_legacy_duck_type_compatible(self) -> None:
+        helper = SimpleNamespace(
+            task="legacy",
+            backend="off",
+            provider="",
+            model="",
+            status="off",
+            error=None,
+            elapsed_ms=0,
+            advisory=True,
+            no_direct_writes=True,
+            audit={},
+        )
+
+        summary = summarize_ai_helper_result(helper)
+
+        assert summary is not None
+        self.assertIsNone(summary["failure_reason"])
+        self.assertFalse(summary["hard_timeout"])
+        self.assertFalse(summary["late_discarded"])
+
     def make_entity_db(self) -> sqlite3.Connection:
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row
@@ -1002,6 +1025,76 @@ class AIIntentTests(unittest.TestCase):
 
         self.assertEqual(result.trace["decision"]["source"], "rules_fallback")
         self.assertEqual(result.trace["route_authority"], "deterministic_rules")
+
+    def test_consensus_internal_timeout_stays_enabled_and_never_grants_external_primary(self) -> None:
+        conn = self.make_entity_db()
+        router = AIIntentRouter(conn)
+        candidate = {
+            "kind": "single",
+            "mode": "action",
+            "action": "rest",
+            "slots": {"until": "morning"},
+            "confidence": "high",
+        }
+        timeout = AIHelperResult(
+            task="internal_intent_review",
+            backend="direct",
+            provider=DEFAULT_AI_PROVIDER,
+            model=DEFAULT_AI_MODEL,
+            status="error",
+            error="provider unavailable",
+            failure_reason="timeout",
+            soft_wait_exceeded=True,
+            hard_timeout=True,
+            timeout_seconds=15,
+            audit={"latency": {"classification": "hard_timeout"}},
+        )
+
+        with mock.patch("rpg_engine.ai_intent.router.collect_internal_intent_candidate", return_value=timeout):
+            result = router.route_candidates(
+                SimpleNamespace(campaign_id="test"),
+                "休息到早上",
+                intent_ai_mode="consensus",
+                external_candidate=candidate,
+                rule_candidate=candidate,
+                rules_outcome=RouteOutcome(
+                    mode="action",
+                    submode="rest",
+                    action="rest",
+                    source="rules",
+                ),
+                backend="direct",
+                provider=DEFAULT_AI_PROVIDER,
+                model=DEFAULT_AI_MODEL,
+                timeout=15,
+            )
+
+        self.assertTrue(result.trace["enabled"])
+        self.assertEqual(result.trace["mode"], "consensus")
+        self.assertEqual(result.trace["route_authority"], "deterministic_rules")
+        self.assertEqual(result.trace["decision"]["source"], "rules_fallback")
+        self.assertEqual(result.trace["selected_outcome"]["source"], "rules")
+
+        with mock.patch("rpg_engine.ai_intent.router.collect_internal_intent_candidate", return_value=timeout):
+            huge = router.route_candidates(
+                SimpleNamespace(campaign_id="test"),
+                "休息到早上",
+                intent_ai_mode="consensus",
+                external_candidate=candidate,
+                rule_candidate=candidate,
+                backend="direct",
+                provider=DEFAULT_AI_PROVIDER,
+                model=DEFAULT_AI_MODEL,
+                timeout=10**5000,
+            )
+        self.assertEqual(huge.trace["timeout"], 120)
+        json.dumps(huge.trace)
+        self.assertEqual(result.trace["selected_outcome"]["action"], "rest")
+        self.assertEqual(result.trace["internal_helper"]["failure_reason"], "timeout")
+        self.assertTrue(result.trace["internal_helper"]["hard_timeout"])
+        self.assertEqual(result.trace["internal_helper"]["timeout_seconds"], 15)
+        self.assertIn("intent AI internal review timed out", result.guards)
+        self.assertFalse(any("provider unavailable" in item for item in result.guards))
 
     def test_off_mode_external_primary_validates_query_contract_and_visibility(self) -> None:
         conn = self.make_entity_db()

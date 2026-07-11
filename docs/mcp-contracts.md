@@ -293,6 +293,11 @@ MCP 的 AI 配置分两层：
   commit authority；非法候选必须 block/clarify，不能静默换成 rules 的另一意图。
 - Internal AI 是 visible-external independent review：可以看见 external candidate，但必须基于玩家原文和
   player-visible context 复核。
+- Server `intent_timeout` 是 helper operation 的 hard total budget，默认候选约 15 秒；约 8 秒 soft
+  wait 只记录 latency evidence/触发安全降级。Primary/fallback 共享预算，late result 不得进入 route、
+  pending 或 commit。
+- Internal AI enabled 时 timeout/unavailable 仍保持 enabled mode 并走 risk-aware fallback、clarify
+  或 block；不得转成显式 `off` 或无条件采用 external candidate。
 - `player_act` 兼容入口不接收 `external_intent_candidate`。
 - 空字符串和数值 `0` 的 per-call AI override 视为未提供；passive preflight identity 不算 AI override。
 
@@ -313,7 +318,7 @@ MCP 的 AI 配置分两层：
 - `player_act` 兼容路径可以消费 passive message-only preflight。
 - `start_turn` 和 `preview_from_text` 低层工具可以消费 preflight。
 - Cache hit 仍必须进入 arbiter、binder、resolver、validation 和 commit guard。
-- 过期、已消费、身份不匹配、schema revalidation 失败或 pending timeout 的 cache 不能成为 proposal
+- 过期、已消费、身份不匹配、schema revalidation 失败、pending timeout 或 late-ready 的 cache 不能成为 proposal
   provenance。
 - Pending clarification 存在时，`intent_preflight` 会被拒绝，不能预热跨过未回答的玩家澄清。
 

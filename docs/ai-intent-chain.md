@@ -83,6 +83,23 @@ flowchart TD
 commit authority 全部仍在 Kernel；malformed、unsafe、未知 action、非法 query 或无法绑定的 external
 candidate 必须明确 block/clarify，不能静默换成 rules 的另一意图。
 
+### Latency policy
+
+- Player-facing intent helper 默认使用约 8 秒 soft wait target；超过时记录结构化
+  `soft_wait_exceeded` evidence，但不会因此改变 authority。
+- `intent_timeout` 是默认约 15 秒的 hard total deadline。Direct primary、可选 fallback、parse 和
+  normalization 共享同一 budget；fallback 只得到剩余时间。
+- Hard deadline 后返回的 valid result 标记为 `late_discarded` 并丢弃，不能成为 selected outcome、
+  pending action 或 commit evidence。
+- `consensus` 模式中的 timeout/unavailable 继续保持 `mode=consensus`，按既有 risk-aware policy
+  fallback、clarify 或 block；它不等于显式 `off`，也不授予 external candidate `external_primary`。
+- Background/prewarm 的 30-60 秒目标是 advisory window；timeout、queue full、failed、late-ready
+  只产生 evidence/drop reason，不阻塞事实提交。Platform prewarm 默认使用 60 秒 deadline，并与
+  player-facing helper 的 bounded worker capacity 分离；background evidence 使用独立 target status，
+  不把 8 秒 player soft target 误报为 background failure。
+- Player/public helper trace 与 prewarm result 只返回稳定的 timeout/unavailable class；provider body、
+  exception detail、raw output 与 audit output summary 必须脱敏。
+
 硬边界：
 
 - `player_turn()` 可以写 pending action 或 pending clarification，但不能提交游戏事实。

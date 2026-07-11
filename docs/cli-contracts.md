@@ -379,6 +379,11 @@ importer
   能力；它不能表达确认、approval、hidden access 或保存授权。
 - Internal AI、semantic helper、Archivist 和 State Auditor 都是辅助角色。它们可以影响 review、suggestion
   或 audit evidence，不能替代 confirm / validation / commit。
+- `--intent-timeout` 表示一次 player-facing intent helper operation 的 hard total budget，默认候选约
+  15 秒；约 8 秒 soft wait 只产生 latency evidence 或安全降级信号。Direct primary 与 fallback
+  共享 hard budget，迟到结果不能进入 arbitration、pending 或 commit。
+- Internal intent AI enabled 时 timeout/unavailable 不能被解释为显式 `off`，也不能授予 external
+  candidate `external_primary` route proposal authority。
 - Preflight cache 只缓存 advisory internal review；消费时必须绑定 text hash、message/session identity
   和 single-use 语义。
 - API key env、provider、model 和 backend 参数只是 helper 配置，不改变 CLI/MCP profile 权限。

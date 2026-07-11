@@ -28,6 +28,7 @@ def collect_internal_intent_candidate(
     api_key_env: str = "",
     fallback_backend: str = "off",
     view: str = "player",
+    execution_class: str = "foreground",
 ) -> AIHelperResult:
     del campaign
     parser_user_text = str(prompt_safe_value(conn, user_text, view=view))
@@ -45,6 +46,7 @@ def collect_internal_intent_candidate(
         prompt=prompt,
         output_schema="internal_intent_review.schema.json",
         parser=lambda value: normalize_internal_intent_review(value, user_text=parser_user_text),
+        execution_class=execution_class,
     )
     return run_ai_helper_json(
         task,
