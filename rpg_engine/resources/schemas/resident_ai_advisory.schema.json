@@ -1,0 +1,245 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ResidentAIAdvisory",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "advisory_type",
+    "target_ids",
+    "evidence",
+    "confidence",
+    "freshness",
+    "visibility_mode",
+    "source_assistant",
+    "schema_version",
+    "proposed_next_workflow",
+    "provenance",
+    "authority"
+  ],
+  "properties": {
+    "advisory_type": {
+      "type": "string",
+      "enum": [
+        "intent_recognition",
+        "context_summary",
+        "entity_maintenance",
+        "progress_management",
+        "plot_progression"
+      ]
+    },
+    "target_ids": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 160,
+        "pattern": "^(?:clock:[A-Za-z0-9_.:-]+|[a-z]+:[A-Za-z0-9_.-]+)$",
+        "not": {
+          "anyOf": [
+            { "pattern": "[\\r\\n]" },
+            {
+              "pattern": "^(?:advisory|trace|turn|event|context|memory|candidate|proposal|preflight|commit|save|campaign|session|cache|snapshot|card|projection|outbox|registry|pending|player_action|runtime|request|provider|model|audit|worker|task|job|prompt|hidden|authority|admin|rawdelta):"
+            }
+          ]
+        }
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "ref_id", "as_of_turn_id"],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": ["entity", "relationship", "progress", "world_setting", "rule", "event", "context", "memory"]
+          },
+          "ref_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "^(?:clock:[A-Za-z0-9_.:-]+|[a-z]+:[A-Za-z0-9_.-]+(?::[A-Za-z0-9_.-]+)*)$",
+            "not": { "pattern": "[\\r\\n]" }
+          },
+          "as_of_turn_id": {
+            "type": ["integer", "null"],
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "allOf": [
+          {
+            "if": { "properties": { "kind": { "const": "entity" } }, "required": ["kind"] },
+            "then": {
+              "properties": {
+                "ref_id": {
+                  "pattern": "^(?:clock:[A-Za-z0-9_.:-]+|[a-z]+:[A-Za-z0-9_.-]+)$",
+                  "not": {
+                    "pattern": "^(?:advisory|trace|turn|event|context|memory|candidate|proposal|preflight|commit|save|campaign|session|cache|snapshot|card|projection|outbox|registry|pending|player_action|runtime|request|provider|model|audit|worker|task|job|prompt|hidden|authority|admin|rawdelta):"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": { "properties": { "kind": { "const": "relationship" } }, "required": ["kind"] },
+            "then": { "properties": { "ref_id": { "pattern": "^rel:[A-Za-z0-9_.-]+$" } } }
+          },
+          {
+            "if": { "properties": { "kind": { "const": "progress" } }, "required": ["kind"] },
+            "then": {
+              "properties": {
+                "ref_id": { "pattern": "^clock:[A-Za-z0-9_.:-]+$" }
+              }
+            }
+          },
+          {
+            "if": { "properties": { "kind": { "const": "world_setting" } }, "required": ["kind"] },
+            "then": { "properties": { "ref_id": { "pattern": "^(?:world|setting):[A-Za-z0-9_.-]+$" } } }
+          },
+          {
+            "if": { "properties": { "kind": { "const": "rule" } }, "required": ["kind"] },
+            "then": { "properties": { "ref_id": { "pattern": "^rule:[A-Za-z0-9_.-]+$" } } }
+          },
+          {
+            "if": { "properties": { "kind": { "const": "event" } }, "required": ["kind"] },
+            "then": { "properties": { "ref_id": { "pattern": "^event:[A-Za-z0-9_.-]+(?::[A-Za-z0-9_.-]+)*$" } } }
+          },
+          {
+            "if": { "properties": { "kind": { "const": "context" } }, "required": ["kind"] },
+            "then": { "properties": { "ref_id": { "pattern": "^context:[A-Za-z0-9_.-]+(?::[A-Za-z0-9_.-]+)*$" } } }
+          },
+          {
+            "if": { "properties": { "kind": { "const": "memory" } }, "required": ["kind"] },
+            "then": { "properties": { "ref_id": { "pattern": "^memory:[A-Za-z0-9_.-]+(?::[A-Za-z0-9_.-]+)*$" } } }
+          }
+        ]
+      }
+    },
+    "confidence": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
+    "freshness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "as_of_turn_id", "source_event_ids"],
+      "properties": {
+        "status": { "type": "string", "enum": ["current", "stale", "unknown"] },
+        "as_of_turn_id": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "source_event_ids": {
+          "type": "array",
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "^event:[A-Za-z0-9_.-]+(?::[A-Za-z0-9_.-]+)*$",
+            "not": { "pattern": "[\\r\\n]" }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "const": "unknown" } } },
+          "then": {
+            "properties": {
+              "as_of_turn_id": { "type": "null" },
+              "source_event_ids": { "maxItems": 0 }
+            }
+          },
+          "else": {
+            "anyOf": [
+              { "properties": { "as_of_turn_id": { "type": "integer" } } },
+              { "properties": { "source_event_ids": { "minItems": 1 } } }
+            ]
+          }
+        }
+      ]
+    },
+    "visibility_mode": { "type": "string", "enum": ["player", "gm", "maintenance"] },
+    "source_assistant": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120,
+      "pattern": "^[a-z][a-z0-9]*(?:[_.:-][a-z0-9]+)*$"
+    },
+    "schema_version": { "const": "resident_ai_advisory:v1" },
+    "proposed_next_workflow": {
+      "type": "string",
+      "enum": [
+        "none",
+        "intent_recognition",
+        "context_summary",
+        "entity_maintenance",
+        "progress_management",
+        "plot_progression"
+      ]
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["trace_id", "source_ids"],
+      "properties": {
+        "trace_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^(?:advisory|trace):[A-Za-z0-9_.-]+(?::[A-Za-z0-9_.-]+)*$",
+          "not": { "pattern": "[\\r\\n]" }
+        },
+        "source_ids": {
+          "type": "array",
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "^(?:turn|event|context|memory|advisory|trace|candidate):[A-Za-z0-9_.-]+(?::[A-Za-z0-9_.-]+)*$",
+            "not": { "pattern": "[\\r\\n]" }
+          }
+        }
+      }
+    },
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "advisory_only",
+        "no_direct_writes",
+        "can_write_facts",
+        "can_approve_proposals",
+        "can_confirm_players",
+        "can_read_hidden",
+        "can_inject_trusted_delta",
+        "can_authorize_save",
+        "can_escalate_profile",
+        "can_bypass_validation",
+        "can_commit"
+      ],
+      "properties": {
+        "advisory_only": { "const": true },
+        "no_direct_writes": { "const": true },
+        "can_write_facts": { "const": false },
+        "can_approve_proposals": { "const": false },
+        "can_confirm_players": { "const": false },
+        "can_read_hidden": { "const": false },
+        "can_inject_trusted_delta": { "const": false },
+        "can_authorize_save": { "const": false },
+        "can_escalate_profile": { "const": false },
+        "can_bypass_validation": { "const": false },
+        "can_commit": { "const": false }
+      }
+    }
+  }
+}

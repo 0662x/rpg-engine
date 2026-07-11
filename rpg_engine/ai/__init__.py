@@ -24,6 +24,12 @@ from .config import (
     resolve_ai_helper_settings,
 )
 from .provider import AIHelperResult, InternalAIService, run_ai_helper_json
+from .advisory import (
+    ResidentAIAdvisory,
+    normalize_resident_ai_advisory,
+    resident_ai_advisory_to_maintenance_dict,
+    resident_ai_advisory_to_player_dict,
+)
 from .schemas import ArchivistSuggestion, ReflectionAIOutput, SemanticSuggestion, StateAuditResult
 from .tasks import AIHelperTask
 
@@ -51,8 +57,12 @@ __all__ = [
     "INTENT_AI_MODES",
     "InternalAIService",
     "ReflectionAIOutput",
+    "ResidentAIAdvisory",
     "SemanticSuggestion",
     "StateAuditResult",
     "run_ai_helper_json",
+    "normalize_resident_ai_advisory",
+    "resident_ai_advisory_to_maintenance_dict",
+    "resident_ai_advisory_to_player_dict",
     "resolve_ai_helper_settings",
 ]

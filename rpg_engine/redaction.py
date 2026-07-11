@@ -63,6 +63,9 @@ HIDDEN_ENGLISH_SECRET_FRAGMENT_RE = re.compile(
 HIDDEN_EXACT_TEXT_MIN_LENGTH = 5
 HIDDEN_PURE_ALPHA_TEXT_MIN_LENGTH = 7
 HIDDEN_KEY_TOKEN_MARKERS = frozenset({"secret", "hidden", "gm", "code", "key", "token", "password", "passphrase"})
+STRUCTURED_REFERENCE_ID_RE = re.compile(r"^(?:clock:[A-Za-z0-9_.:-]+|[a-z]+:[A-Za-z0-9_.-]+)$")
+MAX_STRUCTURED_REFERENCE_IDS = 128
+MAX_STRUCTURED_REFERENCE_ID_LENGTH = 160
 
 
 def hidden_entity_ids(conn: sqlite3.Connection) -> set[str]:
@@ -214,9 +217,76 @@ def redact_hidden_entity_id_substrings_from_refs(
     return redact_entity_substrings(value, tokens, drop_empty=drop_empty)
 
 
-def redact_player_hidden_material(conn: sqlite3.Connection, value: Any, *, drop_empty: bool = True) -> Any:
+def redact_player_hidden_material(
+    conn: sqlite3.Connection,
+    value: Any,
+    *,
+    drop_empty: bool = True,
+    redact_id_substrings: bool = True,
+    structured_reference_ids: bool = False,
+) -> Any:
+    if structured_reference_ids:
+        return _redact_structured_reference_ids(conn, value, drop_empty=drop_empty)
     refs = hidden_entity_refs(conn)
-    return redact_player_hidden_material_from_refs(value, refs, drop_empty=drop_empty)
+    return redact_player_hidden_material_from_refs(
+        value,
+        refs,
+        drop_empty=drop_empty,
+        redact_id_substrings=redact_id_substrings,
+    )
+
+
+def _redact_structured_reference_ids(conn: sqlite3.Connection, value: Any, *, drop_empty: bool) -> Any:
+    if (
+        type(value) is not list
+        or len(value) > MAX_STRUCTURED_REFERENCE_IDS
+        or not all(
+            type(item) is str
+            and len(item) <= MAX_STRUCTURED_REFERENCE_ID_LENGTH
+            and STRUCTURED_REFERENCE_ID_RE.fullmatch(item) is not None
+            for item in value
+        )
+    ):
+        raise ValueError("structured references must be a bounded list of strings")
+    hidden_ids = _hidden_candidate_entity_ids(conn, value)
+    redacted = ["[hidden]" if item in hidden_ids else item for item in value]
+    if not drop_empty:
+        return redacted
+    return [item for item in redacted if not _should_drop(item)]
+
+
+def _hidden_candidate_entity_ids(conn: sqlite3.Connection, candidates: list[str]) -> set[str]:
+    if not candidates:
+        return set()
+    ensure_visibility_sql_functions(conn)
+    has_world_settings = _table_exists(conn, "world_settings")
+    world_setting_visibility_expr = "coalesce(ws.visibility, '')"
+    world_setting_hidden_expr = (
+        f"({normalized_text_sql('e.type')} = 'world_setting' "
+        f"and (ws.entity_id is null or {normalized_text_sql(world_setting_visibility_expr)} not in ('known', 'hinted')))"
+        if has_world_settings
+        else f"{normalized_text_sql('e.type')} = 'world_setting'"
+    )
+    world_setting_join = "left join world_settings ws on ws.entity_id = e.id" if has_world_settings else ""
+    placeholders = ",".join("?" for _ in candidates)
+    rows = conn.execute(
+        f"""
+        select e.id
+        from entities e
+        left join clocks c on c.entity_id = e.id
+        {world_setting_join}
+        where e.id in ({placeholders})
+          and (
+            {normalized_text_sql("e.status")} = 'archived'
+            or {player_hidden_visibility_sql("e.visibility")}
+            or ({normalized_text_sql("e.type")} = 'clock'
+                and {player_hidden_visibility_sql("coalesce(c.visibility, e.visibility)")})
+            or {world_setting_hidden_expr}
+          )
+        """,
+        tuple(candidates),
+    ).fetchall()
+    return {str(row["id"]) for row in rows}
 
 
 def redact_player_hidden_material_from_refs(
@@ -224,8 +294,11 @@ def redact_player_hidden_material_from_refs(
     refs: dict[str, set[str]],
     *,
     drop_empty: bool = True,
+    redact_id_substrings: bool = True,
 ) -> Any:
     redacted = redact_entity_refs(value, refs, drop_empty=drop_empty)
+    if not redact_id_substrings:
+        return redacted
     return redact_hidden_entity_id_substrings_from_refs(redacted, refs, drop_empty=drop_empty)
 
 

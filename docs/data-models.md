@@ -26,6 +26,7 @@ Projection / registry / archive / cache -> 派生物、索引或 advisory state
 - `.aigm/save-registry.json` 选择 active save，不保存游戏事实。
 - pending action / pending clarification 是玩家入口临时状态，不是已发生事实。
 - `intent_preflight_cache` 是 advisory AI intent cache，不能替代 preview、validation、confirm 或 commit。
+- `ResidentAIAdvisory` 是严格的 runtime/advisory contract representation，不是新的事实表、queue 或 persistence owner。
 - `.aigmsave` 是归档格式，不是另一个可写事实源。
 
 ## 数据地图
@@ -208,6 +209,53 @@ not as an empty clean queue.
 `intent_preflight_cache` stores identity-bound, single-use preflight review data. It may include player text,
 external candidate hashes, rule candidate hashes, internal review and helper audit. It must not become a
 commit authorization model.
+
+### Resident AI Advisory Envelope
+
+`ResidentAIAdvisory` 的 canonical schema id 是 `resident_ai_advisory:v1`。它是未来 resident helper、
+adapter 或 owner 可消费的 JSON-safe contract representation；当前不选择存储 owner，不新增 SQLite 表、
+repository、queue 或 lifecycle。
+
+严格顶层字段：
+
+| 字段 | 说明 |
+| --- | --- |
+| `advisory_type` | `intent_recognition`、`context_summary`、`entity_maintenance`、`progress_management` 或 `plot_progression`。 |
+| `target_ids` | 有界、唯一的目标 entity/access-contract references；runtime trace id 不能替代 entity id。 |
+| `evidence` | 只有 `kind`、`ref_id`、nullable as-of turn 的有界 references，不包含正文、prompt、delta 或 provider payload。 |
+| `confidence` | `0.0..1.0` finite number，拒绝 bool、NaN 与 Infinity。 |
+| `freshness` | `current/stale/unknown`、nullable as-of turn 与有界 source event ids；它是 freshness evidence，不是事实。 |
+| `visibility_mode` | 只接受 `player`、`gm`、`maintenance`。 |
+| `source_assistant` / `schema_version` | 窄 assistant 来源与固定 contract version。 |
+| `proposed_next_workflow` | `none` 或五类受限 workflow hint，不是 callback、command、approval、confirmation 或 commit capability。 |
+| `provenance` | 有界 trace/source references，仅供安全 maintenance/debug 使用。 |
+| `authority` | Required const：advisory-only/no-direct-writes；write/approve/confirm/hidden/trusted-delta/save/profile/validation/commit capabilities 全为 false。 |
+
+Player projection 不复用 maintenance representation。它只在精确 player view 和有效 SQLite connection
+下，通过 Entity/Relationship/Progress access contracts 权威证明每个 target/evidence 可见，再从正向
+allowlist 重建结果；hidden、archived、absent、unsupported 与 query failure 使用同一个 generic unavailable
+形状，不泄露 id、alias、kind、数量或逐项 omission reason。通用 hidden redaction 是最后一道防御，不替代
+inclusion check。Normalizer 和 serializers 不写数据库，也不 commit/rollback/close caller-owned connection。
+`ResidentAIAdvisory` 的公开 frozen dataclass constructor 不代表已经验证；serializer 必须重新 normalization。
+Player projection 不输出 confidence、freshness、source assistant 或 workflow hint，只输出经实际 entity subtype
+对应 access contract 证明的安全 `kind/ref_id` 引用、固定 schema/authority 与通用 advisory/no-write 标记；
+maintenance evidence 的 as-of turn 不进入 player projection，避免形成历史或未来时态的存在性提示。
+已验证的结构化 player references 只对 bounded candidate IDs 做区分大小写的 exact canonical-ID redaction；
+hidden name/alias、大小写变体或 ID 前缀均不得改变公开结果，也不加载全库 hidden corpus。
+含事实表 TEMP shadow 的 SQLite connection 不具备 player projection authority，必须统一 fail closed。
+权威 facts/access tables 必须来自 `main` schema；仅在 attached schema 中存在同名表的 connection 不是有效 Save。
+Evidence/provenance 使用 canonical `prefix:id` references，freshness sources 使用 `event:` ids；直接构造的
+authority flags 必须在 `to_dict()` 或 serializer 边界被拒绝，不能先洗白再当作已验证输入。
+Evidence kind 必须与 `entity/rel/clock/world/rule/event/context/memory` reference namespace 对齐；authority
+只接受 exact bool，as-of turn 只接受 exact bounded int，normalized collection 只使用 tuple。
+Target ids 排除 commit/save/memory/session/projection 等 runtime/derived namespaces；同一 ref/as-of evidence 不得
+用不同 kind 重复。JSON scalar subclasses 不是 canonical input。
+Progress target/evidence 保持 `clock:` contract 对 nested-colon ids 的兼容；normalization 基于 preflight 后的
+bounded copy，不继续读取 caller-owned mutable collections。
+Provenance source ids 使用受限安全 namespace，不把 provider/session/prompt/hidden/commit/save 标识保存为安全
+来源证据。
+Clock advisory references 与现有 Progress contract 一样允许 nested/连续/尾随冒号；candidate/prompt/hidden
+references 只能作为受限来源语义（如适用），不能伪装成 gameplay target。
 
 ## Entity Model
 

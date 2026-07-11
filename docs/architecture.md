@@ -111,6 +111,58 @@ Background latency 按 `before_target` / `within_target` / `target_exceeded` 记
 `soft_wait_exceeded`。Player/public trace 只暴露稳定 failure class 与脱敏 audit，不回传 provider body、
 exception detail 或 output summary。
 
+## Resident AI Advisory Envelope
+
+`rpg_engine.ai.advisory.ResidentAIAdvisory` 是 resident AI 输出的共享 contract，不是 coordinator、
+任务队列或存储服务。V1 envelope 使用 `resident_ai_advisory:v1` schema，严格记录五类
+`advisory_type`、target ids、结构化 evidence、finite confidence、freshness、visibility mode、
+source assistant、proposed next workflow、provenance 与固定 authority。Workflow 字段只是受限 hint；
+authority 永远是 advisory-only / no-direct-writes，所有 fact write、proposal approval、player confirmation、
+hidden permission、trusted delta、save authorization、profile escalation、validation bypass 和 commit
+capability 都固定为 false。
+
+Normalizer 先执行有界 JSON-safe structural preflight，再使用 Draft 2020-12 schema fail closed；它不
+静默裁剪未知/越界输入，也不保留 caller 的可变 collection。Maintenance serializer 只输出 canonical、
+有界的 debug representation，不保存 private reasoning。Player serializer 使用独立字段 allowlist，要求
+精确 `visibility_mode=player` 和有效 SQLite connection，并通过 Entity/Relationship/Progress access
+contracts 分别验证 targets/evidence；hidden、archived、missing、unsupported 或查询失败都采用同一个
+generic unavailable 结果，最后才调用通用 hidden redactor 作为 defense-in-depth。以上操作只读且保留
+caller transaction ownership；本 contract 不写 Save、Campaign、registry、pending、preflight 或 proposal
+state，也不改变 30-60 秒 background scheduling target。
+
+公开 dataclass 不是 validation token：maintenance/player serializer 会重新执行 strict normalization。Player
+projection 只保留经权威 access contract 证明的 target/evidence、安全 schema version 与固定 authority；不会
+回显可能受 hidden evidence 影响的 confidence、freshness（包括 evidence as-of turn）、source assistant 或
+workflow metadata。任何最终
+hidden redaction 造成的 allowlist shape 变化都会 fail closed 为同一 generic unavailable 结果。
+Evidence、freshness event 与 provenance references 必须使用 canonical prefixed IDs；未知 structural keys 不得
+进入异常 path。公开 `to_dict()` 与 serializers 都会拒绝伪造 authority state，不把静默重写当成验证。
+Structural preflight 只接受 exact built-in `dict/list`，normalized dataclass collections 必须是 tuple；authority
+const 与 as-of integer 使用精确 wire types。Defense-in-depth redaction 只扫描已通过 access contract 的动态
+references，不让无关 hidden 文本碰撞固定协议 key。
+Schema validation 前只接受精确 built-in scalar types；已知 runtime/derived namespace 不能成为 advisory target。
+Defense redaction 只扫描 reference leaf values，validator exception 不保留敏感 cause，同一 reference/as-of 也
+不能以多个 evidence kind 重复出现。
+Mapping keys 与 values 一样只接受 exact built-in JSON scalars。单个 reference read 失败只 omission 该项；
+合法的其他公开 reference 仍可投影。`to_dict()` 完成 strict revalidation 后，player serializer 不重复执行
+第二轮完整 schema normalization。
+Normalizer 在 structural preflight 后复制 bounded exact JSON snapshot，再对 snapshot 复核并完成 schema/semantic
+validation。`rel:`/`clock:` prefix 即使遇到 malformed storage type 也必须走 typed access contract；Progress
+references 兼容既有 nested-colon clock ids。Redactor 比较保存调用前 wire snapshot，不能被 in-place mutation 绕过。
+Redactor 输出还必须保持 exact `list[str]` 形状，JSON 文本相同的 tuple 也会 fail closed。
+对已经 access-contract 验证的结构化 reference 只查询 bounded candidate IDs，并以区分大小写的 canonical ID
+精确匹配执行 redaction；不加载全库 hidden names/aliases/text，也不执行 hidden-ID 子串匹配，避免无关 hidden
+内容改变公开 reference 的可用性并形成 existence oracle。
+Player serializer 还拒绝存在 `entities`、`clocks` 或 `world_settings` TEMP shadow table/view 的连接，
+并要求 `main` schema 自身包含权威 `entities`/`clocks` tables，防止 SQLite 名称解析 fallback 到 attached
+database 绕过 `main` 事实权威。
+Maintenance provenance source ids 只接受 `turn/event/context/memory/advisory/trace/candidate` 安全 namespace；
+bare authority/approval/confirmation 只允许 canonical 顶层 authority object。Prefix dispatch 优先于冲突的
+storage type，structural traversal 的并发 mutation 异常不会保留原始 cause/message。
+Clock reference syntax 精确复用 Progress Access Contract 的 `[A-Za-z0-9_.:-]+` 后缀；candidate/prompt/hidden
+等控制面 namespace 不能成为 target/entity evidence。Player projection 在 revalidation 后只读取 canonical dict
+snapshot，并对 rule/world/setting prefix 执行 storage type 核验。
+
 ## AI 意图边界
 
 关键模块：

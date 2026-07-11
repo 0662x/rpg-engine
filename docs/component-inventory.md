@@ -33,6 +33,7 @@
 | Intent Manifest | `rpg_engine/intent_manifest.py` | 意图/动作能力声明 |
 | AI Intent Router | `rpg_engine/ai_intent/router.py` | AI 候选收集、preflight 消费、内部复核、共识仲裁、绑定 trace 组装 |
 | AI Provider | `rpg_engine/ai/provider.py` | AI provider 抽象 |
+| Resident AI Advisory | `rpg_engine/ai/advisory.py` | 严格、深度不可变的 advisory envelope、maintenance representation 与 SQLite-aware player-safe projection；不具事实、确认、hidden 或 commit 权威 |
 | AI Policy | `rpg_engine/ai/policy.py` | AI 策略约束 |
 | AI Schema Validation | `rpg_engine/ai/schema_validation.py` | AI 输出 schema 校验 |
 | Arbiter | `rpg_engine/ai_intent/arbiter.py` | 候选裁决 |

@@ -41,7 +41,7 @@
 # - Retrospective appends its action items to action_items; sprint-status surfaces open ones
 
 generated: 2026-07-04T23:27:52+1000
-last_updated: 2026-07-11
+last_updated: 2026-07-12
 project: RPG Engine
 project_key: NOKEY
 tracking_system: file-system
@@ -82,7 +82,7 @@ development_status:
   4-1-low-trust-intent-candidate-contract: done
   4-2-ai-latency-policy-and-safe-degradation: done
   4-3-advisory-preflight-cache-boundary: done
-  4-4-resident-ai-advisory-envelope-contract: backlog
+  4-4-resident-ai-advisory-envelope-contract: done
   4-5-resident-ai-advisory-代表性适配: backlog
   4-6-entity-relationship-and-progress-advisory-review: backlog
   4-7-plot-progression-advisory-without-storylet-requirement: backlog
