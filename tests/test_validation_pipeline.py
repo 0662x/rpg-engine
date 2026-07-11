@@ -207,6 +207,14 @@ class ValidationPipelineTests(unittest.TestCase):
                 )
                 with self.assertRaisesRegex(ValueError, "does not match commit delta"):
                     commit_turn_delta(campaign, conn, delta=other_delta, validation=report, backup=False)
+                with self.assertRaisesRegex(ValueError, "does not match commit delta"):
+                    commit_turn_delta(
+                        campaign,
+                        conn,
+                        delta={"meta": {"private": object()}},
+                        validation=replace(report, delta_digest=None),
+                        backup=False,
+                    )
 
             self.assertTrue(report.ok, report.to_dict())
             self.assertEqual(report.delta_digest, stable_delta_digest(delta))

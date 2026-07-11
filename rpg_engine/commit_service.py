@@ -99,7 +99,12 @@ def commit_turn_delta(
         missing = [key for key in ("expected_turn_id", "command_id") if not delta.get(key)]
         if missing:
             raise ValueError("player_turn_commit requires " + ", ".join(missing))
-    if validation.delta_digest != stable_delta_digest(delta):
+    current_delta_digest = stable_delta_digest(delta)
+    if (
+        validation.delta_digest is None
+        or current_delta_digest is None
+        or validation.delta_digest != current_delta_digest
+    ):
         raise ValueError("validation report does not match commit delta")
 
     backup_record = None

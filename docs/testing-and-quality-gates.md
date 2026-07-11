@@ -219,6 +219,30 @@ Safe provenance namespace、nested bare authority nouns、conflicting `clock:`/r
 Progress clock 完整 ID pattern、candidate/prompt/hidden target 拒绝、malformed rule/world prefix 与 revalidation
 后原对象 mutation 不影响 canonical player snapshot，均属于 focused regression。
 
+Resident AI representative adapters 的 focused gate：
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q \
+  tests/test_resident_ai_advisory_adapters.py \
+  tests/test_resident_ai_advisory.py \
+  tests/test_ai_intent.py \
+  tests/test_validation_pipeline.py \
+  tests/test_maintenance_tooling_coverage.py \
+  -p no:cacheprovider
+```
+
+该 gate 必须覆盖 `intent_recognition` 与 `progress_management` 两种 mapping、exact source/authority flags、
+normal `None` 与 malformed `ValueError` 矩阵、first-seen typed references、confidence/unknown-freshness、canonical
+digest、payload exclusion 与 source immutability。Intent owner integration 只能在 Kernel decision/binding 完成后
+生成 optional object，且 adapter 三类异常不能改变 trace/decision/outcome/guards；temporary Save 的 player
+serializer 必须继续 omission hidden/archived/missing refs，并排除 confidence/freshness/source/provenance。
+
+State Audit owner integration 必须 all-or-none 提取 clock ids，只允许 maintenance profiles 的 stage artifacts，
+并证明 preview/player/response/unknown profile omission。Adapter success/failure 都不得改变 audit/status/issues、
+ValidationReport ok 或 commit eligibility；不得新增 provider call、SQLite write、proposal/queue transition、public
+renderer 或 CLI/MCP surface。Adjacent regression继续覆盖 preflight CAS、AI helper、runtime、SaveManager、platform、
+surface inventory 与 current-native visibility/write safety，所有写测试使用 temporary Save。
+
 Surface / intent 基线材料：
 
 - `tests/fixtures/intent_router_gold_set.yaml`

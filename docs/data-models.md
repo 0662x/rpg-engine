@@ -257,6 +257,23 @@ Provenance source ids 使用受限安全 namespace，不把 provider/session/pro
 Clock advisory references 与现有 Progress contract 一样允许 nested/连续/尾随冒号；candidate/prompt/hidden
 references 只能作为受限来源语义（如适用），不能伪装成 gameplay target。
 
+#### Representative Adapter Mapping
+
+| Existing output | Companion advisory | Mapping boundary |
+| --- | --- | --- |
+| successful exact `internal_intent_review` + final Kernel binding | `intent_recognition` / original binder view | first-seen canonical `entity_bindings`；high/medium/low 映射 0.9/0.6/0.3 |
+| exact `StateAuditResult` + complete valid `tick_clocks` set | `progress_management` / maintenance | first-seen clock ids；confidence 固定 0.5，risk 不是 confidence |
+
+两类 mapping 的 freshness 都是 `unknown/null/[]`，因为 intent helper 没有 canonical numeric as-of evidence，
+而 state audit 检查的是尚未 commit 的 delta。Helper payload 与 envelope metadata 严格分离：player text、slots、
+reason、findings、warnings、missing changes、delta、provider audit 与 prompt 不进入 envelope 或 digest。Adapter
+不新增表、repository、storage owner 或 fact lifecycle；validation artifacts 中的 maintenance advisory 不是
+proposal、delta、approval 或 commit token。
+
+未迁移清单包括 semantic/context summary、Archivist、reflection、memory、entity maintenance、delta draft、
+response acceptance、turn assistant 与 plot progression。AI suggestion -> review artifact 仍由 Story 4.6 管理，
+plot progression 由 Story 4.7 管理，proposal queue lifecycle/apply/revert/report 由 Story 5.7 管理。
+
 ## Entity Model
 
 每个持久游戏对象都应该有稳定的 `entities.id`。

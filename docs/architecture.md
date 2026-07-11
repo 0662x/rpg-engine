@@ -163,6 +163,26 @@ Clock reference syntax 精确复用 Progress Access Contract 的 `[A-Za-z0-9_.:-
 等控制面 namespace 不能成为 target/entity evidence。Player projection 在 revalidation 后只读取 canonical dict
 snapshot，并对 rule/world/setting prefix 执行 storage type 核验。
 
+### Representative Advisory Adapters
+
+`rpg_engine.ai.advisory_adapters` 提供两个 bounded、纯转换的 companion adapter。Internal Intent Review
+在 Kernel arbitration/binding 与 route selection 完成后，把最终 `entity_bindings` 映射为
+`intent_recognition` advisory；`source_assistant` 只表示 internal helper 是 producer，targets 表示最终
+Kernel-selected binding，不表示 AI 独立确认事实。该 optional object 只存在于 `AIIntentRouteResult`，不进入
+trace、arbiter、binder、resolver、fallback、preview、pending、confirm、validation 或 commit 输入。
+
+State Audit adapter 只把 maintenance-oriented validation profile 中、已通过 delta-schema stage 的完整
+`tick_clocks` id 集合映射为 `progress_management` advisory。提取采用 all-or-none；maintenance dict 只作为
+state-audit stage 的 companion artifact，不能出现在 preview/player-turn/response-acceptance profile，也不能
+改变 audit risk/status/issues、report ok 或 commit eligibility。
+
+两个 adapter 都只读取 exact helper flags、安全枚举与 canonical access-contract references，最终复用
+`normalize_resident_ai_advisory()`。Provenance SHA-256 只覆盖 adapter kind、first-seen targets、confidence/view
+等 bounded metadata，不包含 player text、reason、slots、findings、warnings、delta body、provider/model、prompt、
+session/message/preflight 或 raw audit。Freshness 固定 unknown，workflow 固定 none；adapter 不接收 connection、
+不调用 provider、不写 Save/queue/registry。Semantic/Archivist/reflection/memory/delta/response/turn/plot helpers
+保持未迁移，Story 4.6、4.7 与 5.7 的 review/plot/proposal ownership 不变。
+
 ## AI 意图边界
 
 关键模块：

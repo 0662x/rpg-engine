@@ -5,6 +5,11 @@ from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Any
 
 from ..actions import ActionResolverRegistry
+from ..ai.advisory import ResidentAIAdvisory, normalize_resident_ai_advisory
+from ..ai.advisory_adapters import (
+    adapt_internal_intent_review_advisory,
+    matches_internal_intent_review_projection,
+)
 from ..ai.provider import AIHelperResult, public_ai_helper_result_dict
 from ..ai.policy import normalize_timeout
 from ..ai.schema_validation import validate_ai_output_schema
@@ -40,6 +45,7 @@ class AIIntentRouteResult:
     adopted_outcome: RouteOutcome | None = None
     selected_outcome: RouteOutcome | None = None
     guards: tuple[str, ...] = ()
+    internal_advisory: ResidentAIAdvisory | None = None
 
 
 class AIIntentRouter:
@@ -283,6 +289,33 @@ class AIIntentRouter:
             "adopted_outcome": adopted_outcome.final_trace() if adopted_outcome else None,
             "selected_outcome": selected_outcome.final_trace() if selected_outcome else None,
         }
+        internal_advisory: ResidentAIAdvisory | None = None
+        if internal_helper is not None and decision.bound is not None:
+            try:
+                bound_target_ids = tuple(decision.bound.entity_bindings.values())
+                adapted_advisory = adapt_internal_intent_review_advisory(
+                    internal_helper,
+                    bound_target_ids=bound_target_ids,
+                    visibility_mode=view,
+                )
+                if type(adapted_advisory) is ResidentAIAdvisory:
+                    normalized_advisory = normalize_resident_ai_advisory(adapted_advisory.to_dict())
+                    if (
+                        type(view) is str
+                        and normalized_advisory.advisory_type == "intent_recognition"
+                        and normalized_advisory.source_assistant == "internal_intent_review"
+                        and normalized_advisory.visibility_mode == view
+                        and normalized_advisory.proposed_next_workflow == "none"
+                        and matches_internal_intent_review_projection(
+                            normalized_advisory,
+                            internal_helper,
+                            bound_target_ids=bound_target_ids,
+                            visibility_mode=view,
+                        )
+                    ):
+                        internal_advisory = normalized_advisory
+            except Exception:
+                internal_advisory = None
         return AIIntentRouteResult(
             internal_candidate=internal_candidate,
             internal_helper=internal_helper,
@@ -293,6 +326,7 @@ class AIIntentRouter:
             adopted_outcome=adopted_outcome,
             selected_outcome=selected_outcome,
             guards=tuple(guards),
+            internal_advisory=internal_advisory,
         )
 
     def lookup_preflight(

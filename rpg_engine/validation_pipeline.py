@@ -2,13 +2,26 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import sqlite3
+from copy import deepcopy
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any
+from weakref import WeakSet
 
 from .actions import get_default_action_registry
 from .ai.defaults import DEFAULT_AI_MODEL, DEFAULT_AI_PROVIDER, DEFAULT_STATE_AUDIT_TIMEOUT_SECONDS
+from .ai.advisory import (
+    MAX_CONTAINER_ITEMS,
+    ResidentAIAdvisory,
+    normalize_resident_ai_advisory,
+    resident_ai_advisory_to_maintenance_dict,
+)
+from .ai.advisory_adapters import (
+    adapt_state_audit_progress_advisory,
+    matches_state_audit_progress_projection,
+)
 from .ai.state_audit import run_state_audit, should_block_state_audit
 from .campaign import Campaign
 from .capabilities import ACTION_CAPABILITIES, CAPABILITY_INTENTS, capability_for_action
@@ -16,6 +29,7 @@ from .delta_draft import check_delta_response_consistency
 from .delta_schema import validate_delta_schema
 from .proposal import TurnProposal, validate_turn_proposal
 from .response_lint import lint_response
+from .visibility import normalize_visibility_label
 
 
 VALIDATION_PROFILES = {
@@ -35,6 +49,23 @@ COMMIT_ALLOWED_PROFILES = {
     "import_or_migration",
 }
 
+MAINTENANCE_ADVISORY_PROFILES = frozenset({
+    "maintenance_commit",
+    "admin_or_legacy_save_turn",
+    "import_or_migration",
+})
+
+
+@dataclass(frozen=True, eq=False)
+class _ValidatedDeltaProof:
+    delta_digest: str
+    clock_ids: tuple[str, ...] | None
+    canonical_delta_json: str = field(repr=False)
+    connection: sqlite3.Connection = field(repr=False)
+
+
+_MINTED_DELTA_PROOFS: WeakSet[_ValidatedDeltaProof] = WeakSet()
+
 
 @dataclass(frozen=True)
 class ValidationStageResult:
@@ -44,6 +75,7 @@ class ValidationStageResult:
     issues: tuple[str, ...] = ()
     skipped_reason: str | None = None
     artifacts: dict[str, Any] = field(default_factory=dict)
+    _validated_delta_proof: _ValidatedDeltaProof | None = field(default=None, repr=False, compare=False)
 
     @property
     def ok(self) -> bool:
@@ -232,8 +264,42 @@ def run_validation_pipeline(
 def stable_delta_digest(delta: dict[str, Any] | None) -> str | None:
     if delta is None:
         return None
-    payload = json.dumps(delta, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    payload = _canonical_delta_json(delta)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest() if payload is not None else None
+
+
+def _canonical_delta_json(delta: Any) -> str | None:
+    try:
+        _require_exact_json_value(delta)
+        payload = json.dumps(
+            delta,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        payload.encode("utf-8")
+        return payload
+    except Exception:
+        return None
+
+
+def _require_exact_json_value(value: Any) -> None:
+    if type(value) is dict:
+        for key, item in value.items():
+            if type(key) is not str:
+                raise ValueError("delta mapping keys must be exact strings")
+            _require_exact_json_value(item)
+        return
+    if type(value) is list:
+        for item in value:
+            _require_exact_json_value(item)
+        return
+    if value is None or type(value) in {str, bool, int}:
+        return
+    if type(value) is float and math.isfinite(value):
+        return
+    raise ValueError("delta contains a non-canonical JSON value")
 
 
 def validate_profile_stage(profile: str) -> ValidationStageResult:
@@ -303,11 +369,33 @@ def validate_delta_schema_stage(
     if delta is None:
         return skipped("delta_schema", profile, "no delta provided")
     caller_view = "player" if profile in {"player_turn_commit", "response_acceptance"} else "maintenance"
-    errors = tuple(validate_delta_schema(delta, conn, caller_view=caller_view))
+    try:
+        validated_delta = deepcopy(delta)
+    except Exception:
+        return blocked("delta_schema", profile, "$: delta snapshot failed")
+    source_wire = _canonical_delta_json(delta)
+    validated_wire = _canonical_delta_json(validated_delta)
+    if source_wire is None or validated_wire is None or source_wire != validated_wire:
+        return blocked("delta_schema", profile, "$: delta snapshot mismatch")
+    errors = tuple(validate_delta_schema(validated_delta, conn, caller_view=caller_view))
     artifacts = {"caller_view": caller_view}
     if errors:
         return ValidationStageResult("delta_schema", profile, "blocked", issues=errors, artifacts=artifacts)
-    return ok("delta_schema", profile, artifacts=artifacts)
+    validated_digest = hashlib.sha256(validated_wire.encode("utf-8")).hexdigest()
+    proof = _ValidatedDeltaProof(
+        validated_digest,
+        _validated_clock_ids(validated_delta),
+        validated_wire,
+        conn,
+    )
+    _MINTED_DELTA_PROOFS.add(proof)
+    return ValidationStageResult(
+        "delta_schema",
+        profile,
+        "ok",
+        artifacts=artifacts,
+        _validated_delta_proof=proof,
+    )
 
 
 def validate_capability_stage(
@@ -473,9 +561,21 @@ def validate_state_audit_stage(
         "errors": [issue for stage in stages if stage.status == "blocked" for issue in stage.issues],
         "warnings": [issue for stage in stages if stage.status == "warning" for issue in stage.issues],
     }
+    advisory_snapshot = _state_audit_progress_snapshot(
+        conn=conn,
+        profile=profile,
+        delta=delta,
+        stages=stages,
+    )
+    try:
+        audit_delta = deepcopy(delta)
+    except Exception:
+        audit_delta = {}
+    if advisory_snapshot is not None:
+        audit_delta = advisory_snapshot.audit_delta
     audit = run_state_audit(
         conn,
-        delta=delta,
+        delta=audit_delta,
         validation_result=partial_report,
         action=action,
         action_options=action_options,
@@ -485,7 +585,30 @@ def validate_state_audit_stage(
         model=state_audit_model,
         timeout=state_audit_timeout,
     )
-    artifacts = {"audit": audit.to_dict()}
+    try:
+        audit_artifact = deepcopy(audit.to_dict())
+        advisory_audit: Any = deepcopy(audit)
+    except Exception:
+        audit_artifact = audit.to_dict()
+        advisory_audit = None
+    artifacts = {"audit": audit_artifact}
+    if advisory_snapshot is not None and (
+        not _state_audit_snapshot_is_current(advisory_snapshot, delta)
+        or not _state_audit_snapshot_is_current(advisory_snapshot, audit_delta)
+    ):
+        advisory_snapshot = None
+    if advisory_snapshot is not None and not _clock_ids_live(conn, advisory_snapshot.clock_ids):
+        advisory_snapshot = None
+    advisory = _state_audit_progress_advisory(
+        advisory_audit,
+        clock_ids=advisory_snapshot.clock_ids if advisory_snapshot is not None else None,
+    )
+    if advisory is not None and advisory_snapshot is not None and (
+        _state_audit_snapshot_is_current(advisory_snapshot, delta)
+        and _state_audit_snapshot_is_current(advisory_snapshot, audit_delta)
+        and _clock_ids_live(conn, advisory_snapshot.clock_ids)
+    ):
+        artifacts = {**artifacts, "advisory": advisory}
     if should_block_state_audit(audit):
         messages = tuple(state_audit_messages(audit))
         status = "blocked" if state_audit_block else "warning"
@@ -493,6 +616,167 @@ def validate_state_audit_stage(
     if audit.warnings:
         return ValidationStageResult("state_audit", profile, "warning", issues=tuple(audit.warnings), artifacts=artifacts)
     return ValidationStageResult("state_audit", profile, "ok", artifacts=artifacts)
+
+
+def _state_audit_progress_advisory(
+    audit: Any,
+    *,
+    clock_ids: tuple[str, ...] | None,
+) -> dict[str, Any] | None:
+    try:
+        if clock_ids is None:
+            return None
+        envelope = adapt_state_audit_progress_advisory(audit, clock_ids=clock_ids)
+        if type(envelope) is not ResidentAIAdvisory:
+            return None
+        normalized_envelope = normalize_resident_ai_advisory(envelope.to_dict())
+        if (
+            normalized_envelope.advisory_type != "progress_management"
+            or normalized_envelope.source_assistant != "state_audit"
+            or normalized_envelope.visibility_mode != "maintenance"
+            or normalized_envelope.proposed_next_workflow != "none"
+            or not matches_state_audit_progress_projection(
+                normalized_envelope,
+                audit,
+                clock_ids=clock_ids,
+            )
+        ):
+            return None
+        return resident_ai_advisory_to_maintenance_dict(normalized_envelope)
+    except Exception:
+        return None
+
+
+def _state_audit_progress_snapshot(
+    *,
+    conn: sqlite3.Connection,
+    profile: str,
+    delta: dict[str, Any],
+    stages: tuple[ValidationStageResult, ...],
+) -> _StateAuditAdvisorySnapshot | None:
+    try:
+        if type(profile) is not str or profile not in MAINTENANCE_ADVISORY_PROFILES:
+            return None
+        delta_schema_stages = tuple(
+            stage
+            for stage in stages
+            if type(stage) is ValidationStageResult
+            and type(stage.name) is str
+            and stage.name == "delta_schema"
+        )
+        if len(delta_schema_stages) != 1:
+            return None
+        delta_schema = delta_schema_stages[0]
+        proof = delta_schema._validated_delta_proof
+        if (
+            type(proof) is not _ValidatedDeltaProof
+            or proof not in _MINTED_DELTA_PROOFS
+            or proof.connection is not conn
+            or type(delta_schema.profile) is not str
+            or type(delta_schema.status) is not str
+            or delta_schema.profile != profile
+            or delta_schema.status != "ok"
+        ):
+            return None
+        _MINTED_DELTA_PROOFS.discard(proof)
+        validated_digest = proof.delta_digest
+        validated_clock_ids = proof.clock_ids
+        if type(validated_digest) is not str or not validated_digest:
+            return None
+        if type(validated_clock_ids) is not tuple or not validated_clock_ids:
+            return None
+        if any(type(clock_id) is not str for clock_id in validated_clock_ids):
+            return None
+        current_clock_ids = _validated_clock_ids(delta)
+        if current_clock_ids != validated_clock_ids:
+            return None
+        audit_delta = json.loads(proof.canonical_delta_json)
+        if type(audit_delta) is not dict:
+            return None
+        snapshot = _StateAuditAdvisorySnapshot(validated_clock_ids, validated_digest, audit_delta)
+        return snapshot if _state_audit_snapshot_is_current(snapshot, delta) else None
+    except Exception:
+        return None
+
+
+@dataclass(frozen=True)
+class _StateAuditAdvisorySnapshot:
+    clock_ids: tuple[str, ...]
+    delta_digest: str
+    audit_delta: dict[str, Any] = field(compare=False, repr=False)
+
+
+def _state_audit_snapshot_is_current(
+    snapshot: _StateAuditAdvisorySnapshot,
+    delta: dict[str, Any],
+) -> bool:
+    try:
+        return (
+            type(delta) is dict
+            and stable_delta_digest(delta) == snapshot.delta_digest
+            and _validated_clock_ids(delta) == snapshot.clock_ids
+        )
+    except Exception:
+        return False
+
+
+def _validated_clock_ids(delta: dict[str, Any]) -> tuple[str, ...] | None:
+    try:
+        found_tick_clocks, tick_clocks = _exact_dict_value(delta, "tick_clocks")
+        if not found_tick_clocks:
+            return ()
+        if type(tick_clocks) is not list or len(tick_clocks) > MAX_CONTAINER_ITEMS:
+            return None
+        clock_ids: list[str] = []
+        for item in tuple(tick_clocks):
+            found_id, item_id = _exact_dict_value(item, "id")
+            if not found_id or type(item_id) is not str:
+                return None
+            clock_ids.append(item_id)
+        return tuple(clock_ids)
+    except Exception:
+        return None
+
+
+def _clock_ids_live(conn: sqlite3.Connection, clock_ids: tuple[str, ...]) -> bool:
+    try:
+        unique_ids = tuple(dict.fromkeys(clock_ids))
+        if not unique_ids:
+            return False
+        placeholders = ", ".join("?" for _ in unique_ids)
+        rows = conn.execute(
+            f"""
+            select c.entity_id, e.status
+            from main.clocks c
+            join main.entities e on e.id = c.entity_id
+            where c.entity_id in ({placeholders})
+            """,  # noqa: S608
+            unique_ids,
+        ).fetchall()
+        live_ids = {
+            entity_id
+            for entity_id, status in rows
+            if type(entity_id) is str and normalize_visibility_label(status) != "archived"
+        }
+        return live_ids == set(unique_ids)
+    except Exception:
+        return False
+
+
+def _exact_dict_value(value: Any, target_key: str) -> tuple[bool, Any]:
+    if type(value) is not dict:
+        raise ValueError("invalid exact mapping")
+    if len(value) > MAX_CONTAINER_ITEMS:
+        raise ValueError("exact mapping exceeds item budget")
+    found = False
+    result: Any = None
+    for key, item in value.items():
+        if type(key) is not str:
+            raise ValueError("invalid exact mapping key")
+        if key == target_key:
+            found = True
+            result = item
+    return found, result
 
 
 def ok(name: str, profile: str, *, artifacts: dict[str, Any] | None = None) -> ValidationStageResult:

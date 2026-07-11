@@ -30,6 +30,7 @@ from .advisory import (
     resident_ai_advisory_to_maintenance_dict,
     resident_ai_advisory_to_player_dict,
 )
+from .advisory_adapters import adapt_internal_intent_review_advisory, adapt_state_audit_progress_advisory
 from .schemas import ArchivistSuggestion, ReflectionAIOutput, SemanticSuggestion, StateAuditResult
 from .tasks import AIHelperTask
 
@@ -61,6 +62,8 @@ __all__ = [
     "SemanticSuggestion",
     "StateAuditResult",
     "run_ai_helper_json",
+    "adapt_internal_intent_review_advisory",
+    "adapt_state_audit_progress_advisory",
     "normalize_resident_ai_advisory",
     "resident_ai_advisory_to_maintenance_dict",
     "resident_ai_advisory_to_player_dict",
