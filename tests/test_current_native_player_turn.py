@@ -14,6 +14,7 @@ from tests.helpers import (
     FormalCurrentSaveReadOnlyTestCase,
     consensus_candidate,
     copy_current_packages,
+    normalize_current_native_story_fixture,
     current_turn,
     internal_query_review,
     internal_review,
@@ -26,6 +27,7 @@ from tests.helpers import (
 def prepare_current_player_manager(tmp_root: str | Path) -> tuple[SaveManager, Path]:
     root = Path(tmp_root)
     save = copy_current_packages(root)
+    normalize_current_native_story_fixture(save)
     run_cli("migrate", "apply", save)
 
     manager = SaveManager(root)

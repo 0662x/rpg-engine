@@ -375,6 +375,19 @@ class CurrentNativeSystemBlackBoxTests(unittest.TestCase):
     def test_travel_commit_reopens_runtime_at_new_scene_and_social_context(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             save = copy_current_packages(tmp)
+            campaign = load_campaign(save)
+            with connect(campaign) as conn:
+                player_id = conn.execute(
+                    "select value from main.meta where key='player_entity_id'"
+                ).fetchone()[0]
+                conn.execute(
+                    "update main.meta set value='loc:home-mycelium-house' where key='current_location_id'"
+                )
+                conn.execute(
+                    "update main.entities set location_id='loc:home-mycelium-house' where id=?",
+                    (player_id,),
+                )
+                conn.commit()
             runtime = GMRuntime.from_path(save)
             initial_turn = current_turn(save)
 

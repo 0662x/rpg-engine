@@ -243,6 +243,29 @@ ValidationReport ok 或 commit eligibility；不得新增 provider call、SQLite
 renderer 或 CLI/MCP surface。Adjacent regression继续覆盖 preflight CAS、AI helper、runtime、SaveManager、platform、
 surface inventory 与 current-native visibility/write safety，所有写测试使用 temporary Save。
 
+Resident AI advisory review intake 的 focused gate：
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q \
+  tests/test_resident_ai_advisory_review.py \
+  tests/test_resident_ai_advisory_adapters.py \
+  tests/test_resident_ai_advisory.py \
+  tests/test_entity_access.py \
+  tests/test_relationship_access.py \
+  tests/test_progress_access.py \
+  tests/test_validation_pipeline.py \
+  tests/test_palette_governance.py \
+  -p no:cacheprovider
+```
+
+该 gate 必须区分 entity/relationship create 与 update existence/currentness，覆盖 alias、memory summary、progress
+definition 的 no-owner 状态与 clock tick structured preflight；还要覆盖 exact types、bounded deep snapshot、source
+mutation/TOCTOU、direct dataclass forgery、authority smuggling、TEMP shadow、hidden/archived/missing non-oracle、
+rejected/stale/superseded/conflict、defensive serialization 与全表 no-mutation。Intake/serializer 不得调用 proposal
+queue、content/save apply、provider、validation/commit owner；application eligibility 不是 authorization，真正写入仍须
+重新运行对应 validation/reference/visibility 与 commit/maintenance gate。Proposal queue lifecycle/report 属于后续
+Story 5.7，不得在本 gate 中通过 production hook 或 queue integration 实现。
+
 Surface / intent 基线材料：
 
 - `tests/fixtures/intent_router_gold_set.yaml`

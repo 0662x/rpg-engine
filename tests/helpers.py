@@ -184,3 +184,53 @@ def copy_current_packages(tmp_root: str | Path) -> Path:
         ignore=shutil.ignore_patterns("backups", "__pycache__", "*.sqlite-journal", "*.db-journal"),
     )
     return save_target
+
+
+def normalize_current_native_story_fixture(save_root: str | Path) -> Path:
+    """Pin a temporary current-native copy to the story-language baseline."""
+    save = Path(save_root)
+    if save.resolve() == CURRENT_SAVE_ROOT.resolve():
+        raise AssertionError("temporary Save copy required")
+    db_path = save / "data" / "game.sqlite"
+    formal_db_path = CURRENT_SAVE_ROOT / "data" / "game.sqlite"
+    if db_path.resolve() == formal_db_path.resolve() or db_path.samefile(formal_db_path):
+        raise AssertionError("independent temporary Save database required")
+    with sqlite3.connect(db_path) as conn:
+        main_row = next(
+            (row for row in conn.execute("pragma database_list") if str(row[1]) == "main"),
+            None,
+        )
+        if main_row is None or Path(str(main_row[2])).samefile(formal_db_path):
+            raise AssertionError("independent temporary Save database required")
+        conn.row_factory = sqlite3.Row
+        player_row = conn.execute(
+            "select value from main.meta where key='player_entity_id'"
+        ).fetchone()
+        turn_row = conn.execute(
+            "select value from main.meta where key='current_turn_id'"
+        ).fetchone()
+        if player_row is None or turn_row is None:
+            raise AssertionError("temporary current-native fixture lacks player/current turn metadata")
+        location_meta = conn.execute(
+            "update main.meta set value='loc:home-mycelium-house' where key='current_location_id'"
+        )
+        time_meta = conn.execute(
+            "update main.meta set value='第28天 · 上午' where key='current_time_block'"
+        )
+        player_entity = conn.execute(
+            "update main.entities set location_id='loc:home-mycelium-house' where id=?",
+            (str(player_row["value"]),),
+        )
+        projection = conn.execute(
+            """
+            update main.projection_state
+            set version=1, last_turn_id=?, status='clean',
+                updated_at='9999-12-31T23:59:59+00:00', last_error=null
+            where name='memory'
+            """,
+            (str(turn_row["value"]),),
+        )
+        if any(cursor.rowcount != 1 for cursor in (location_meta, time_meta, player_entity, projection)):
+            raise AssertionError("temporary current-native fixture normalization target missing")
+        conn.commit()
+    return save

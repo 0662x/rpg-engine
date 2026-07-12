@@ -24,6 +24,7 @@ from tests.helpers import (
     event_log_text,
     load_stdout_json,
     loaded_ids,
+    normalize_current_native_story_fixture,
     query_int,
     run_cli,
 )
@@ -285,7 +286,7 @@ class CurrentNativeContextTests(FormalCurrentSaveReadOnlyTestCase):
 
     def test_stale_memory_summary_is_omitted_when_subject_fact_is_newer(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            save = copy_current_packages(tmp)
+            save = normalize_current_native_story_fixture(copy_current_packages(tmp))
             campaign = load_campaign(save)
             with connect(campaign) as conn:
                 ensure_memory_tables(conn)
@@ -635,7 +636,7 @@ class CurrentNativeContextTests(FormalCurrentSaveReadOnlyTestCase):
 
     def test_context_audit_distinguishes_section_evidence_from_route_item_ids(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            save = copy_current_packages(tmp)
+            save = normalize_current_native_story_fixture(copy_current_packages(tmp))
             db_path = save / "data" / "game.sqlite"
             with sqlite3.connect(db_path) as conn:
                 conn.execute(
@@ -772,9 +773,11 @@ class CurrentNativeContextTests(FormalCurrentSaveReadOnlyTestCase):
         self.assertNotIn("palette_candidates", packet.sections)
 
     def test_budget_omitted_collector_items_are_not_marked_loaded(self) -> None:
-        campaign = load_campaign(SAVE_ROOT)
-        with connect(campaign) as conn:
-            packet = build_context(campaign, conn, user_text="去地下菌丝城", mode="auto", budget=500)
+        with tempfile.TemporaryDirectory() as tmp:
+            save = normalize_current_native_story_fixture(copy_current_packages(tmp))
+            campaign = load_campaign(save)
+            with connect(campaign) as conn:
+                packet = build_context(campaign, conn, user_text="去地下菌丝城", mode="auto", budget=500)
 
         self.assertNotIn("routes", packet.sections)
         self.assertFalse(
@@ -806,26 +809,27 @@ class CurrentNativeContextTests(FormalCurrentSaveReadOnlyTestCase):
         self.assertEqual(len(fingerprints), 1)
 
     def test_start_turn_routing_matrix_for_current_story_language(self) -> None:
-        runtime = GMRuntime.from_path(SAVE_ROOT)
-        cases = [
-            ("查看当前场景", "query", "scene", False),
-            ("检查终极复合弩", "action", "explore", True),
-            ("去地下菌丝城", "action", "travel", True),
-            ("询问夏娃基地状态和物资交换安排", "action", "social", True),
-            ("在六边形菌丝复合屋休息到清晨", "action", "rest", True),
-            ("盘点盐和调料库存", "action", "routine", True),
-        ]
-        for text, mode, submode, must_save in cases:
-            with self.subTest(text=text):
-                result = runtime.start_turn(text, mode="auto")
-                self.assertEqual(result.mode, mode)
-                self.assertEqual(result.submode, submode)
-                self.assertEqual(result.must_save, must_save)
-                self.assertEqual(result.requires_preview, must_save)
-                self.assertTrue(result.can_proceed)
+        with tempfile.TemporaryDirectory() as tmp:
+            save = normalize_current_native_story_fixture(copy_current_packages(tmp))
+            runtime = GMRuntime.from_path(save)
+            cases = [
+                ("查看当前场景", "query", "scene", False),
+                ("检查终极复合弩", "action", "explore", True),
+                ("去地下菌丝城", "action", "travel", True),
+                ("询问夏娃基地状态和物资交换安排", "action", "social", True),
+                ("在六边形菌丝复合屋休息到清晨", "action", "rest", True),
+                ("盘点盐和调料库存", "action", "routine", True),
+            ]
+            for text, mode, submode, must_save in cases:
+                with self.subTest(text=text):
+                    result = runtime.start_turn(text, mode="auto")
+                    self.assertEqual(result.mode, mode)
+                    self.assertEqual(result.submode, submode)
+                    self.assertEqual(result.must_save, must_save)
+                    self.assertEqual(result.requires_preview, must_save)
+                    self.assertTrue(result.can_proceed)
 
     def test_context_recall_matrix_loads_story_critical_ids_under_budget(self) -> None:
-        campaign = load_campaign(SAVE_ROOT)
         cases = [
             (
                 "检查终极复合弩",
@@ -852,15 +856,18 @@ class CurrentNativeContextTests(FormalCurrentSaveReadOnlyTestCase):
                 {"project:water-crops", "world:weather", "clock:drought-spring"},
             ),
         ]
-        with connect(campaign) as conn:
-            for text, mode, submode, expected_ids in cases:
-                with self.subTest(text=text):
-                    packet = build_context(campaign, conn, user_text=text, mode="auto", budget=2600)
-                    self.assertEqual(packet.request["mode"], mode)
-                    self.assertEqual(packet.request["submode"], submode)
-                    self.assertTrue(packet.completeness["allow_proceed"])
-                    self.assertLessEqual(packet.budget["limit"], 2600)
-                    self.assertTrue(expected_ids.issubset(loaded_ids(packet)), loaded_ids(packet))
+        with tempfile.TemporaryDirectory() as tmp:
+            save = normalize_current_native_story_fixture(copy_current_packages(tmp))
+            campaign = load_campaign(save)
+            with connect(campaign) as conn:
+                for text, mode, submode, expected_ids in cases:
+                    with self.subTest(text=text):
+                        packet = build_context(campaign, conn, user_text=text, mode="auto", budget=2600)
+                        self.assertEqual(packet.request["mode"], mode)
+                        self.assertEqual(packet.request["submode"], submode)
+                        self.assertTrue(packet.completeness["allow_proceed"])
+                        self.assertLessEqual(packet.budget["limit"], 2600)
+                        self.assertTrue(expected_ids.issubset(loaded_ids(packet)), loaded_ids(packet))
 
     def test_relationship_progress_and_plot_signals_include_auditable_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

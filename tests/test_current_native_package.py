@@ -17,6 +17,8 @@ from tests.helpers import (
     CURRENT_SAVE_ROOT as SAVE_ROOT,
     FormalCurrentSaveReadOnlyTestCase,
     copy_current_packages,
+    current_location,
+    current_turn,
     load_stdout_json,
     run_cli,
 )
@@ -95,8 +97,8 @@ class CurrentNativePackageTests(FormalCurrentSaveReadOnlyTestCase):
         inspect = load_stdout_json(run_cli("save", "inspect", SAVE_ROOT, "--format", "json", check=False))
 
         self.assertEqual(inspect["campaign_id"], "isekai-farm")
-        self.assertEqual(inspect["current_turn_id"], "turn:000044")
-        self.assertEqual(inspect["current_location_id"], "loc:home-mycelium-house")
+        self.assertEqual(inspect["current_turn_id"], current_turn(SAVE_ROOT))
+        self.assertEqual(inspect["current_location_id"], current_location(SAVE_ROOT))
         self.assertGreaterEqual(inspect["counts"]["entities"], 250)
         self.assertGreaterEqual(inspect["counts"]["events"], 70)
 

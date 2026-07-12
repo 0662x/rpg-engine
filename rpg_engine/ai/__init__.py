@@ -31,6 +31,12 @@ from .advisory import (
     resident_ai_advisory_to_player_dict,
 )
 from .advisory_adapters import adapt_internal_intent_review_advisory, adapt_state_audit_progress_advisory
+from .advisory_review import (
+    AdvisoryReviewArtifact,
+    advisory_review_to_maintenance_dict,
+    advisory_review_to_player_dict,
+    build_advisory_review_artifact,
+)
 from .schemas import ArchivistSuggestion, ReflectionAIOutput, SemanticSuggestion, StateAuditResult
 from .tasks import AIHelperTask
 
@@ -42,6 +48,7 @@ __all__ = [
     "AI_HELPER_FALLBACK_BACKENDS",
     "AI_PROFILES",
     "ArchivistSuggestion",
+    "AdvisoryReviewArtifact",
     "DEFAULT_AI_MODEL",
     "DEFAULT_AI_PROVIDER",
     "DEFAULT_AI_HARD_TIMEOUT_SECONDS",
@@ -64,6 +71,9 @@ __all__ = [
     "run_ai_helper_json",
     "adapt_internal_intent_review_advisory",
     "adapt_state_audit_progress_advisory",
+    "advisory_review_to_maintenance_dict",
+    "advisory_review_to_player_dict",
+    "build_advisory_review_artifact",
     "normalize_resident_ai_advisory",
     "resident_ai_advisory_to_maintenance_dict",
     "resident_ai_advisory_to_player_dict",

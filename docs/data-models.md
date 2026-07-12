@@ -274,6 +274,23 @@ proposal、delta、approval 或 commit token。
 response acceptance、turn assistant 与 plot progression。AI suggestion -> review artifact 仍由 Story 4.6 管理，
 plot progression 由 Story 4.7 管理，proposal queue lifecycle/apply/revert/report 由 Story 5.7 管理。
 
+### Advisory Review Artifact
+
+`AdvisoryReviewArtifact` 使用固定 `resident_ai_advisory_review:v1` contract，把 canonical advisory metadata 与
+独立 candidate draft 绑定为显式、非权威 review evidence。内部 nested records 全部冻结为 tuple-based snapshot；
+serializer 每次重建新的 exact JSON built-ins，caller 后续修改 input 或返回 dict 不会改变 artifact/digest。
+
+固定字段包括 suggestion family/operation、disposition、target ids、candidate snapshot、只读 validation summary、
+required gate、next owner、base turn、supersedes、rollback hint 与 source advisory。Authority 永远是
+`current_fact_authority=false`、`application_authorized=false`、`proposal_approval_is_commit=false`。
+`reviewable` 也只表示当前 preflight 可进入后续 owner，不代表 application authorization；实际 apply 必须重新
+验证 current facts。
+
+该 artifact 不新增表、migration、repository、proposal queue row 或持久 context source。`rejected`、`stale`、
+`superseded`、`conflict` artifact 固定不可 application；maintenance projection 可见 bounded supersession/rollback
+evidence，player projection 不输出 candidate、validation、rollback 或 source internals，并复用 authoritative
+Entity/Relationship/Progress access contract 过滤 hidden/archived/missing targets。
+
 ## Entity Model
 
 每个持久游戏对象都应该有稳定的 `entities.id`。

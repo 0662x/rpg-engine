@@ -1,20 +1,30 @@
 from __future__ import annotations
 
+import tempfile
+
 from rpg_engine.runtime import GMRuntime
 
 from tests.helpers import (
     CURRENT_NATIVE_REQUIRED,
-    CURRENT_SAVE_ROOT as SAVE_ROOT,
     FormalCurrentSaveReadOnlyTestCase,
+    copy_current_packages,
     current_turn,
+    normalize_current_native_story_fixture,
 )
 
 
 @CURRENT_NATIVE_REQUIRED
 class CurrentNativeActionTests(FormalCurrentSaveReadOnlyTestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.save = normalize_current_native_story_fixture(copy_current_packages(self.tmp.name))
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
     def test_low_level_previews_enforce_delta_guards_and_confirmation_boundaries(self) -> None:
-        runtime = GMRuntime.from_path(SAVE_ROOT)
-        turn = current_turn(SAVE_ROOT)
+        runtime = GMRuntime.from_path(self.save)
+        turn = current_turn(self.save)
         ready_cases = [
             (
                 "travel",
@@ -94,7 +104,7 @@ class CurrentNativeActionTests(FormalCurrentSaveReadOnlyTestCase):
                 self.assertIn(expected_error, "\n".join([*preview.errors, *preview.missing_required]))
 
     def test_travel_preview_delta_contract_uses_known_route_and_destination(self) -> None:
-        runtime = GMRuntime.from_path(SAVE_ROOT)
+        runtime = GMRuntime.from_path(self.save)
         options = {"destination": "地下菌丝城", "pace": "careful", "user_text": "去地下菌丝城"}
 
         preview = runtime.preview_action("travel", options)
@@ -109,7 +119,7 @@ class CurrentNativeActionTests(FormalCurrentSaveReadOnlyTestCase):
         self.assertEqual(delta["tick_clocks"][0]["id"], "clock:lake-settlement-suspicion")
 
     def test_rest_preview_delta_contract_advances_day_and_ticks_drought(self) -> None:
-        runtime = GMRuntime.from_path(SAVE_ROOT)
+        runtime = GMRuntime.from_path(self.save)
         options = {"until": "morning", "user_text": "在六边形菌丝复合屋休息到清晨"}
 
         preview = runtime.preview_action("rest", options)
@@ -127,7 +137,7 @@ class CurrentNativeActionTests(FormalCurrentSaveReadOnlyTestCase):
         self.assertTrue(drought_tick["reason"].strip())
 
     def test_explore_preview_delta_does_not_silently_confirm_hidden_facts(self) -> None:
-        runtime = GMRuntime.from_path(SAVE_ROOT)
+        runtime = GMRuntime.from_path(self.save)
         options = {"target": "空地/家", "approach": "谨慎巡查", "user_text": "谨慎查看空地边缘的旧痕迹"}
 
         preview = runtime.preview_action("explore", options)
@@ -139,7 +149,7 @@ class CurrentNativeActionTests(FormalCurrentSaveReadOnlyTestCase):
         self.assertEqual(delta["upsert_entities"], [])
 
     def test_blocked_previews_do_not_expose_delta_or_turn_proposal(self) -> None:
-        runtime = GMRuntime.from_path(SAVE_ROOT)
+        runtime = GMRuntime.from_path(self.save)
         cases = [
             ("gather", {"target": "盐", "location": "六边形菌丝复合屋", "user_text": "盘点盐和调料库存"}),
             (
@@ -162,7 +172,7 @@ class CurrentNativeActionTests(FormalCurrentSaveReadOnlyTestCase):
                 self.assertIsNone(data["turn_proposal"])
 
     def test_validate_delta_rejects_missing_guards_for_current_save(self) -> None:
-        runtime = GMRuntime.from_path(SAVE_ROOT)
+        runtime = GMRuntime.from_path(self.save)
 
         validation = runtime.validate_delta(
             {

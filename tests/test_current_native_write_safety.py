@@ -25,13 +25,14 @@ class CurrentNativeWriteSafetyTests(FormalCurrentSaveReadOnlyTestCase):
     def test_commit_requires_turn_proposal_on_temp_copy(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             save = copy_current_packages(tmp)
+            before_turn = current_turn(save)
             runtime = GMRuntime.from_path(save)
             preview = runtime.preview_action("rest", {"until": "morning", "user_text": "在六边形菌丝复合屋休息到清晨"})
 
             with self.assertRaisesRegex(ValueError, "approved TurnProposal"):
                 runtime.commit_turn(preview.delta_draft or {}, backup=False)
 
-            self.assertEqual(current_turn(save), "turn:000044")
+            self.assertEqual(current_turn(save), before_turn)
 
     def test_stale_expected_turn_is_zero_side_effect_on_temp_copy(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

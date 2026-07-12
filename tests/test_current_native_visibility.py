@@ -1258,6 +1258,23 @@ class CurrentNativeVisibilityTests(FormalCurrentSaveReadOnlyTestCase):
             save = copy_current_packages(tmp)
             campaign = load_campaign(save)
             with connect(campaign) as conn:
+                current_turn = conn.execute(
+                    "select value from main.meta where key='current_turn_id'"
+                ).fetchone()[0]
+                # This test compares absent and hidden-only diagnostics. The
+                # formal save may legitimately have a dirty memory projection,
+                # so establish one stable clean/aligned premise on the temp copy
+                # before building either side of the oracle comparison.
+                conn.execute(
+                    """
+                    update main.projection_state
+                    set version=1, last_turn_id=?, status='clean',
+                        updated_at='9999-07-09T00:00:01+00:00', last_error=null
+                    where name='memory'
+                    """,
+                    (current_turn,),
+                )
+                conn.commit()
                 oracle_token = "玄穹秘钥无公开项"
                 absent_context = build_context(
                     campaign,
@@ -1295,6 +1312,7 @@ class CurrentNativeVisibilityTests(FormalCurrentSaveReadOnlyTestCase):
                     mode="query",
                     submode="context",
                     view="gm",
+                    budget=12000,
                     audit_context=True,
                     audit_context_run_id="context:hidden-probe-reuse-gm",
                 )
@@ -1305,6 +1323,7 @@ class CurrentNativeVisibilityTests(FormalCurrentSaveReadOnlyTestCase):
                     mode="query",
                     submode="context",
                     view="player",
+                    budget=12000,
                     audit_context=True,
                     audit_context_run_id="context:hidden-probe-reuse-gm",
                 )
@@ -1315,6 +1334,7 @@ class CurrentNativeVisibilityTests(FormalCurrentSaveReadOnlyTestCase):
                     mode="query",
                     submode="context",
                     view="maintenance",
+                    budget=12000,
                     audit_context=True,
                     audit_context_run_id="context:hidden-probe-reuse-maintenance",
                 )
@@ -1325,6 +1345,7 @@ class CurrentNativeVisibilityTests(FormalCurrentSaveReadOnlyTestCase):
                     mode="query",
                     submode="context",
                     view="player",
+                    budget=12000,
                     audit_context=True,
                     audit_context_run_id="context:hidden-probe-reuse-maintenance",
                 )
@@ -1734,6 +1755,15 @@ class CurrentNativeVisibilityTests(FormalCurrentSaveReadOnlyTestCase):
                         json.dumps({"authority": "derived_context", "fact_authority": False}),
                         f"%{target}%",
                     ),
+                )
+                conn.execute(
+                    """
+                    update main.projection_state
+                    set version=1, last_turn_id=?, status='clean',
+                        updated_at='9999-07-11T00:00:00+00:00', last_error=null
+                    where name='memory'
+                    """,
+                    (current_turn,),
                 )
                 conn.commit()
 
