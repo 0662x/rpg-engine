@@ -243,7 +243,7 @@ def validate_turn_proposal(
     response_text: str | None = None,
     registry: ActionResolverRegistry | None = None,
 ) -> ApprovedOutcome:
-    registry = registry or get_default_action_registry()
+    registry = registry if registry is not None else get_default_action_registry()
     errors: list[str] = []
     warnings: list[str] = []
     confirmations: list[str] = []

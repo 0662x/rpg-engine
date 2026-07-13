@@ -102,7 +102,7 @@ development_status:
 
   epic-6: in-progress
   6-1-strict-external-safety-vocabulary-and-version-negotiation: done
-  6-2-canonical-action-taxonomy-registry-projection: backlog
+  6-2-canonical-action-taxonomy-registry-projection: done
   6-3-resolved-slot-contract-projection-and-parity: backlog
   6-4-atomic-pending-confirmation-claim-and-replay-classification: backlog
   6-5-explicit-pending-supersede-and-clarification-lifecycle: backlog

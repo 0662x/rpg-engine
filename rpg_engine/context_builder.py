@@ -58,7 +58,7 @@ from .memory import player_safe_memory_reason, safe_memory_summary_id
 from .redaction import redact_hidden_entity_id_substrings, redact_hidden_entity_refs
 from .render import render_scene
 from .visibility import can_read_hidden, context_visibility_view, normalize_visibility_view
-from .actions import get_default_action_registry
+from .actions import ActionResolverRegistry, get_default_action_registry
 from .ai.defaults import DEFAULT_AI_MODEL, DEFAULT_AI_PROVIDER, DEFAULT_INTENT_TIMEOUT_SECONDS, DEFAULT_SEMANTIC_TIMEOUT_SECONDS
 
 
@@ -130,6 +130,7 @@ class BuildState:
     intent_base_url: str
     intent_api_key_env: str
     intent_fallback_backend: str
+    action_registry: ActionResolverRegistry
     external_intent_candidate: dict[str, Any] | None = None
     preflight_id: str = ""
     message_id: str = ""
@@ -221,6 +222,7 @@ def build_context(
     preflight_pending_wait_ms: int = 0,
     audit_context: bool = False,
     audit_context_run_id: str | None = None,
+    registry: ActionResolverRegistry | None = None,
 ) -> ContextBuildResult:
     del output_format
     campaign_budget = int(campaign.context_budget or 2500)
@@ -248,6 +250,7 @@ def build_context(
         intent_api_key_env=intent_api_key_env_value,
         intent_fallback_backend=intent_fallback_backend_value,
     )
+    action_registry = registry if registry is not None else get_default_action_registry()
     request_meta = make_intent_request_meta(
         preflight_id=preflight_id_value,
         message_id=message_id_value,
@@ -284,6 +287,7 @@ def build_context(
         intent_base_url=intent_base_url_value,
         intent_api_key_env=intent_api_key_env_value,
         intent_fallback_backend=intent_fallback_backend_value,
+        action_registry=action_registry,
         external_intent_candidate=external_intent_candidate,
         preflight_id=preflight_id_value,
         message_id=message_id_value,
@@ -358,6 +362,7 @@ def classify_request(state: BuildState) -> None:
         source_user_text_hash=state.request_meta.source_user_text_hash,
         preflight_pending_wait_ms=state.request_meta.preflight_pending_wait_ms,
         view=classification_visibility_view(state),
+        registry=state.action_registry,
     )
     apply_intent_classification(state, intent)
 
@@ -381,13 +386,13 @@ def apply_intent_classification(state: BuildState, intent: ActionIntent) -> None
 
 
 def set_request_classification(state: BuildState, mode: str, submode: str) -> None:
-    action_names = set(get_default_action_registry().names())
+    action_names = set(state.action_registry.names())
     state.mode = mode
     state.submode = submode
     state.will_advance_time = mode == "action"
     state.must_save = mode == "action"
     state.requires_preview = mode == "action" and submode in action_names
-    state.required_template = template_for(mode, submode)
+    state.required_template = template_for(mode, submode, registry=state.action_registry)
     decision = context_budget_policy(
         mode=state.mode,
         submode=state.submode,
@@ -409,7 +414,10 @@ def apply_semantic_request_decision(state: BuildState) -> None:
     if confidence != "high":
         return
 
-    decision = semantic_request_decision(suggestion)
+    decision = semantic_request_decision(
+        suggestion,
+        registry=getattr(state, "action_registry", None),
+    )
     if decision is None:
         return
     semantic_mode, semantic_submode = decision
@@ -419,10 +427,14 @@ def apply_semantic_request_decision(state: BuildState) -> None:
             state.assumptions.append(note)
 
 
-def semantic_request_decision(suggestion: dict[str, Any]) -> tuple[str, str] | None:
+def semantic_request_decision(
+    suggestion: dict[str, Any],
+    *,
+    registry: ActionResolverRegistry | None = None,
+) -> tuple[str, str] | None:
     mode = str(suggestion.get("mode") or "").strip().lower()
     submode = str(suggestion.get("submode") or "").strip().lower()
-    action_names = set(get_default_action_registry().names())
+    action_names = set((registry if registry is not None else get_default_action_registry()).names())
 
     if mode == "action" and submode in action_names:
         return mode, submode
@@ -431,12 +443,18 @@ def semantic_request_decision(suggestion: dict[str, Any]) -> tuple[str, str] | N
     return None
 
 
-def template_for(mode: str, submode: str) -> str:
+def template_for(
+    mode: str,
+    submode: str,
+    *,
+    registry: ActionResolverRegistry | None = None,
+) -> str:
     if mode == "query":
         if submode == "scene":
             return "scene_entry.md"
         return "entity_query.md"
-    spec = get_default_action_registry().get(submode)
+    action_registry = registry if registry is not None else get_default_action_registry()
+    spec = action_registry.get(submode)
     return spec.response_template if spec else "action_turn.md"
 
 
@@ -614,7 +632,11 @@ def _render_context_result_once(state: BuildState) -> ContextBuildResult:
         "action": state.intent.action if state.intent else None,
         "intent": action_intent_to_dict(state.intent),
         "clarification": clarification,
-        "turn_contract": turn_contract_to_dict(turn_contract_for_intent(state.intent)) if state.intent else None,
+        "turn_contract": turn_contract_to_dict(
+            turn_contract_for_intent(state.intent, registry=state.action_registry)
+        )
+        if state.intent
+        else None,
         "decision_trace": state.intent.decision_trace if state.intent else {},
         "visibility_view": context_view,
         "will_advance_time": state.will_advance_time,

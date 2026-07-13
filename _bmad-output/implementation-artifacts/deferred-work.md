@@ -40,3 +40,7 @@
 ## Deferred from: code review of 4-2-ai-latency-policy-and-safe-degradation (2026-07-11)
 
 - Reaffirmed：`SaveManager.player_turn()` 在解析新请求前清理已有 pending action 的行为是 Story 4.1 已记录的 pre-existing lifecycle policy；本 Story 的 timeout policy 不改变 pending replacement / retry 语义。
+
+## Deferred from: code review of 6-2-canonical-action-taxonomy-registry-projection (2026-07-13)
+
+- CLOSED 2026-07-13：第二轮 Blind Hunter 对 baseline `keyword_expected_action()` 做逐词复现后确认，旧 guard 不包含 context-only“找/检查”；第一轮 Defer 的基线判断错误。Story 6.2 已增加 canonical `preview.mismatch` role，恢复 low-level guard 既有边界并保持 fail-closed。

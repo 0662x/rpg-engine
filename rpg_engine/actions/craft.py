@@ -32,6 +32,7 @@ from .base import (
     option_specs_for,
     option_value,
 )
+from .taxonomy import ActionTaxonomySpec, taxonomy_terms
 
 
 def redact_repair_options(conn: sqlite3.Connection, options: tuple[RepairOption, ...]) -> tuple[RepairOption, ...]:
@@ -546,9 +547,28 @@ CRAFT_RESOLVER = ActionResolverSpec(
         ActionOptionSpec("palette_id", "material or recipe palette candidate id used in a craft plan", dest="palette-id"),
         ActionOptionSpec("user_text", "original player action text", dest="user-text"),
     ),
-    keywords=("做", "制作", "修", "修理", "加工", "装配", "发酵", "升级", "改造", "校准"),
-    semantic_labels=("craft", "repair", "build", "upgrade"),
-    inference_priority=40,
+    taxonomy=ActionTaxonomySpec(
+        terms=(
+            *taxonomy_terms("zh-Hans", ("做", "修")),
+            *taxonomy_terms(
+                "zh-Hans",
+                ("制作", "修理", "装配", "校准", "做个", "做一个", "做成", "做出"),
+                roles=("playable.craft", "preview.mismatch", "simple"),
+            ),
+            *taxonomy_terms(
+                "zh-Hans",
+                ("加工", "发酵", "升级", "改造"),
+                roles=("playable.craft", "simple"),
+            ),
+            *taxonomy_terms(
+                "en",
+                ("craft", "make", "build", "repair", "fix"),
+                roles=("playable.craft", "preview.mismatch", "simple"),
+            ),
+        ),
+        semantic_labels=("craft", "repair", "build", "upgrade"),
+        inference_priority=40,
+    ),
     validate_request=validate_craft_request,
     resolve=resolve_craft,
     validate_delta=validate_craft_delta,

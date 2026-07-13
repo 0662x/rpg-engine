@@ -25,6 +25,7 @@ from .base import (
     option_specs_for,
     option_value,
 )
+from .taxonomy import ActionTaxonomySpec, taxonomy_terms
 
 
 def preview_rest(campaign: Campaign, conn: sqlite3.Connection, context: dict[str, Any], options: Any) -> str:
@@ -158,9 +159,18 @@ REST_RESOLVER = ActionResolverSpec(
         ActionOptionSpec("until", "target rest time", default="morning"),
         ActionOptionSpec("user_text", "original player action text", dest="user-text"),
     ),
-    keywords=("睡", "休息", "守夜", "等到明早", "过夜"),
-    semantic_labels=("rest", "sleep", "wait"),
-    inference_priority=20,
+    taxonomy=ActionTaxonomySpec(
+        terms=(
+            *taxonomy_terms(
+                "zh-Hans",
+                ("睡", "休息", "守夜", "等到明早", "过夜"),
+                roles=("preview.mismatch", "simple"),
+            ),
+            *taxonomy_terms("en", ("rest", "sleep", "wait"), roles=("preview.mismatch", "simple")),
+        ),
+        semantic_labels=("rest", "sleep", "wait"),
+        inference_priority=20,
+    ),
     resolve=resolve_rest,
     validate_delta=validate_rest_delta,
 )

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..actions import get_default_action_registry
+from ..actions import ActionResolverRegistry, get_default_action_registry
 from ..ai.schema_validation import validate_ai_output_schema
 from .normalization import normalize_intent_candidate
 from .safety_contract import (
@@ -15,20 +15,30 @@ from .safety_contract import (
 from .types import IntentCandidate
 
 
-def normalize_external_intent_candidate(value: dict[str, Any], *, user_text: str = "") -> IntentCandidate:
-    return validate_external_intent_candidate(value, user_text=user_text).candidate
+def normalize_external_intent_candidate(
+    value: dict[str, Any],
+    *,
+    user_text: str = "",
+    registry: ActionResolverRegistry | None = None,
+) -> IntentCandidate:
+    return validate_external_intent_candidate(
+        value,
+        user_text=user_text,
+        registry=registry,
+    ).candidate
 
 
 def validate_external_intent_candidate(
     value: dict[str, Any],
     *,
     user_text: str = "",
+    registry: ActionResolverRegistry | None = None,
     _active_contract: ActiveIntentContract | None = None,
 ) -> ValidatedExternalCandidate:
     if type(value) is not dict:
         raise ValueError("external_intent_candidate must be an object")
     contract = _validate_external_contract_shape(value)
-    active_contract = _active_contract or _build_active_intent_contract()
+    active_contract = _active_contract or _build_active_intent_contract(registry=registry)
     if contract is None:
         if not ALLOW_LEGACY_UNVERSIONED_EXTERNAL_CANDIDATE:
             raise ExternalIntentContractError.contract_version_mismatch()
@@ -48,7 +58,8 @@ def validate_external_intent_candidate(
     schema_errors = validate_ai_output_schema("intent_candidate.schema.json", value)
     if schema_errors:
         raise ValueError(f"external_intent_candidate schema validation failed: {schema_errors[0]}")
-    action_names = set(get_default_action_registry().names())
+    action_registry = registry if registry is not None else get_default_action_registry()
+    action_names = set(action_registry.names())
     for index, step in enumerate(value.get("plan", [])):
         action = str(step.get("action") or "").strip().lower()
         if action not in action_names:
@@ -61,14 +72,18 @@ def validate_external_intent_candidate(
         {**candidate_payload, "source": "external_ai", "source_user_text": user_text},
         source="external_ai",
         user_text=user_text,
+        registry=action_registry,
     )
     return ValidatedExternalCandidate(candidate=candidate, contract_evidence=evidence)
 
 
-def _build_active_intent_contract() -> ActiveIntentContract:
+def _build_active_intent_contract(
+    *,
+    registry: ActionResolverRegistry | None = None,
+) -> ActiveIntentContract:
     from ..intent_manifest import build_intent_manifest
 
-    manifest = build_intent_manifest()
+    manifest = build_intent_manifest(registry=registry)
     safety = manifest["safety_vocabulary"]
     return ActiveIntentContract(
         manifest_schema_version=manifest["schema_version"],

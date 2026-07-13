@@ -4,7 +4,7 @@ import sqlite3
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Any
 
-from ..actions import ActionResolverRegistry
+from ..actions import ActionResolverRegistry, get_default_action_registry
 from ..ai.advisory import ResidentAIAdvisory, normalize_resident_ai_advisory
 from ..ai.advisory_adapters import (
     adapt_internal_intent_review_advisory,
@@ -58,7 +58,7 @@ class AIIntentRouter:
 
     def __init__(self, conn: sqlite3.Connection, *, registry: ActionResolverRegistry | None = None) -> None:
         self.conn = conn
-        self.registry = registry
+        self.registry = registry if registry is not None else get_default_action_registry()
 
     def bind(self, candidate: IntentCandidate | dict[str, Any], *, view: str = PLAYER_VIEW) -> BoundIntent:
         return bind_intent_candidate(self.conn, candidate, registry=self.registry, view=view)
@@ -116,9 +116,19 @@ class AIIntentRouter:
         internal_candidate: IntentCandidate | None = None
         internal_helper: AIHelperResult | None = None
         guards: list[str] = []
-        rule = coerce_route_candidate(rule_candidate, source="rules", user_text=user_text)
+        rule = coerce_route_candidate(
+            rule_candidate,
+            source="rules",
+            user_text=user_text,
+            registry=self.registry,
+        )
         external = (
-            coerce_route_candidate(external_candidate, source="external_ai", user_text=user_text)
+            coerce_route_candidate(
+                external_candidate,
+                source="external_ai",
+                user_text=user_text,
+                registry=self.registry,
+            )
             if external_candidate is not None
             else None
         )
@@ -182,6 +192,7 @@ class AIIntentRouter:
                     api_key_env=api_key_env,
                     fallback_backend=fallback_backend,
                     view=view,
+                    registry=self.registry,
                 )
             if internal_helper.ok and internal_helper.parsed:
                 internal_review_metadata = internal_helper.parsed
@@ -189,6 +200,7 @@ class AIIntentRouter:
                     internal_helper.parsed,
                     source="internal_ai",
                     user_text=user_text,
+                    registry=self.registry,
                 )
             else:
                 unavailable_label = (
@@ -372,6 +384,7 @@ class AIIntentRouter:
                     source_user_text_hash=source_user_text_hash,
                     external_candidate=external_candidate,
                     rule_candidate=rule_candidate,
+                    action_taxonomy_digest=self.registry.taxonomy_digest,
                     pending_wait_ms=pending_wait_ms,
                 )
             return consume_intent_preflight_by_message(
@@ -388,6 +401,7 @@ class AIIntentRouter:
                 source_user_text_hash=source_user_text_hash,
                 external_candidate=external_candidate,
                 rule_candidate=rule_candidate,
+                action_taxonomy_digest=self.registry.taxonomy_digest,
                 pending_wait_ms=pending_wait_ms,
             )
 
@@ -523,12 +537,14 @@ def coerce_route_candidate(
     *,
     source: str,
     user_text: str,
+    registry: ActionResolverRegistry | None = None,
 ) -> IntentCandidate:
     payload = value.to_dict() if isinstance(value, IntentCandidate) else dict(value)
     return normalize_intent_candidate(
         {**payload, "source": source, "source_user_text": user_text},
         source=source,
         user_text=user_text,
+        registry=registry,
     )
 
 

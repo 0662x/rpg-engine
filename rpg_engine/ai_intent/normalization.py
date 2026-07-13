@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..actions import get_default_action_registry
+from ..actions import ActionResolverRegistry, get_default_action_registry
 from ..context.rendering import trim_inline
 from .safety_contract import SAFETY_FLAG_VALUES
 from .types import CandidateStep, InternalIntentReview, IntentCandidate
@@ -13,12 +13,29 @@ MODE_VALUES = {"action", "query", "unknown"}
 CONFIDENCE_VALUES = {"high", "medium", "low"}
 AGREEMENT_VALUES = {"agree", "partial", "disagree", "no_external"}
 EXTERNAL_QUALITY_VALUES = {"usable", "incomplete", "unsafe", "wrong_action", "wrong_mode", "no_external"}
-def normalize_intent_candidate_dict(value: dict[str, Any], *, source: str = "unknown", user_text: str = "") -> dict[str, Any]:
-    return normalize_intent_candidate(value, source=source, user_text=user_text).to_dict()
+def normalize_intent_candidate_dict(
+    value: dict[str, Any],
+    *,
+    source: str = "unknown",
+    user_text: str = "",
+    registry: ActionResolverRegistry | None = None,
+) -> dict[str, Any]:
+    return normalize_intent_candidate(
+        value,
+        source=source,
+        user_text=user_text,
+        registry=registry,
+    ).to_dict()
 
 
-def normalize_intent_candidate(value: dict[str, Any], *, source: str = "unknown", user_text: str = "") -> IntentCandidate:
-    action_names = set(get_default_action_registry().names())
+def normalize_intent_candidate(
+    value: dict[str, Any],
+    *,
+    source: str = "unknown",
+    user_text: str = "",
+    registry: ActionResolverRegistry | None = None,
+) -> IntentCandidate:
+    action_names = set((registry if registry is not None else get_default_action_registry()).names())
     mode = normalize_choice(value.get("mode"), MODE_VALUES, "unknown")
     kind = normalize_choice(value.get("kind"), KIND_VALUES, "unresolved")
     action = normalize_action(value.get("action"), action_names)
@@ -43,11 +60,18 @@ def normalize_intent_candidate(value: dict[str, Any], *, source: str = "unknown"
     )
 
 
-def normalize_internal_intent_review(value: dict[str, Any], *, source: str = "internal_ai", user_text: str = "") -> dict[str, Any]:
+def normalize_internal_intent_review(
+    value: dict[str, Any],
+    *,
+    source: str = "internal_ai",
+    user_text: str = "",
+    registry: ActionResolverRegistry | None = None,
+) -> dict[str, Any]:
     candidate = normalize_intent_candidate(
         {**value, "source": source, "source_user_text": user_text},
         source=source,
         user_text=user_text,
+        registry=registry,
     )
     review = InternalIntentReview(
         source=candidate.source,

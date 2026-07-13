@@ -206,7 +206,15 @@ create/status/allowed transitions/apply/revert/batch/report 仍完整属于 Stor
 关键模块：
 
 - `intent_router.py`：外层兼容/规则候选/`ActionIntent` facade，负责候选准备、配置和请求元数据。
-- `intent_manifest.py`：发布 manifest v2、完整 contract digest、versioned safety projection 与可用意图/动作能力。
+- `actions/taxonomy.py`：持有 frozen `ActionTaxonomyTerm` / `ActionTaxonomySpec`、规范化匹配规则与
+  canonical taxonomy projection/digest；`ActionResolverRegistry` 是全局 version/projection owner。通用
+  projection 可保存合法 BCP47-like locale 元数据，但 live executable registry 只接受已有否定、假设和问句
+  safety grammar 覆盖的 `zh` / `en` / `ja` / `ko` language family（含兼容的 subtags）；显式 script subtag
+  与 term 实际 script 也必须符合对应 grammar，其他 locale 或错标 script 注册 fail closed。
+- Router 的否定、假设和问句 policy 按 winning canonical term 的 locale family 分派，并共享 Unicode sentence-terminal
+  归一化；不得用较窄的平行 script regex 或 surface-specific 句尾字符表重新判断 locale。
+- `intent_manifest.py`：发布 manifest v3、完整 contract digest、taxonomy v1 projection、versioned safety
+  projection 与可用意图/动作能力。
 - `ai_intent/safety_contract.py`：唯一持有 safety vocabulary v1、canonical digest、compatibility policy、
   typed contract error 与安全公开投影。
 - `ai_intent/external.py`：共享 external ingress；先验证 contract identity，再严格验证 raw safety token，
@@ -223,7 +231,8 @@ create/status/allowed transitions/apply/revert/batch/report 仍完整属于 Stor
 
 - AI 可以提供候选和解释，不能直接提交状态。
 - External candidate 可整体省略 contract 进入显式 `legacy_unversioned` compatibility window；一旦提供
-  contract，四个 identity 字段必须完整匹配当前 manifest v2 / safety v1。未知 safety token fail closed，
+  contract，四个 identity 字段必须完整匹配当前 manifest v3 / safety v1。Taxonomy v1 整体进入 manifest
+  digest，不扩展 candidate identity envelope；未知 safety token fail closed，
   compatibility 不能把它放行。
 - Contract match 只产生 bounded `matched | legacy_unversioned` validation evidence，不提升 route、hidden、
   confirmation、proposal、validation 或 commit authority。
@@ -239,15 +248,17 @@ create/status/allowed transitions/apply/revert/batch/report 仍完整属于 Stor
 - 澄清循环要防止无限循环和错误提交。
 - timeout 是 execution control，不是 route、fact、permission、confirmation 或 commit authority。
 - preflight cache 可能包含原始玩家输入、platform/session/message 标识、internal review 和 helper audit，不能作为公开诊断材料提交。
-- RPG Engine 负责 provider-side manifest/safety contract 和 shared ingress；action taxonomy digest 的后续
-  演进属于 Story 6.2。Hermes 负责消费 manifest、在 mismatch 后 refresh 并重新生成候选；Hermes reconnect、
+- RPG Engine 负责 provider-side manifest/taxonomy/safety contract 和 shared ingress。Runtime 注入 registry 时，
+  deterministic route、binder、internal prompt、manifest 与 active contract validation 必须使用同一实例。
+  Hermes 负责消费 manifest、在 mismatch 后 refresh 并重新生成候选；Hermes reconnect、
   next-model-turn barrier 与跨仓 E2E 不由 RPG Engine 6.1 实现。
 
 ## 预览、提案与写入链
 
 预览边界不是单个 `preview.py` 文件。核心边界是：
 
-- `actions/base.py` 的 `ActionResolverSpec` 合约。
+- `actions/base.py` 的 `ActionResolverSpec` 合约；per-action taxonomy 是 frozen canonical metadata，旧
+  `keywords` / `semantic_labels` / `inference_priority` 只保留只读兼容投影。
 - `GMRuntime.preview_action()` 的编排。
 - 各 `actions/*` 模块对具体动作的解析和 delta 构造。
 - `preview.py` 的复用渲染 / delta helper。

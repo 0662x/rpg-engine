@@ -26,6 +26,7 @@ from .base import (
     option_specs_for,
     option_value,
 )
+from .taxonomy import ActionTaxonomySpec, taxonomy_terms
 
 
 def preview_combat(campaign: Campaign, conn: sqlite3.Connection, context: dict[str, Any], options: Any) -> str:
@@ -252,9 +253,14 @@ COMBAT_RESOLVER = ActionResolverSpec(
         ActionOptionSpec("ready_state", "explicit weapon ready/loading confirmation"),
         ActionOptionSpec("user_text", "original player action text", dest="user-text"),
     ),
-    keywords=("射", "打", "攻击", "瞄准", "伏击", "开火", "逃跑", "迎击"),
-    semantic_labels=("attack", "shoot", "ambush", "defend"),
-    inference_priority=10,
+    taxonomy=ActionTaxonomySpec(
+        terms=(
+            *taxonomy_terms("zh-Hans", ("射", "打", "攻击", "瞄准", "伏击", "开火", "逃跑", "迎击")),
+            *taxonomy_terms("en", ("attack", "shoot", "ambush", "defend")),
+        ),
+        semantic_labels=("attack", "shoot", "ambush", "defend"),
+        inference_priority=10,
+    ),
     validate_request=validate_combat_request,
     resolve=resolve_combat,
     validate_delta=validate_combat_delta,

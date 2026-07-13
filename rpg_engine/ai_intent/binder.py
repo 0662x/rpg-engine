@@ -37,7 +37,11 @@ def bind_intent_candidate(
     registry: ActionResolverRegistry | None = None,
     view: str = PLAYER_VIEW,
 ) -> BoundIntent:
-    normalized = candidate if isinstance(candidate, IntentCandidate) else normalize_intent_candidate(candidate)
+    normalized = (
+        candidate
+        if isinstance(candidate, IntentCandidate)
+        else normalize_intent_candidate(candidate, registry=registry)
+    )
     if normalized.mode != "action":
         return BoundIntent(
             candidate=normalized,
@@ -58,7 +62,7 @@ def bind_intent_candidate(
             decision_trace={"binder": {"status": "invalid"}},
         )
 
-    action_registry = registry or get_default_action_registry()
+    action_registry = registry if registry is not None else get_default_action_registry()
     spec = action_registry.get(normalized.action)
     if not spec:
         return BoundIntent(

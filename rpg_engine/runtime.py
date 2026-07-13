@@ -8,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from .actions import get_default_action_registry
+from .actions import ActionResolverRegistry, get_default_action_registry
 from .ai.config import normalize_backend, normalize_fallback_backend
 from .ai.defaults import (
     DEFAULT_AI_MODEL,
@@ -410,6 +410,7 @@ def turn_proposal_from_preview_context(
     status: str,
     resolution: Any,
     source_user_text: str = "",
+    registry: ActionResolverRegistry | None = None,
 ) -> dict[str, Any] | None:
     if delta is None:
         return None
@@ -430,7 +431,7 @@ def turn_proposal_from_preview_context(
             kind="single",
             status="ready",
         )
-        contract = turn_contract_for_intent(intent)
+        contract = turn_contract_for_intent(intent, registry=registry)
     intent_context_id = intent_context_id_from_intent(intent)
     preflight_id = preflight_id_from_intent(intent)
     provenance = {"source": "runtime.preview_action", "resolver": action}
@@ -762,6 +763,7 @@ class GMRuntime:
                 conn,
                 text,
                 external_candidate_input=ExternalCandidateInput(external_intent_candidate),
+                registry=self.action_registry,
             )
             helper_external = (
                 None
@@ -783,6 +785,7 @@ class GMRuntime:
                 source_user_text_hash=resolved_hash,
                 external_candidate=helper_external.to_dict() if helper_external else None,
                 rule_candidate=rule_candidate.to_dict(),
+                action_taxonomy_digest=self.action_registry.taxonomy_digest,
                 identity_profile=effective_identity_profile,
                 ttl_seconds=ttl_seconds,
             )
@@ -802,6 +805,7 @@ class GMRuntime:
                     api_key_env=intent_api_key_env,
                     fallback_backend=effective_intent_fallback_backend,
                     execution_class="background",
+                    registry=self.action_registry,
                 )
             except Exception:
                 helper = AIHelperResult(
@@ -997,6 +1001,7 @@ class GMRuntime:
                 preflight_pending_wait_ms=preflight_pending_wait_ms,
                 audit_context=audit_context,
                 audit_context_run_id=context_run_id,
+                registry=self.action_registry,
             )
             if audit_context:
                 conn.commit()
@@ -1068,6 +1073,7 @@ class GMRuntime:
                     submode="context",
                     view=normalized_view,
                     budget=budget,
+                    registry=self.action_registry,
                 )
                 return QueryResult(
                     campaign_id=self.campaign.campaign_id,
@@ -1130,7 +1136,11 @@ class GMRuntime:
                 repair_options=default_repair_options(action_name, "blocked", [], option_errors, ()),
                 errors=tuple(option_errors),
             ))
-        mismatch = detect_preview_action_mismatch(source_user_text, action_name)
+        mismatch = detect_preview_action_mismatch(
+            source_user_text,
+            action_name,
+            registry=self.action_registry,
+        )
         if mismatch and mismatch.get("severity") == "needs_confirmation":
             warning = str(mismatch.get("message") or "source_user_text and action need confirmation")
             suggested_action = str(mismatch.get("expected_action") or "")
@@ -1212,7 +1222,11 @@ class GMRuntime:
             for item in resolution.warnings:
                 if item not in warnings:
                     warnings.append(item)
-        mismatch_warning = detect_preview_action_mismatch(source_user_text, action_name)
+        mismatch_warning = detect_preview_action_mismatch(
+            source_user_text,
+            action_name,
+            registry=self.action_registry,
+        )
         if mismatch_warning and mismatch_warning.get("severity") == "warning":
             warning = str(mismatch_warning.get("message") or "")
             if warning and warning not in warnings:
@@ -1229,6 +1243,7 @@ class GMRuntime:
             status,
             resolution,
             safe_source_user_text,
+            registry=self.action_registry,
         ) if ready_to_save else None
         return PreviewActionResult(
             campaign_id=self.campaign.campaign_id,
@@ -1346,13 +1361,14 @@ class GMRuntime:
                 external_intent_candidate=external_intent_candidate,
                 **intent_request_meta_kwargs(request_meta),
                 view=view,
+                registry=self.action_registry,
             )
         return self.preview_intent(intent, view=view)
 
     def preview_intent(self, intent: ActionIntent, *, view: str = "player") -> PreviewActionResult:
         intent_data = action_intent_to_dict(intent) or {}
         clarification_data = intent.clarification.to_dict() if intent.clarification else None
-        turn_contract = turn_contract_for_intent(intent)
+        turn_contract = turn_contract_for_intent(intent, registry=self.action_registry)
         contract_data = turn_contract_to_dict(turn_contract) or {}
         if intent.kind == "unresolved":
             next_tool = "reject_request" if intent.status == "blocked" and not clarification_data else "ask_clarification"
@@ -1457,7 +1473,11 @@ class GMRuntime:
                 context={"view": view, "intent": intent_data, "turn_contract": contract_data},
             )
             interpretation = dict(result.interpretation)
-            route_mismatch = detect_preview_action_mismatch(intent.user_text, intent.action)
+            route_mismatch = detect_preview_action_mismatch(
+                intent.user_text,
+                intent.action,
+                registry=self.action_registry,
+            )
             if route_mismatch:
                 diagnostic = {**route_mismatch, "effect": "diagnostic_only"}
                 interpretation["route_mismatch_diagnostic"] = diagnostic
@@ -1590,6 +1610,7 @@ class GMRuntime:
                 action_options=action_options or {},
                 context=context or {},
                 state_audit=False,
+                registry=self.action_registry,
             )
         errors: list[str] = []
         missing_required: list[str] = []
@@ -1651,6 +1672,7 @@ class GMRuntime:
                 state_audit_model=state_audit_model,
                 state_audit_timeout=state_audit_timeout,
                 state_audit_block=state_audit_block,
+                registry=self.action_registry,
             )
             if not validation_report.ok:
                 audit_stage = validation_report.stage("state_audit")

@@ -29,9 +29,9 @@ def arbitrate_intent_candidates(
     registry: ActionResolverRegistry | None = None,
     view: str = PLAYER_VIEW,
 ) -> ConsensusDecision:
-    external = coerce_candidate(external_candidate, source="external_ai")
-    internal = coerce_candidate(internal_candidate, source="internal_ai")
-    rules = coerce_candidate(rule_candidate, source="rules")
+    external = coerce_candidate(external_candidate, source="external_ai", registry=registry)
+    internal = coerce_candidate(internal_candidate, source="internal_ai", registry=registry)
+    rules = coerce_candidate(rule_candidate, source="rules", registry=registry)
     trace: dict[str, Any] = {
         "external_candidate": external.to_dict() if external else None,
         "internal_candidate": internal.to_dict() if internal else None,
@@ -1042,7 +1042,7 @@ def binding_disagreements(
     if external.action != internal.action:
         disagreements.append(f"bound action mismatch: external={external.action}, internal={internal.action}")
         return disagreements
-    action_registry = registry or get_default_action_registry()
+    action_registry = registry if registry is not None else get_default_action_registry()
     spec = action_registry.get(external.action or "")
     defaults = {
         option.name: option.default
@@ -1185,9 +1185,14 @@ def single_source_internal_fast_path(
     return rules_bound
 
 
-def coerce_candidate(value: IntentCandidate | dict[str, Any] | None, *, source: str) -> IntentCandidate | None:
+def coerce_candidate(
+    value: IntentCandidate | dict[str, Any] | None,
+    *,
+    source: str,
+    registry: ActionResolverRegistry | None = None,
+) -> IntentCandidate | None:
     if value is None:
         return None
     if isinstance(value, IntentCandidate):
         return value
-    return normalize_intent_candidate(value, source=source)
+    return normalize_intent_candidate(value, source=source, registry=registry)

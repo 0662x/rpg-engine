@@ -4,6 +4,7 @@ import json
 import sqlite3
 from typing import Any
 
+from ..actions import ActionResolverRegistry
 from ..db import get_meta
 from ..intent_manifest import build_intent_manifest
 from ..redaction import redact_hidden_entity_id_substrings, redact_hidden_entity_refs
@@ -27,11 +28,20 @@ def build_internal_intent_review_prompt(
     safety_notes: tuple[str, ...] = (),
     visible_entities: list[dict[str, Any]] | None = None,
     view: str = "player",
+    registry: ActionResolverRegistry | None = None,
 ) -> str:
-    manifest = build_intent_manifest()
+    manifest = build_intent_manifest(registry=registry)
     prompt_view = normalize_visibility_view(view)
+    taxonomy_actions = {
+        str(action["name"]): action
+        for action in manifest["action_taxonomy"]["actions"]
+    }
     action_lines = [
-        json.dumps(internal_prompt_action_contract(action), ensure_ascii=False, sort_keys=True)
+        json.dumps(
+            internal_prompt_action_contract(action, taxonomy_actions[str(action["name"])]),
+            ensure_ascii=False,
+            sort_keys=True,
+        )
         for action in manifest["actions"]
     ]
     query_lines = [
@@ -80,6 +90,8 @@ def build_internal_intent_review_prompt(
             f"玩家原文：{prompt_user_text}",
             f"当前位置：{prompt_location}",
             f"Intent manifest schema_version：{manifest['schema_version']}",
+            f"Action taxonomy version：{manifest['action_taxonomy']['version']}",
+            f"Action taxonomy digest：{manifest['action_taxonomy']['digest']}",
             f"Safety vocabulary version：{manifest['safety_vocabulary']['version']}",
             "",
             "Manifest action 合同摘录：",
@@ -175,7 +187,10 @@ def prompt_redaction_schema_available(conn: Any) -> bool:
     }
 
 
-def internal_prompt_action_contract(action: dict[str, Any]) -> dict[str, Any]:
+def internal_prompt_action_contract(
+    action: dict[str, Any],
+    taxonomy_action: dict[str, Any],
+) -> dict[str, Any]:
     slots = []
     for slot in action.get("slots", ()):
         if slot.get("name") == "user_text":
@@ -198,7 +213,11 @@ def internal_prompt_action_contract(action: dict[str, Any]) -> dict[str, Any]:
         "name": action.get("name"),
         "capability": action.get("capability"),
         "risk": action.get("risk"),
-        "semantic_labels": list(action.get("semantic_labels", ())),
+        "taxonomy": {
+            "inference_priority": taxonomy_action.get("inference_priority"),
+            "semantic_labels": list(taxonomy_action.get("semantic_labels", ())),
+            "terms": list(taxonomy_action.get("terms", ())),
+        },
         "slots": slots,
         "requirement_groups": action.get("requirement_groups", ()),
     }

@@ -427,7 +427,7 @@ class AIIntentTests(unittest.TestCase):
         }
         mismatches = {
             "older_manifest_version": {**current_contract, "manifest_schema_version": "1"},
-            "newer_manifest_version": {**current_contract, "manifest_schema_version": "3"},
+            "newer_manifest_version": {**current_contract, "manifest_schema_version": "4"},
             "wrong_manifest_digest": {**current_contract, "manifest_digest": "0" * 64},
             "older_safety_version": {**current_contract, "safety_vocabulary_version": "0"},
             "newer_safety_version": {**current_contract, "safety_vocabulary_version": "2"},
@@ -715,7 +715,9 @@ class AIIntentTests(unittest.TestCase):
         self.assertIn('"risk": "red"', prompt)
         self.assertIn('"player_confirmation_required": true', prompt)
         self.assertIn("允许 mode: action, query, unknown", prompt)
-        self.assertIn("Intent manifest schema_version：2", prompt)
+        self.assertIn("Intent manifest schema_version：3", prompt)
+        self.assertIn("Action taxonomy version：1", prompt)
+        self.assertIn("Action taxonomy digest：", prompt)
         self.assertIn("Safety vocabulary version：1", prompt)
         self.assertIn(
             "允许 safety_flags: forced_save, hidden_info, maintenance_request, out_of_world, prompt_injection, unsafe_command",

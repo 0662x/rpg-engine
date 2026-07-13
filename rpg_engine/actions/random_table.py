@@ -14,6 +14,7 @@ from .base import (
     option_specs_for,
     option_value,
 )
+from .taxonomy import ActionTaxonomySpec, taxonomy_terms
 
 
 def preview_random_table(
@@ -236,9 +237,14 @@ RANDOM_TABLE_RESOLVER = ActionResolverSpec(
         ActionOptionSpec("reason", "why the kernel random result is needed"),
         ActionOptionSpec("user_text", "original player action text", dest="user-text"),
     ),
-    keywords=("随机", "掷骰", "骰子", "事件表", "随机表"),
-    semantic_labels=("random", "roll", "dice", "random-table"),
-    inference_priority=15,
+    taxonomy=ActionTaxonomySpec(
+        terms=(
+            *taxonomy_terms("zh-Hans", ("随机", "掷骰", "骰子", "事件表", "随机表")),
+            *taxonomy_terms("en", ("random", "roll", "dice", "random table", "event table")),
+        ),
+        semantic_labels=("random", "roll", "dice", "random-table"),
+        inference_priority=15,
+    ),
     validate_request=validate_random_request,
     resolve=resolve_random_table,
     validate_delta=validate_random_delta,

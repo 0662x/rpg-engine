@@ -23,6 +23,7 @@ from rpg_engine.ai_intent.external import validate_external_intent_candidate
 from rpg_engine.ai_intent.slot_contract import ACTION_REQUIRED_SLOTS, AI_SUPPLIED_CONFIRMATION_SLOTS
 from rpg_engine.capabilities import ACTION_CAPABILITIES
 from rpg_engine.intent_manifest import QUERY_KINDS, build_intent_manifest
+from rpg_engine.actions import get_default_action_registry
 from rpg_engine.resource_paths import schema_resource_text
 
 
@@ -62,7 +63,7 @@ class IntentManifestTests(unittest.TestCase):
     def test_manifest_lists_all_registered_actions_and_query_kinds(self) -> None:
         manifest = build_intent_manifest()
 
-        self.assertEqual(manifest["schema_version"], "2")
+        self.assertEqual(manifest["schema_version"], "3")
         self.assertEqual(manifest["generated_by"], "kernel")
         self.assertEqual(
             [action["name"] for action in manifest["actions"]],
@@ -71,6 +72,24 @@ class IntentManifestTests(unittest.TestCase):
         self.assertEqual([query["kind"] for query in manifest["queries"]], list(QUERY_KINDS))
         self.assertEqual([query["kind"] for query in manifest["queries"]], ["scene", "entity", "context"])
         self.assertNotIn("rule", [query["kind"] for query in manifest["queries"]])
+
+    def test_manifest_v3_embeds_the_exact_registry_taxonomy_projection(self) -> None:
+        registry = get_default_action_registry()
+        manifest = build_intent_manifest(registry=registry)
+        taxonomy = registry.taxonomy_projection()
+
+        self.assertEqual(manifest["action_taxonomy"], taxonomy)
+        self.assertEqual(manifest["action_taxonomy"]["version"], "1")
+        self.assertEqual(manifest["action_taxonomy"]["digest"], registry.taxonomy_digest)
+        taxonomy_actions = {action["name"]: action for action in taxonomy["actions"]}
+        manifest_actions = {action["name"]: action for action in manifest["actions"]}
+        self.assertEqual(set(taxonomy_actions), set(manifest_actions))
+        for name, action in manifest_actions.items():
+            with self.subTest(action=name):
+                projected = taxonomy_actions[name]
+                self.assertEqual(action["keywords"], tuple(term["value"] for term in projected["terms"] if "simple" in term["roles"]))
+                self.assertEqual(action["semantic_labels"], tuple(projected["semantic_labels"]))
+                self.assertEqual(action["inference_priority"], projected["inference_priority"])
 
     def test_manifest_publishes_complete_contract_identity_and_canonical_digest(self) -> None:
         manifest = build_intent_manifest()

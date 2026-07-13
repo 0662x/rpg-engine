@@ -14,6 +14,7 @@ from rpg_engine.preflight_cache import (
     PREFLIGHT_EXPIRED,
     PREFLIGHT_IDENTITY_MESSAGE_ONLY,
     PREFLIGHT_REJECTED,
+    build_preflight_identity,
     consume_intent_preflight_by_message,
     consume_intent_preflight_row,
     consume_intent_preflight,
@@ -53,6 +54,77 @@ class PreflightCacheTests(unittest.TestCase):
         shutil.copytree(MINIMAL_FIXTURE, target)
         init_database(load_campaign(target), force=True)
         return target
+
+    def test_message_identity_binds_active_action_taxonomy_digest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(self.copy_campaign(tmp))
+            with connect(campaign) as conn:
+                default_identity = build_preflight_identity(
+                    conn,
+                    campaign,
+                    "休息到早上",
+                    provider="deepseek",
+                    model="deepseek-v4-flash",
+                    backend="direct",
+                    action_taxonomy_digest="taxonomy:default",
+                    identity_profile=PREFLIGHT_IDENTITY_MESSAGE_ONLY,
+                )
+                custom_identity = build_preflight_identity(
+                    conn,
+                    campaign,
+                    "休息到早上",
+                    provider="deepseek",
+                    model="deepseek-v4-flash",
+                    backend="direct",
+                    action_taxonomy_digest="taxonomy:custom",
+                    identity_profile=PREFLIGHT_IDENTITY_MESSAGE_ONLY,
+                )
+                record = create_pending_intent_preflight(
+                    conn,
+                    campaign,
+                    "休息到早上",
+                    provider="deepseek",
+                    model="deepseek-v4-flash",
+                    backend="direct",
+                    message_id="qq:taxonomy-bound",
+                    platform="qq",
+                    session_key="qq:user:taxonomy-bound",
+                    source_user_text_hash=hash_text("休息到早上"),
+                    action_taxonomy_digest="taxonomy:default",
+                    identity_profile=PREFLIGHT_IDENTITY_MESSAGE_ONLY,
+                )
+                mark_intent_preflight_ready(conn, record.id, internal_review=cached_rest_review())
+                wrong_taxonomy = consume_intent_preflight_by_message(
+                    conn,
+                    campaign,
+                    "休息到早上",
+                    provider="deepseek",
+                    model="deepseek-v4-flash",
+                    backend="direct",
+                    message_id="qq:taxonomy-bound",
+                    platform="qq",
+                    session_key="qq:user:taxonomy-bound",
+                    source_user_text_hash=record.identity.source_user_text_hash,
+                    action_taxonomy_digest="taxonomy:custom",
+                )
+                matching_taxonomy = consume_intent_preflight_by_message(
+                    conn,
+                    campaign,
+                    "休息到早上",
+                    provider="deepseek",
+                    model="deepseek-v4-flash",
+                    backend="direct",
+                    message_id="qq:taxonomy-bound",
+                    platform="qq",
+                    session_key="qq:user:taxonomy-bound",
+                    source_user_text_hash=record.identity.source_user_text_hash,
+                    action_taxonomy_digest="taxonomy:default",
+                )
+
+            self.assertNotEqual(default_identity.context_hash, custom_identity.context_hash)
+            self.assertNotEqual(default_identity.intent_context_id, custom_identity.intent_context_id)
+            self.assertEqual(wrong_taxonomy.status, "miss")
+            self.assertTrue(matching_taxonomy.hit)
 
     def test_preflight_cache_ready_hit_is_single_use(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 from typing import Any
 
+from ..actions import ActionResolverRegistry
 from ..ai.provider import AIHelperResult, run_ai_helper_json
 from ..ai.tasks import AIHelperTask
 from ..campaign import Campaign
@@ -29,6 +30,7 @@ def collect_internal_intent_candidate(
     fallback_backend: str = "off",
     view: str = "player",
     execution_class: str = "foreground",
+    registry: ActionResolverRegistry | None = None,
 ) -> AIHelperResult:
     del campaign
     parser_user_text = str(prompt_safe_value(conn, user_text, view=view))
@@ -40,12 +42,17 @@ def collect_internal_intent_candidate(
         safety_notes=safety_notes,
         visible_entities=visible_entities,
         view=view,
+        registry=registry,
     )
     task = AIHelperTask(
         name="internal_intent_review",
         prompt=prompt,
         output_schema="internal_intent_review.schema.json",
-        parser=lambda value: normalize_internal_intent_review(value, user_text=parser_user_text),
+        parser=lambda value: normalize_internal_intent_review(
+            value,
+            user_text=parser_user_text,
+            registry=registry,
+        ),
         execution_class=execution_class,
     )
     return run_ai_helper_json(

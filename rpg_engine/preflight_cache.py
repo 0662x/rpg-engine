@@ -142,6 +142,7 @@ def create_pending_intent_preflight(
     source_user_text_hash: str = "",
     external_candidate: dict[str, Any] | None = None,
     rule_candidate: dict[str, Any] | None = None,
+    action_taxonomy_digest: str = "",
     identity_profile: str = PREFLIGHT_IDENTITY_CANDIDATE_BOUND,
     ttl_seconds: int = PREFLIGHT_TTL_SECONDS,
 ) -> PreflightRecord:
@@ -164,6 +165,7 @@ def create_pending_intent_preflight(
         fallback_backend=fallback_backend,
         external_candidate=stored_external_candidate,
         rule_candidate=rule_candidate,
+        action_taxonomy_digest=action_taxonomy_digest,
         identity_profile=profile,
     )
     preflight_id = f"preflight:{uuid.uuid4().hex}"
@@ -321,6 +323,7 @@ def consume_intent_preflight(
     source_user_text_hash: str = "",
     external_candidate: dict[str, Any] | None = None,
     rule_candidate: dict[str, Any] | None = None,
+    action_taxonomy_digest: str = "",
     pending_wait_ms: int = 0,
 ) -> PreflightLookupResult:
     row = conn.execute("select * from intent_preflight_cache where id=?", (preflight_id,)).fetchone()
@@ -343,6 +346,7 @@ def consume_intent_preflight(
         source_user_text_hash=source_user_text_hash,
         external_candidate=external_candidate,
         rule_candidate=rule_candidate,
+        action_taxonomy_digest=action_taxonomy_digest,
     )
 
 
@@ -361,6 +365,7 @@ def consume_intent_preflight_by_message(
     source_user_text_hash: str = "",
     external_candidate: dict[str, Any] | None = None,
     rule_candidate: dict[str, Any] | None = None,
+    action_taxonomy_digest: str = "",
     pending_wait_ms: int = 0,
 ) -> PreflightLookupResult:
     if not clean(message_id):
@@ -380,6 +385,7 @@ def consume_intent_preflight_by_message(
         fallback_backend=fallback_backend,
         external_candidate=external_candidate,
         rule_candidate=rule_candidate,
+        action_taxonomy_digest=action_taxonomy_digest,
         identity_profile=PREFLIGHT_IDENTITY_MESSAGE_ONLY,
     )
     rows = message_preflight_rows(
@@ -411,6 +417,7 @@ def consume_intent_preflight_by_message(
         fallback_backend=fallback_backend,
         external_candidate=external_candidate,
         rule_candidate=rule_candidate,
+        action_taxonomy_digest=action_taxonomy_digest,
         identity_profile=PREFLIGHT_IDENTITY_MESSAGE_ONLY,
     )
     rows = message_preflight_rows(
@@ -455,6 +462,7 @@ def consume_intent_preflight_by_message(
         source_user_text_hash=source_user_text_hash,
         external_candidate=external_candidate,
         rule_candidate=rule_candidate,
+        action_taxonomy_digest=action_taxonomy_digest,
     )
 
 
@@ -532,6 +540,7 @@ def consume_intent_preflight_row(
     source_user_text_hash: str = "",
     external_candidate: dict[str, Any] | None = None,
     rule_candidate: dict[str, Any] | None = None,
+    action_taxonomy_digest: str = "",
 ) -> PreflightLookupResult:
     record = record_from_row(row)
     if is_expired(str(row["expires_at"])):
@@ -559,6 +568,7 @@ def consume_intent_preflight_row(
                     source_user_text_hash=source_user_text_hash,
                     external_candidate=external_candidate,
                     rule_candidate=rule_candidate,
+                    action_taxonomy_digest=action_taxonomy_digest,
                 )
         return PreflightLookupResult(PREFLIGHT_PENDING, record=record, reason="preflight is pending")
     if record.status != PREFLIGHT_READY:
@@ -599,6 +609,7 @@ def consume_intent_preflight_row(
         fallback_backend=fallback_backend,
         external_candidate=external_candidate,
         rule_candidate=rule_candidate,
+        action_taxonomy_digest=action_taxonomy_digest,
         identity_profile=record.identity.identity_profile,
     )
     mismatch = identity_mismatch(
@@ -686,6 +697,7 @@ def build_preflight_identity(
     fallback_backend: str = "off",
     external_candidate: dict[str, Any] | None = None,
     rule_candidate: dict[str, Any] | None = None,
+    action_taxonomy_digest: str = "",
     identity_profile: str = PREFLIGHT_IDENTITY_CANDIDATE_BOUND,
 ) -> PreflightContextIdentity:
     profile = normalize_identity_profile(identity_profile)
@@ -713,6 +725,7 @@ def build_preflight_identity(
         "source_user_text_hash": resolved_hash,
         "external_candidate_hash": external_hash,
         "rule_candidate_hash": rule_hash,
+        "action_taxonomy_digest": clean(action_taxonomy_digest),
     }
     context_hash = hash_json(context_seed)
     model_version = (

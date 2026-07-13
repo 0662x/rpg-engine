@@ -21,7 +21,7 @@ from .ai_intent.safety_contract import (
 from .capabilities import ACTION_CAPABILITIES
 
 
-MANIFEST_SCHEMA_VERSION = "2"
+MANIFEST_SCHEMA_VERSION = "3"
 QUERY_KINDS = ("scene", "entity", "context")
 CONTRACT_FIELDS = (
     "manifest_schema_version",
@@ -33,11 +33,17 @@ CONTRACT_FIELDS = (
 
 def build_intent_manifest(registry: ActionResolverRegistry | None = None) -> dict[str, Any]:
     """Build the kernel-owned machine-readable action/query contract."""
-    action_registry = registry or get_default_action_registry()
+    action_registry = registry if registry is not None else get_default_action_registry()
+    action_taxonomy = action_registry.taxonomy_projection()
+    taxonomy_actions = {
+        str(action["name"]): action
+        for action in action_taxonomy["actions"]
+    }
     payload = {
         "schema_version": MANIFEST_SCHEMA_VERSION,
         "generated_by": "kernel",
         "modes": ("query", "action", "unknown"),
+        "action_taxonomy": action_taxonomy,
         "safety_vocabulary": {
             "version": SAFETY_VOCABULARY_VERSION,
             "digest": SAFETY_VOCABULARY_DIGEST,
@@ -67,7 +73,7 @@ def build_intent_manifest(registry: ActionResolverRegistry | None = None) -> dic
                 "required_fields_when_present": CONTRACT_FIELDS,
             },
         },
-        "actions": [action_manifest(spec) for spec in action_registry.all()],
+        "actions": [action_manifest(spec, taxonomy_actions[spec.name]) for spec in action_registry.all()],
         "queries": [query_manifest(kind) for kind in QUERY_KINDS],
         "unsupported_query_kind_policy": {
             "rule": "context",
@@ -81,7 +87,7 @@ def build_intent_manifest(registry: ActionResolverRegistry | None = None) -> dic
     }
 
 
-def action_manifest(spec: ActionResolverSpec) -> dict[str, Any]:
+def action_manifest(spec: ActionResolverSpec, taxonomy_action: dict[str, Any]) -> dict[str, Any]:
     required_slots = tuple(ACTION_REQUIRED_SLOTS.get(spec.name, ()))
     requirement_groups = action_requirement_groups(spec.name)
     group_slots = {slot for group in requirement_groups for slot in group["any_of"]}
@@ -92,9 +98,13 @@ def action_manifest(spec: ActionResolverSpec) -> dict[str, Any]:
         "capability": ACTION_CAPABILITIES.get(spec.name),
         "risk": ACTION_BASE_RISK.get(spec.name, "yellow_consensus"),
         "response_template": spec.response_template,
-        "keywords": tuple(spec.keywords),
-        "semantic_labels": tuple(spec.semantic_labels),
-        "inference_priority": spec.inference_priority,
+        "keywords": tuple(
+            term["value"]
+            for term in taxonomy_action["terms"]
+            if "simple" in term["roles"]
+        ),
+        "semantic_labels": tuple(taxonomy_action["semantic_labels"]),
+        "inference_priority": taxonomy_action["inference_priority"],
         "slots": [
             slot_manifest(
                 spec.name,

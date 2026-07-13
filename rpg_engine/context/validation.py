@@ -22,6 +22,8 @@ def validate_context(state: Any) -> None:
     if state.mode != "action":
         return
 
+    injected_registry = getattr(state, "action_registry", None)
+    registry = injected_registry if injected_registry is not None else get_default_action_registry()
     direct_hits = [hit for hit in state.entity_hits if is_direct_hit(hit)]
     if state.submode == "combat":
         if not any(hit.type in {"threat", "character", "species"} for hit in direct_hits):
@@ -40,13 +42,16 @@ def validate_context(state: Any) -> None:
         if not any(hit.type in {"item", "material", "plant", "crop_plot", "location"} for hit in direct_hits) and not contains_any(state.user_text, EXPLORATION_TERMS):
             state.missing_required.append("采集目标或探索范围未明确。")
     elif state.submode == "craft":
-        if not direct_hits and not re.search(r"(制作|做|加工|修理|升级).+", state.user_text):
+        if not direct_hits and not registry.text_has_term_with_target_content(
+            state.user_text,
+            action=state.submode,
+        ):
             state.missing_required.append("制作目标未明确。")
     elif state.submode == "social":
         if not any(hit.type in {"character", "faction", "faction_state", "location", "species"} for hit in direct_hits):
             state.missing_required.append("社交对象未明确。")
     else:
-        spec = get_default_action_registry().get(state.submode)
+        spec = registry.get(state.submode)
         if spec and "target" in spec.required_options and not direct_hits:
             state.missing_required.append("行动目标未明确。")
 

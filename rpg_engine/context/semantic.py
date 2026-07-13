@@ -18,19 +18,21 @@ from ..visibility import (
 )
 from .rendering import trim_inline
 from .resolution import apply_semantic_entity_hints
-from ..actions import get_default_action_registry
+from ..actions import ActionResolverRegistry, get_default_action_registry
 
 
 def collect_semantic_suggestion(state: Any) -> None:
     if state.semantic_ai == "off":
         return
 
+    injected_registry = getattr(state, "action_registry", None)
+    action_registry = injected_registry if injected_registry is not None else get_default_action_registry()
     prompt = build_semantic_prompt(state)
     task = AIHelperTask(
         name="semantic",
         prompt=prompt,
         output_schema="semantic_suggestion.schema.json",
-        parser=normalize_semantic_suggestion,
+        parser=lambda value: normalize_semantic_suggestion(value, registry=action_registry),
     )
     result = run_ai_helper_json(
         task,
@@ -83,7 +85,8 @@ def build_semantic_prompt(state: Any) -> str:
         for hit in hit_rows
     ]
     current_location = semantic_current_location_label(state, meta.get("current_location_id", "unknown"))
-    action_registry = get_default_action_registry()
+    injected_registry = getattr(state, "action_registry", None)
+    action_registry = injected_registry if injected_registry is not None else get_default_action_registry()
     action_names = action_registry.names()
     action_lines = [
         f"- {spec.name}: labels={','.join(spec.semantic_labels) or '-'}; keywords={','.join(spec.keywords) or '-'}"
@@ -150,8 +153,12 @@ def parse_semantic_json(text: str) -> Any:
         return None
 
 
-def normalize_semantic_suggestion(value: dict[str, Any]) -> dict[str, Any]:
-    action_names = set(get_default_action_registry().names())
+def normalize_semantic_suggestion(
+    value: dict[str, Any],
+    *,
+    registry: ActionResolverRegistry | None = None,
+) -> dict[str, Any]:
+    action_names = set((registry if registry is not None else get_default_action_registry()).names())
     return {
         "mode": normalize_choice(value.get("mode"), {"query", "action", "unknown"}, "unknown"),
         "submode": normalize_choice(

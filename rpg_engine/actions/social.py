@@ -26,6 +26,7 @@ from .base import (
     option_value,
 )
 from .scope import InteractionScope, location_scope
+from .taxonomy import ActionTaxonomySpec, taxonomy_terms
 
 
 def action_request_view(context_data: dict[str, Any] | None) -> str:
@@ -409,9 +410,44 @@ SOCIAL_RESOLVER = ActionResolverSpec(
         ActionOptionSpec("palette_id", "palette candidate id used as a rumor/contact topic", dest="palette-id"),
         ActionOptionSpec("user_text", "original player action text", dest="user-text"),
     ),
-    keywords=("说", "问", "交易", "谈", "展示", "拜访", "找", "询问"),
-    semantic_labels=("talk", "trade", "ask", "negotiate"),
-    inference_priority=30,
+    taxonomy=ActionTaxonomySpec(
+        terms=(
+            *taxonomy_terms(
+                "zh-Hans",
+                ("问", "询问"),
+                roles=("playable.social", "preview.composite.social", "preview.mismatch", "simple"),
+            ),
+            *taxonomy_terms(
+                "zh-Hans",
+                ("聊", "交谈"),
+                roles=("playable.social", "preview.mismatch", "simple"),
+            ),
+            *taxonomy_terms(
+                "zh-Hans",
+                ("说", "交易", "谈", "展示", "拜访", "告诉"),
+                roles=("playable.social", "simple"),
+            ),
+            *taxonomy_terms(
+                "zh-Hans",
+                ("找",),
+                roles=("find", "preview.composite.social", "simple"),
+            ),
+            *taxonomy_terms("zh-Hans", ("寻找", "查找"), roles=("find",)),
+            *taxonomy_terms(
+                "en",
+                ("ask", "talk", "speak"),
+                roles=("playable.social", "preview.mismatch", "simple"),
+            ),
+            *taxonomy_terms(
+                "en",
+                ("tell", "chat", "trade", "negotiate", "visit"),
+                roles=("playable.social", "simple"),
+            ),
+            *taxonomy_terms("en", ("find", "look for", "search for"), roles=("find",)),
+        ),
+        semantic_labels=("talk", "trade", "ask", "negotiate"),
+        inference_priority=30,
+    ),
     validate_request=validate_social_request,
     resolve=resolve_social,
     validate_delta=validate_social_delta,

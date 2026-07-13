@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .actions import ActionResolverRegistry
 from .intent_router import TurnContract, template_for, turn_contract_from_dict
 
 QUERY_HINTS = ["| 字段 |", "| 项目 |", "###", "##"]
@@ -41,6 +42,7 @@ def lint_response(
     *,
     turn_contract: TurnContract,
     strict: bool = False,
+    registry: ActionResolverRegistry | None = None,
 ) -> ResponseLintResult:
     errors: list[str] = []
     warnings: list[str] = []
@@ -55,7 +57,11 @@ def lint_response(
         errors.append("turn contract required_template is empty")
     if not turn_contract.validation_profile:
         errors.append("turn contract validation_profile is empty")
-    expected_template = template_for(turn_contract.intent.mode, turn_contract.intent.submode)
+    expected_template = template_for(
+        turn_contract.intent.mode,
+        turn_contract.intent.submode,
+        registry=registry,
+    )
     if turn_contract.required_template != expected_template:
         errors.append(
             "turn contract required_template mismatch: "

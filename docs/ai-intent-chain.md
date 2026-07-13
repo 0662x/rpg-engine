@@ -289,7 +289,9 @@ source 字段绕过它。
 
 manifest 提供：
 
-- `schema_version="2"` 与对不含自身字段的完整 canonical manifest 计算出的 `manifest_digest`。
+- `schema_version="3"` 与对不含自身字段的完整 canonical manifest 计算出的 `manifest_digest`。
+- `action_taxonomy={version:"1", digest, normalization, actions}`；taxonomy digest 覆盖除自身 digest 外的
+  完整 projection，actions/labels/terms/roles 均按 canonical 顺序发布。
 - `safety_vocabulary={version:"1", digest, values}`；digest 对 version + sorted unique values 做 canonical JSON
   SHA-256。
 - `candidate_shape.contract` 的 all-or-nothing envelope 和 `legacy_unversioned_allowed=true` compatibility policy。
@@ -303,11 +305,18 @@ manifest 提供：
 - requirement groups，例如 `random_table` 的 `table xor dice`。
 - resolver contract 信息。
 
+Deterministic lexical route、manifest per-action compatibility fields、internal review prompt 与 registry/CLI
+introspection 都从同一 `ActionResolverRegistry.taxonomy_projection()` 派生。`GMRuntime.action_registry` 的注入值
+贯通 route preparation、AI router、binder、prompt、manifest 与 active external-contract validation；custom
+resolver 不得在链路中回退到 default registry。Taxonomy 只包含注册 resolver 的 player-safe static metadata，
+不从 SQLite facts、hidden/GM-only 内容或外部 AI 生成。
+
 长期目标是让 binder、internal prompt、skill、MCP description、CLI help 和测试都从 manifest
 摘录，避免 resolver、binder、prompt、skill、CLI 各自维护平行真源。
 
-Story 6.1 只锁定通用 identity 与 safety contract；action taxonomy 如何进入 resolved projection 由 Story 6.2
-继续。RPG Engine 是 manifest/provider validation owner；Hermes 是 consumer，负责读取当前 manifest、填充四字段
+Story 6.1 的通用 identity、safety contract 与 typed stale-refresh 行为继续复用；Story 6.2 将 taxonomy 纳入
+manifest v3，但没有提前迁移 Story 6.3 的 slot owner。RPG Engine 是 manifest/provider validation owner；Hermes
+是 consumer，负责读取当前 manifest、填充四字段
 contract，并在 mismatch 后 refresh + regenerate。Hermes 的 reconnect、next-model-turn barrier 与完整跨仓 E2E
 属于 Hermes H2/H4，不回写为本仓 6.1 的 route 或 commit authority。
 
@@ -334,6 +343,10 @@ Preflight 是 advisory internal-review cache。它可以让正式入口少等一
 Helper identity 必须使用 SQLite 已有的 `provider`、`model`、`backend`、`fallback_backend`
 逐字段对账；组合 `model_version` 只保留兼容 evidence，不能作为唯一命中权威，避免带分隔符的字段值
 形成拼接碰撞。`preflight_id` 使用 `preflight:<32 lowercase hex>` 的唯一随机形状。
+
+Preflight context identity 同时绑定 active action taxonomy digest。default/custom registry 的 taxonomy
+不同时，即使消息、Save、turn、helper 与 `message_only` platform identity 完全相同，也不得复用对方的
+cached internal review；digest 进入 canonical context seed，不新增 Campaign 或 Save schema 字段。
 
 ### `message_only`
 

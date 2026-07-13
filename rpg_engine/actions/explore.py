@@ -20,6 +20,7 @@ from .base import (
     option_specs_for,
     option_value,
 )
+from .taxonomy import ActionTaxonomySpec, taxonomy_terms
 
 
 def explore_target_query(options: Any) -> str | None:
@@ -500,9 +501,30 @@ EXPLORE_RESOLVER = ActionResolverSpec(
         ActionOptionSpec("palette_id", "palette candidate id to inspect as a controlled clue", dest="palette-id"),
         ActionOptionSpec("user_text", "original player action text", dest="user-text"),
     ),
-    keywords=("探索", "调查", "搜查", "搜索", "侦查", "检查线索"),
-    semantic_labels=("explore", "inspect", "search", "investigate", "scout"),
-    inference_priority=55,
+    taxonomy=ActionTaxonomySpec(
+        terms=(
+            *taxonomy_terms(
+                "zh-Hans",
+                ("探索", "调查", "侦查"),
+                roles=("preview.mismatch", "simple"),
+            ),
+            *taxonomy_terms("zh-Hans", ("检查线索",)),
+            *taxonomy_terms(
+                "zh-Hans",
+                ("搜索",),
+                roles=("preview.mismatch", "search", "simple"),
+            ),
+            *taxonomy_terms("zh-Hans", ("搜查", "搜寻"), roles=("search", "simple")),
+            *taxonomy_terms(
+                "en",
+                ("explore", "investigate", "inspect", "scout"),
+                roles=("preview.mismatch", "simple"),
+            ),
+            *taxonomy_terms("en", ("search",), roles=("search", "simple")),
+        ),
+        semantic_labels=("explore", "inspect", "search", "investigate", "scout"),
+        inference_priority=55,
+    ),
     validate_request=validate_explore_request,
     resolve=resolve_explore,
     validate_delta=validate_explore_delta,

@@ -18,13 +18,70 @@ from .base import (
     option_specs_for,
     option_value,
 )
+from .taxonomy import ActionTaxonomySpec, taxonomy_term_matches, taxonomy_terms
+
+
+ROUTINE_TAXONOMY = ActionTaxonomySpec(
+    terms=(
+        *taxonomy_terms(
+            "zh-Hans",
+            ("盘点", "整理库存", "查看库存", "看看物资", "清点"),
+            roles=("inventory", "preview.mismatch", "simple", "template.inventory"),
+        ),
+        *taxonomy_terms("zh-Hans", ("库存", "物资"), roles=("template.inventory",)),
+        *taxonomy_terms(
+            "en",
+            ("inventory", "audit"),
+            roles=("inventory", "preview.mismatch", "simple", "template.inventory"),
+        ),
+        *taxonomy_terms(
+            "zh-Hans",
+            (
+                "巡查",
+                "照看",
+                "维护",
+            ),
+            roles=("preview.mismatch", "simple", "template.upkeep"),
+        ),
+        *taxonomy_terms(
+            "zh-Hans",
+            (
+                "巡视",
+                "巡逻",
+                "巡检",
+                "查看各单位",
+                "查看各角色",
+                "各单位和角色",
+                "领地状态",
+                "单位状态",
+                "角色状态",
+                "浇水",
+                "灌溉",
+                "喂养",
+                "喂食",
+            ),
+            roles=("preview.mismatch", "simple"),
+        ),
+        *taxonomy_terms("zh-Hans", ("日常", "例行")),
+        *taxonomy_terms(
+            "zh-Hans",
+            ("整理", "喂", "吃饭", "灌", "金光"),
+            roles=("simple", "template.upkeep"),
+        ),
+        *taxonomy_terms("zh-Hans", ("检查",), roles=("context.explore", "template.upkeep")),
+        *taxonomy_terms("en", ("patrol", "upkeep", "maintenance", "daily", "care")),
+        *taxonomy_terms("en", ("check",), roles=("context.explore", "template.upkeep")),
+    ),
+    semantic_labels=("routine", "upkeep", "maintenance", "daily", "care", "check"),
+    inference_priority=65,
+)
 
 
 @dataclass(frozen=True)
 class RoutineTemplate:
     id: str
     labels: tuple[str, ...]
-    keywords: tuple[str, ...]
+    taxonomy_role: str
     default_time_minutes: int
     allowed_scope: str
     risk_level: str
@@ -36,7 +93,7 @@ ROUTINE_TEMPLATES = (
     RoutineTemplate(
         id="routine:inventory-audit",
         labels=("盘点库存", "整理库存", "查看物资"),
-        keywords=("盘点", "库存", "物资", "整理库存", "查看库存"),
+        taxonomy_role="template.inventory",
         default_time_minutes=5,
         allowed_scope="base",
         risk_level="none",
@@ -45,7 +102,7 @@ ROUTINE_TEMPLATES = (
     RoutineTemplate(
         id="routine:upkeep",
         labels=("日常维护", "检查", "整理"),
-        keywords=("维护", "检查", "整理", "巡查", "照看", "喂", "吃饭", "灌", "金光"),
+        taxonomy_role="template.upkeep",
         default_time_minutes=10,
         allowed_scope="current_location",
         risk_level="low",
@@ -238,7 +295,10 @@ def routine_template(options: Any) -> RoutineTemplate | None:
         if value
     )
     for template in ROUTINE_TEMPLATES:
-        if any(keyword in text for keyword in template.keywords):
+        if any(
+            template.taxonomy_role in term.roles and taxonomy_term_matches(text, term)
+            for term in ROUTINE_TAXONOMY.terms
+        ):
             return template
     return None
 
@@ -254,9 +314,7 @@ ROUTINE_RESOLVER = ActionResolverSpec(
         ActionOptionSpec("time_cost", "estimated routine time", dest="time"),
         ActionOptionSpec("user_text", "original player action text", dest="user-text"),
     ),
-    keywords=("日常", "例行", "整理", "巡查", "照看", "喂", "吃饭", "灌", "金光", "盘点", "维护", "检查"),
-    semantic_labels=("routine", "upkeep", "maintenance", "daily", "care", "check"),
-    inference_priority=65,
+    taxonomy=ROUTINE_TAXONOMY,
     validate_request=validate_routine_request,
     resolve=resolve_routine,
     validate_delta=validate_routine_delta,

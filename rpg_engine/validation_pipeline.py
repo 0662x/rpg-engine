@@ -10,7 +10,7 @@ from types import SimpleNamespace
 from typing import Any
 from weakref import WeakSet
 
-from .actions import get_default_action_registry
+from .actions import ActionResolverRegistry, get_default_action_registry
 from .ai.defaults import DEFAULT_AI_MODEL, DEFAULT_AI_PROVIDER, DEFAULT_STATE_AUDIT_TIMEOUT_SECONDS
 from .ai.advisory import (
     MAX_CONTAINER_ITEMS,
@@ -189,16 +189,31 @@ def run_validation_pipeline(
     state_audit_timeout: int = DEFAULT_STATE_AUDIT_TIMEOUT_SECONDS,
     state_audit_block: bool = True,
     response_lint_strict: bool = True,
+    registry: ActionResolverRegistry | None = None,
 ) -> ValidationReport:
     if proposal is not None and delta is None:
         delta = proposal.delta
-    effective_action = action or (proposal.intent.action if proposal else action_from_delta(delta or {}))
+    action_registry = registry if registry is not None else get_default_action_registry()
+    effective_action = action or (
+        proposal.intent.action
+        if proposal
+        else action_from_delta(delta or {}, registry=action_registry)
+    )
     effective_options = effective_action_options(effective_action, delta or {}, proposal, action_options)
     stages: list[ValidationStageResult] = []
 
     stages.append(validate_profile_stage(profile))
     stages.append(validate_write_guard_stage(profile, delta=delta))
-    stages.append(validate_proposal_stage(campaign, conn, profile, proposal, response_text=response_text))
+    stages.append(
+        validate_proposal_stage(
+            campaign,
+            conn,
+            profile,
+            proposal,
+            response_text=response_text,
+            registry=action_registry,
+        )
+    )
     stages.append(validate_delta_schema_stage(conn, profile, delta))
     stages.append(validate_capability_stage(campaign, profile, delta, effective_action))
     stages.append(
@@ -209,6 +224,7 @@ def run_validation_pipeline(
             action=effective_action,
             action_options=effective_options,
             context=context or {},
+            registry=action_registry,
         )
     )
     stages.append(
@@ -219,6 +235,7 @@ def run_validation_pipeline(
             action=effective_action,
             action_options=effective_options,
             context=context or {},
+            registry=action_registry,
         )
     )
     stages.append(
@@ -230,9 +247,18 @@ def run_validation_pipeline(
             action=effective_action,
             action_options=effective_options,
             context=context or {},
+            registry=action_registry,
         )
     )
-    stages.append(validate_response_lint_stage(profile, proposal, response_text, strict=response_lint_strict))
+    stages.append(
+        validate_response_lint_stage(
+            profile,
+            proposal,
+            response_text,
+            strict=response_lint_strict,
+            registry=action_registry,
+        )
+    )
     stages.append(validate_response_consistency_stage(profile, delta, response_text))
     stages.append(
         validate_state_audit_stage(
@@ -331,12 +357,19 @@ def validate_proposal_stage(
     proposal: TurnProposal | None,
     *,
     response_text: str | None,
+    registry: ActionResolverRegistry,
 ) -> ValidationStageResult:
     if proposal is None:
         if profile == "player_turn_commit":
             return skipped("proposal_guard", profile, "validation-only delta path without proposal")
         return skipped("proposal_guard", profile, "profile does not require a TurnProposal")
-    outcome = validate_turn_proposal(campaign, conn, proposal, response_text=response_text)
+    outcome = validate_turn_proposal(
+        campaign,
+        conn,
+        proposal,
+        response_text=response_text,
+        registry=registry,
+    )
     artifacts = {
         "proposal_status": outcome.status,
         "delta_source": proposal.delta_source,
@@ -423,6 +456,7 @@ def validate_resolver_contract_stage(
     action: str | None,
     action_options: dict[str, Any],
     context: dict[str, Any],
+    registry: ActionResolverRegistry,
 ) -> ValidationStageResult:
     if delta is None:
         return skipped("resolver_delta_contract", profile, "no delta provided")
@@ -434,7 +468,6 @@ def validate_resolver_contract_stage(
                 "action resolver contract skipped because admin/legacy save did not provide an action",
             )
         return skipped("resolver_delta_contract", profile, "no action could be inferred")
-    registry = get_default_action_registry()
     resolver = registry.get(action)
     if resolver is None:
         return blocked("resolver_delta_contract", profile, f"unsupported action: {action}")
@@ -455,10 +488,10 @@ def validate_resolver_request_stage(
     action: str | None,
     action_options: dict[str, Any],
     context: dict[str, Any],
+    registry: ActionResolverRegistry,
 ) -> ValidationStageResult:
     if not action:
         return skipped("resolver_request_contract", profile, "no action could be inferred")
-    registry = get_default_action_registry()
     resolver = registry.get(action)
     if resolver is None:
         return blocked("resolver_request_contract", profile, f"unsupported action: {action}")
@@ -479,10 +512,10 @@ def validate_resolver_resolution_stage(
     action: str | None,
     action_options: dict[str, Any],
     context: dict[str, Any],
+    registry: ActionResolverRegistry,
 ) -> ValidationStageResult:
     if not action:
         return skipped("resolver_resolve_contract", profile, "no action could be inferred")
-    registry = get_default_action_registry()
     resolver = registry.get(action)
     if resolver is None:
         return blocked("resolver_resolve_contract", profile, f"unsupported action: {action}")
@@ -509,12 +542,18 @@ def validate_response_lint_stage(
     response_text: str | None,
     *,
     strict: bool,
+    registry: ActionResolverRegistry,
 ) -> ValidationStageResult:
     if not response_text:
         return skipped("response_lint", profile, "no response text provided")
     if proposal is None or proposal.turn_contract is None:
         return skipped("response_lint", profile, "no TurnContract available")
-    result = lint_response(response_text, turn_contract=proposal.turn_contract, strict=strict)
+    result = lint_response(
+        response_text,
+        turn_contract=proposal.turn_contract,
+        strict=strict,
+        registry=registry,
+    )
     if result.errors:
         return ValidationStageResult("response_lint", profile, "blocked", issues=tuple(result.errors))
     if result.warnings:
@@ -828,9 +867,14 @@ def required_capabilities(delta: dict[str, Any], action: str | None) -> set[str]
     return required
 
 
-def action_from_delta(delta: dict[str, Any]) -> str | None:
+def action_from_delta(
+    delta: dict[str, Any],
+    *,
+    registry: ActionResolverRegistry | None = None,
+) -> str | None:
     intent = str(delta.get("intent", "")).strip()
-    if intent in get_default_action_registry().names():
+    action_registry = registry if registry is not None else get_default_action_registry()
+    if intent in action_registry.names():
         return intent
     return None
 

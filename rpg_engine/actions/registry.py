@@ -30,13 +30,18 @@ def get_default_action_registry() -> ActionResolverRegistry:
 
 
 def render_action_resolver_list() -> str:
+    registry = get_default_action_registry()
+    taxonomy = registry.taxonomy_projection()
     lines = [
         "# Action Resolvers",
+        "",
+        f"- taxonomy_version: `{taxonomy['version']}`",
+        f"- taxonomy_digest: `{taxonomy['digest']}`",
         "",
         "| Name | Template | Required Options | Options | Contract |",
         "|------|----------|------------------|---------|----------|",
     ]
-    for spec in get_default_action_registry().all():
+    for spec in registry.all():
         contract = [
             "request",
             "preview",
@@ -51,7 +56,8 @@ def render_action_resolver_list() -> str:
 
 
 def render_action_resolver_detail(name: str) -> tuple[str, bool]:
-    spec = get_default_action_registry().get(name)
+    registry = get_default_action_registry()
+    spec = registry.get(name)
     if not spec:
         return f"FAILED\n- unknown action resolver: {name}\n", False
     lines = [
@@ -63,6 +69,14 @@ def render_action_resolver_detail(name: str) -> tuple[str, bool]:
         f"- keywords: `{', '.join(spec.keywords)}`",
         f"- semantic_labels: `{', '.join(spec.semantic_labels)}`",
         f"- inference_priority: `{spec.inference_priority}`",
+        f"- taxonomy_version: `{registry.taxonomy_projection()['version']}`",
+        f"- taxonomy_digest: `{registry.taxonomy_digest}`",
+        "- taxonomy_terms: `"
+        + ", ".join(
+            f"{term.locale}:{term.value}[{'|'.join(term.roles)}]"
+            for term in spec.taxonomy.terms
+        )
+        + "`",
         f"- request_model: `{spec.request_model.__name__}`",
         f"- proposal_model: `{spec.proposal_model.__name__}`",
         f"- has_preview: `{'yes' if spec.preview else 'no'}`",

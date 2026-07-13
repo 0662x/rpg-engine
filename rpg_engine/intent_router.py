@@ -6,7 +6,8 @@ import unicodedata
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
-from .actions import get_default_action_registry
+from .actions import ActionResolverRegistry, get_default_action_registry
+from .actions.taxonomy import HANGUL_PATTERN, JAPANESE_PATTERN
 from .ai.config import normalize_backend, normalize_fallback_backend
 from .ai.defaults import DEFAULT_AI_MODEL, DEFAULT_AI_PROVIDER, DEFAULT_INTENT_TIMEOUT_SECONDS
 from .ai_intent.external import validate_external_intent_candidate
@@ -65,46 +66,6 @@ OUT_OF_WORLD_MAINTENANCE_TERMS = (
     "save index",
 )
 
-ROUTINE_INTENT_TERMS = (
-    "盘点",
-    "整理库存",
-    "查看库存",
-    "看看物资",
-    "清点",
-    "inventory",
-    "audit",
-    "巡查",
-    "巡视",
-    "巡逻",
-    "巡检",
-    "照看",
-    "维护",
-    "查看各单位",
-    "查看各角色",
-    "各单位和角色",
-    "领地状态",
-    "单位状态",
-    "角色状态",
-    "浇水",
-    "灌溉",
-    "喂养",
-    "喂食",
-)
-CRAFT_INTENT_TERMS = (
-    "制作",
-    "做个",
-    "做一个",
-    "做成",
-    "做出",
-    "修理",
-    "校准",
-    "装配",
-    "craft",
-    "make",
-    "build",
-    "repair",
-    "fix",
-)
 DICE_TEXT_PATTERN = re.compile(r"(?<![A-Za-z0-9_])(?:[1-9][0-9]*)?d[1-9][0-9]*(?:[+-][0-9]+)?(?![A-Za-z0-9_])", re.I)
 TABLE_ID_TEXT_PATTERN = re.compile(r"(?<![A-Za-z0-9_])(table:[A-Za-z0-9_.:-]+)(?![A-Za-z0-9_])", re.I)
 
@@ -237,6 +198,7 @@ def route_intent(
     source_user_text_hash: str | None = None,
     preflight_pending_wait_ms: int = 0,
     view: str = PLAYER_VIEW,
+    registry: ActionResolverRegistry | None = None,
 ) -> ActionIntent:
     """Return the single intent contract shared by context, CLI and MCP flows."""
     del semantic_ai, semantic_provider, semantic_model, semantic_timeout
@@ -258,6 +220,7 @@ def route_intent(
         source_user_text_hash=source_user_text_hash,
         preflight_pending_wait_ms=preflight_pending_wait_ms,
     )
+    action_registry = registry if registry is not None else get_default_action_registry()
     prepared = prepare_intent_candidates(
         conn,
         user_text,
@@ -265,6 +228,7 @@ def route_intent(
         submode=submode,
         external_candidate_input=ExternalCandidateInput(external_intent_candidate),
         view=view,
+        registry=action_registry,
     )
     text = prepared.text
     explicit_mode = prepared.explicit_mode
@@ -277,9 +241,9 @@ def route_intent(
     alternatives: list[ActionAlternative] = list(legacy_route.alternatives)
     guards: list[str] = list(legacy_route.guards)
     overrides: list[str] = []
-    action_names = set(get_default_action_registry().names())
+    action_names = set(action_registry.names())
 
-    semantic_decision = semantic_request_decision(semantic_suggestion or {})
+    semantic_decision = semantic_request_decision(semantic_suggestion or {}, registry=action_registry)
     if semantic_decision:
         semantic_mode, semantic_submode = semantic_decision
         alternatives.append(
@@ -299,7 +263,7 @@ def route_intent(
             new = f"{semantic_mode}:{semantic_submode}"
             overrides.append(f"AI 语义判断仅记录，不覆盖最终路由：`{old}` vs `{new}`。")
 
-    intent_router = AIIntentRouter(conn)
+    intent_router = AIIntentRouter(conn, registry=action_registry)
     intent_route = intent_router.route_candidates(
         campaign,
         text,
@@ -444,11 +408,17 @@ def prepare_intent_candidates(
     submode: str | None = None,
     external_candidate_input: ExternalCandidateInput | None = None,
     view: str = PLAYER_VIEW,
+    registry: ActionResolverRegistry | None = None,
 ) -> PreparedIntentCandidates:
+    action_registry = registry if registry is not None else get_default_action_registry()
     text = normalize_player_text(user_text).strip()
     external_payload = external_candidate_input.payload if external_candidate_input is not None else None
     validated_external = (
-        validate_external_intent_candidate(external_payload, user_text=text)
+        validate_external_intent_candidate(
+            external_payload,
+            user_text=text,
+            registry=action_registry,
+        )
         if external_payload is not None
         else None
     )
@@ -464,6 +434,7 @@ def prepare_intent_candidates(
         explicit_mode=explicit_mode,
         explicit_submode=explicit_submode,
         view=view,
+        registry=action_registry,
     )
     outcome = legacy_route.outcome
     rules_candidate = build_rules_intent_candidate(
@@ -476,6 +447,7 @@ def prepare_intent_candidates(
         route_options=outcome.options,
         route_kind=outcome.kind,
         confidence=outcome.confidence,
+        registry=action_registry,
     )
     return PreparedIntentCandidates(
         text=text,
@@ -495,20 +467,28 @@ def build_legacy_rule_route(
     explicit_mode: str | None,
     explicit_submode: str | None,
     view: str = PLAYER_VIEW,
+    registry: ActionResolverRegistry | None = None,
 ) -> LegacyRuleRoute:
-    action_names = set(get_default_action_registry().names())
-    rule_submode = explicit_submode or infer_submode(text)
-    rule_mode = explicit_mode or infer_mode(text, rule_submode)
+    action_registry = registry if registry is not None else get_default_action_registry()
+    action_names = set(action_registry.names())
+    rule_submode = explicit_submode or infer_submode(text, registry=action_registry)
+    rule_mode = explicit_mode or infer_mode(text, rule_submode, registry=action_registry)
     if rule_mode == "query" and rule_submode in action_names:
         rule_mode = "action"
     if rule_mode == "query" and rule_submode == "rule":
         rule_submode = "context"
     if rule_mode == "action" and rule_submode in {"entity", "scene", "context"}:
-        rule_submode = infer_action_submode(text)
+        rule_submode = infer_action_submode(text, registry=action_registry)
     if rule_mode == "maintenance":
         rule_submode = "maintenance"
 
-    inferred = infer_player_action(conn, text, view=view)
+    inferred = infer_player_action(
+        conn,
+        text,
+        view=view,
+        registry=action_registry,
+        allow_out_of_world_maintenance=rule_mode == "maintenance",
+    )
     alternatives: list[ActionAlternative] = [
         ActionAlternative(
             mode=rule_mode,
@@ -544,6 +524,7 @@ def build_legacy_rule_route(
         rule_mode=rule_mode,
         rule_submode=rule_submode,
         inferred=inferred,
+        registry=action_registry,
     ):
         route_mode = "action"
         route_kind = str(inferred.get("kind") or "single")
@@ -644,8 +625,9 @@ def build_rules_intent_candidate(
     route_options: dict[str, Any],
     route_kind: str,
     confidence: str,
+    registry: ActionResolverRegistry | None = None,
 ) -> IntentCandidate:
-    action_names = set(get_default_action_registry().names())
+    action_names = set((registry if registry is not None else get_default_action_registry()).names())
     mode = route_mode if route_mode in {"action", "query", "maintenance", "unknown"} else rule_mode
     kind = route_kind if route_kind in {"single", "composite", "query", "maintenance", "unresolved"} else "single"
     action: str | None = None
@@ -688,6 +670,7 @@ def build_rules_intent_candidate(
         },
         source="rules",
         user_text=user_text,
+        registry=registry,
     )
 
 
@@ -760,15 +743,53 @@ def should_use_playable_inference(
     rule_mode: str,
     rule_submode: str,
     inferred: dict[str, Any],
+    registry: ActionResolverRegistry | None = None,
 ) -> bool:
     if explicit_mode == "query":
         return False
+    if is_informational_action_query_text(text):
+        return False
+    if rule_mode == "query" and inferred_status(inferred) != "blocked" and is_pure_query_text(
+        conn,
+        text,
+        rule_submode=rule_submode,
+        inferred=inferred,
+    ):
+        return False
+    action_names = set((registry if registry is not None else get_default_action_registry()).names())
+    if (
+        str(inferred.get("kind") or "") == "unresolved"
+        and inferred.get("action") == "act"
+        and inferred.get("fallback")
+    ):
+        if rule_mode == "action" and rule_submode in action_names:
+            return False
+        if is_pure_query_text(conn, text, rule_submode=rule_submode, inferred=inferred):
+            return False
     if str(inferred.get("kind") or "") == "unresolved" and inferred.get("action") == "act":
         return True
     if rule_mode == "maintenance":
         return False
-    action_names = set(get_default_action_registry().names())
     if inferred.get("fallback") and rule_mode == "action" and rule_submode in action_names:
+        return False
+    grammar_action_names = {
+        "combat",
+        "craft",
+        "explore",
+        "gather",
+        "random_table",
+        "rest",
+        "routine",
+        "social",
+        "travel",
+    }
+    if (
+        str(inferred.get("kind") or "") == "single"
+        and rule_mode == "action"
+        and rule_submode in action_names
+        and rule_submode not in grammar_action_names
+        and inferred.get("action") != rule_submode
+    ):
         return False
     if (
         str(inferred.get("kind") or "") == "unresolved"
@@ -803,6 +824,8 @@ def is_pure_query_text(
     del conn
     if rule_submode == "scene" and text_has_any(text, ("周围", "场景", "我在哪", "where am i", "look around")):
         return True
+    if rule_submode == "context" and text_has_any(text, ("规则", "能不能", "rule")):
+        return True
     if text_has_any(text, ("属性", "信息", "资料", "是谁", "是什么", "在哪", "哪里")):
         return True
     if is_read_only_status_or_inventory_query(text):
@@ -830,8 +853,13 @@ def is_read_only_status_or_inventory_query(text: str) -> bool:
     )
 
 
-def turn_contract_for_intent(intent: ActionIntent) -> TurnContract:
-    action_names = set(get_default_action_registry().names())
+def turn_contract_for_intent(
+    intent: ActionIntent,
+    *,
+    registry: ActionResolverRegistry | None = None,
+) -> TurnContract:
+    action_registry = registry if registry is not None else get_default_action_registry()
+    action_names = set(action_registry.names())
     blocked = intent.status == "blocked"
     requires_preview = (
         intent.mode == "action"
@@ -858,7 +886,7 @@ def turn_contract_for_intent(intent: ActionIntent) -> TurnContract:
         profile = "player_turn_commit"
     return TurnContract(
         intent=intent,
-        required_template=template_for(intent.mode, intent.submode),
+        required_template=template_for(intent.mode, intent.submode, registry=action_registry),
         response_headings=headings,
         requires_preview=requires_preview,
         must_save=must_save,
@@ -1014,13 +1042,17 @@ def turn_contract_from_dict(data: dict[str, Any]) -> TurnContract:
     )
 
 
-def semantic_request_decision(suggestion: dict[str, Any]) -> tuple[str, str] | None:
+def semantic_request_decision(
+    suggestion: dict[str, Any],
+    *,
+    registry: ActionResolverRegistry | None = None,
+) -> tuple[str, str] | None:
     confidence = str(suggestion.get("confidence") or "").strip().lower()
     if confidence and confidence != "high":
         return None
     mode = str(suggestion.get("mode") or "").strip().lower()
     submode = str(suggestion.get("submode") or "").strip().lower()
-    action_names = set(get_default_action_registry().names())
+    action_names = set((registry if registry is not None else get_default_action_registry()).names())
 
     if mode == "action" and submode in action_names:
         return mode, submode
@@ -1029,20 +1061,37 @@ def semantic_request_decision(suggestion: dict[str, Any]) -> tuple[str, str] | N
     return None
 
 
-def infer_mode(text: str, submode: str) -> str:
+def infer_mode(
+    text: str,
+    submode: str,
+    *,
+    registry: ActionResolverRegistry | None = None,
+) -> str:
+    action_registry = registry if registry is not None else get_default_action_registry()
     if is_out_of_world_maintenance_request(text):
         return "maintenance"
-    if contains_any(text, MAINTENANCE_KEYWORDS) and not contains_any(text, [*QUERY_KEYWORDS, *action_keywords()]):
+    if contains_any(text, MAINTENANCE_KEYWORDS) and not (
+        contains_any(text, QUERY_KEYWORDS) or action_registry.text_has_term(text, role="simple")
+    ):
         return "maintenance"
-    if submode in set(get_default_action_registry().names()):
+    if submode in set(action_registry.names()):
         return "action"
     return "query"
 
 
-def infer_submode(text: str) -> str:
+def infer_submode(
+    text: str,
+    *,
+    registry: ActionResolverRegistry | None = None,
+) -> str:
+    action_registry = registry if registry is not None else get_default_action_registry()
     if is_out_of_world_maintenance_request(text):
         return "maintenance"
-    action = infer_action_from_registry(text)
+    if is_explicit_entity_information_query_text(text):
+        return "entity"
+    if is_informational_action_query_text(text):
+        return "context"
+    action = infer_action_from_registry(text, registry=action_registry)
     if action and not (action == "social" and contains_any(text, QUERY_KEYWORDS)):
         if action != "travel" or not contains_any(text, QUERY_KEYWORDS):
             return action
@@ -1055,56 +1104,84 @@ def infer_submode(text: str) -> str:
     return "entity"
 
 
-def infer_action_submode(text: str) -> str:
-    return infer_action_from_registry(text) or default_action_submode()
+def infer_action_submode(
+    text: str,
+    *,
+    registry: ActionResolverRegistry | None = None,
+) -> str:
+    action_registry = registry if registry is not None else get_default_action_registry()
+    return infer_action_from_registry(text, registry=action_registry) or default_action_submode(registry=action_registry)
 
 
 def is_out_of_world_maintenance_request(text: str) -> bool:
     if text_has_any(text, OUT_OF_WORLD_MAINTENANCE_TERMS):
         return True
+    if text_has_any(text, ("maintenance", "upkeep")):
+        if text_has_any(
+            text,
+            (
+                "system",
+                "code",
+                "database",
+                "schema",
+                "migration",
+                "repository",
+                "save index",
+                "runtime",
+                "api",
+                "server",
+                "test suite",
+            ),
+        ):
+            return True
+        if text_has_any(text, ("engine",)) and not is_world_engine_maintenance_context(text):
+            return True
     return text_has_any(text, ("同步", "设计", "重构", "实现", "审计", "迁移", "补卡")) and text_has_any(
         text,
         ("系统", "存档", "内容", "规则", "代码", "引擎", "工具", "schema", "database", "migration"),
     )
 
 
-def infer_action_from_registry(text: str) -> str | None:
-    specs = sorted(
-        get_default_action_registry().all(),
-        key=lambda spec: (spec.inference_priority, spec.name),
+def is_world_engine_maintenance_context(text: str) -> bool:
+    lowered = normalize_player_text(text).strip().lower()
+    vehicle = r"(?:wagon|cart|ship|vehicle|boat)"
+    return bool(
+        re.search(rf"\b{vehicle}(?:['’]s)?\s+engine\b", lowered)
+        or re.search(rf"\bengine\s+(?:of\s+)?(?:the\s+)?{vehicle}\b", lowered)
     )
-    for spec in specs:
-        if spec.name == "travel":
-            continue
-        if contains_any(text, list(spec.keywords)):
-            return spec.name
-    travel = get_default_action_registry().get("travel")
-    if travel and contains_any(text, list(travel.keywords)):
-        return travel.name
-    if text_has_any(text, ROUTINE_INTENT_TERMS):
-        return "routine"
-    return None
 
 
-def default_action_submode() -> str:
-    registry = get_default_action_registry()
-    return "travel" if registry.get("travel") else (registry.names()[0] if registry.names() else "action")
+def infer_action_from_registry(
+    text: str,
+    *,
+    registry: ActionResolverRegistry | None = None,
+) -> str | None:
+    action_registry = registry if registry is not None else get_default_action_registry()
+    return action_registry.match_action(text)
 
 
-def action_keywords() -> list[str]:
-    keywords: list[str] = []
-    for spec in get_default_action_registry().all():
-        keywords.extend(spec.keywords)
-    keywords.extend(ROUTINE_INTENT_TERMS)
-    return keywords
+def default_action_submode(*, registry: ActionResolverRegistry | None = None) -> str:
+    action_registry = registry if registry is not None else get_default_action_registry()
+    return "travel" if action_registry.get("travel") else (action_registry.names()[0] if action_registry.names() else "action")
 
 
-def template_for(mode: str, submode: str) -> str:
+def action_keywords(*, registry: ActionResolverRegistry | None = None) -> list[str]:
+    action_registry = registry if registry is not None else get_default_action_registry()
+    return list(action_registry.terms_for(role="simple"))
+
+
+def template_for(
+    mode: str,
+    submode: str,
+    *,
+    registry: ActionResolverRegistry | None = None,
+) -> str:
     if mode == "query":
         if submode == "scene":
             return "scene_entry.md"
         return "entity_query.md"
-    spec = get_default_action_registry().get(submode)
+    action_registry = registry if registry is not None else get_default_action_registry()
+    spec = action_registry.get(submode)
     return spec.response_template if spec else "action_turn.md"
 
 
@@ -1238,8 +1315,180 @@ def is_meta_or_override_text(text: str) -> bool:
     )
 
 
-def is_negated_or_hypothetical_action_text(text: str) -> bool:
-    stripped = normalize_player_text(text).strip()
+def _split_sentence_terminal(text: str) -> tuple[str, str]:
+    end = len(text)
+    while end and (
+        text[end - 1].isspace()
+        or unicodedata.category(text[end - 1])[0] in {"M", "P", "S"}
+    ):
+        end -= 1
+    return text[:end], text[end:]
+
+
+def is_negated_or_hypothetical_action_text(
+    text: str,
+    *,
+    registry: ActionResolverRegistry | None = None,
+) -> bool:
+    apostrophe_normalized = str(text).translate(
+        str.maketrans({char: "'" for char in "’‘ʼ‛`´＇′"})
+    )
+    stripped = normalize_player_text(apostrophe_normalized).strip()
+    lowered = stripped.lower()
+    lowered = re.sub(r"(?<=n)\s*[\u0300-\u036f]+\s*(?=t\b)", "'", lowered)
+    sentence_core, terminal = _split_sentence_terminal(stripped)
+    matched = registry.match_action_terms(stripped) if registry is not None else None
+    matched_languages = {
+        term.locale.partition("-")[0].casefold()
+        for term in (matched[1] if matched is not None else ())
+    }
+    has_japanese_grammar = (
+        "ja" in matched_languages or JAPANESE_PATTERN.search(stripped) is not None
+    )
+    has_korean_grammar = "ko" in matched_languages or HANGUL_PATTERN.search(stripped) is not None
+    chinese_prefix = r"(?:(?:请|麻烦|今天|现在|暂时|先|我|我们|你)\s*){0,4}"
+    if re.search(
+        rf"^{chinese_prefix}"
+        r"(?:不要|别|不(?:打算|想|能|会)?|没(?:有)?|未)",
+        stripped,
+    ):
+        return True
+    if re.search(
+        rf"^{chinese_prefix}(?:要不要|是否要)",
+        stripped,
+    ):
+        return True
+    if contains_any(stripped, ("是否", "会不会", "能不能")):
+        return True
+    if re.search(
+        r"\b(?:not|never|cannot|isn['’‘ʼ]?t|aren['’‘ʼ]?t|wasn['’‘ʼ]?t|weren['’‘ʼ]?t|"
+        r"hasn['’‘ʼ]?t|haven['’‘ʼ]?t|hadn['’‘ʼ]?t|doesn['’‘ʼ]?t|didn['’‘ʼ]?t|"
+        r"needn['’‘ʼ]?t|daren['’‘ʼ]?t|"
+        r"can['’‘ʼ]?t|couldn['’‘ʼ]?t|shouldn['’‘ʼ]?t|"
+        r"wouldn['’‘ʼ]?t|mustn['’‘ʼ]?t|shan['’‘ʼ]?t|don['’‘ʼ]?t|won['’‘ʼ]?t)\b|^\s*no\b",
+        lowered,
+    ):
+        return True
+    if re.search(
+        r"^\s*(?:please[\s,，:：;；.。—–-]+)?(?:"
+        r"if\b|what\s+if\b|suppose\b|imagine\b|assuming\b|assume\b|"
+        r"(?:can|could|would|should|may|might|will|shall|must|ought|need|dare)\s+(?:i|we)\b|"
+        r"ought\s+to\b|"
+        r"(?:would|could|should|may|might|will|shall|must|ought)\b|"
+        r"i\s+(?:would|could|should|may|might)\b"
+        r")",
+        lowered,
+    ):
+        return True
+    if re.search(r"\b(?:what\s+happens?|i\s+wonder)\s+if\b", lowered):
+        return True
+    if has_korean_grammar and re.search(r"(?:^|\s)(?:안|못)(?:\s|$)", stripped):
+        return True
+    if (has_japanese_grammar or has_korean_grammar) and any(
+        mark in terminal for mark in ("?", "？")
+    ):
+        return True
+    if has_japanese_grammar and sentence_core.endswith(
+        ("か", "かな", "かしら", "かね", "するの")
+    ):
+        return True
+    if has_korean_grammar and re.search(
+        r"(?:나요|까요|습니까|십니까|합니까|인가요|니까)$",
+        sentence_core,
+    ):
+        return True
+    japanese_sentence_core = re.sub(r"(?:よ|ね|ぞ|さ)+$", "", sentence_core)
+    if has_japanese_grammar and (
+        stripped.startswith("もし")
+        or japanese_sentence_core.endswith(
+            (
+            "しない",
+            "しません",
+            "しなかった",
+            "しませんでした",
+            "せず",
+            "するな",
+            "ないで",
+            "できない",
+            "できません",
+            "できなかった",
+            "もし",
+            "どうなる",
+            "どうなります",
+            "たら",
+            "つもりはない",
+            "しそうにない",
+            "べきではない",
+            "できそうにない",
+            "してはいけない",
+            "ないでください",
+            "してはいけません",
+            "しないです",
+            "できませんでした",
+            "したくない",
+            "しなくていい",
+            "したくありません",
+            "したくないです",
+            "するなら",
+            "すれば",
+            "すると",
+            "した場合",
+            "しなければ",
+            )
+        )
+    ):
+        return True
+    if has_korean_grammar and (
+        stripped.startswith("만약")
+        or sentence_core.endswith(
+            (
+            "하지 마",
+            "하지마",
+            "하지 않",
+            "하지 못",
+            "못한다",
+            "못해",
+            "못 하",
+            "할 수 없",
+            "할 필요 없다",
+            "해서는 안돼",
+            "말아",
+            "마세요",
+            "만약",
+            "어떻게 되",
+            "한다면",
+            "하면",
+            "할 경우",
+            "할까",
+            "하니",
+            "할래",
+            "해도 될까",
+            "할지 궁금해",
+            "하는가",
+            "할 것인가",
+            "해도 되는가",
+            "할지 모르겠다",
+            "하지 않아요",
+            "하지 않습니다",
+            "하지 않았습니다",
+            "못합니다",
+            "못했습니다",
+            "안 됩니다",
+            "하지 않았어요",
+            "하지 않겠습니다",
+            "하지 마십시오",
+            "하지 않을게요",
+            "하지 않을 거예요",
+            "하지 말아 주세요",
+            "하지 않는다",
+            "하지 않았다",
+            "하지 않다",
+            "하지 않을 것입니다",
+            "까요",
+            )
+        )
+    ):
+        return True
     return text_has_any(
         stripped,
         (
@@ -1263,19 +1512,126 @@ def is_negated_or_hypothetical_action_text(text: str) -> bool:
     )
 
 
+def is_informational_action_query_text(text: str) -> bool:
+    stripped = normalize_player_text(text).strip()
+    lowered = stripped.lower()
+    if re.search(r"\b(?:not|never|cannot|can['’]?t|don['’]?t|won['’]?t)\b|^\s*no\b", lowered):
+        return False
+    if re.search(r"(?:查看|查询|查一下|看一下|看看).*(?:信息|资料|属性|详情)", stripped):
+        return True
+    return bool(
+        re.search(
+            r"^\s*(?:"
+            r"(?:what|how|why|when|where|who|which)\b|"
+            r"(?:is|are|am|was|were|has|have|had|do|does|did)\b|"
+            r"can\s+(?!(?:i|we)\b)|"
+            r"(?:please\s+)?(?:explain|define)\b|"
+            r"(?:please\s+)?tell\s+me\s+about\b|"
+            r"(?:please\s+)?(?:tell|show|teach)\s+me\s+how\s+to\b|"
+            r"(?:please\s+)?show\s+me\b.*\b(?:info|information|details?|status)\b"
+            r")",
+            lowered,
+        )
+    )
+
+
+def is_executable_action_question(text: str, *, registry: ActionResolverRegistry) -> bool:
+    stripped = normalize_player_text(text).strip()
+    sentence_core, _ = _split_sentence_terminal(stripped)
+    if not sentence_core.endswith(("吗", "呢")):
+        return False
+    action = registry.match_action(stripped)
+    if action is None:
+        return False
+    default_registry = get_default_action_registry()
+    is_builtin_routine_p0 = (
+        action == "routine"
+        and default_registry.text_has_term(stripped, action=action, role="simple")
+        and sentence_core == "天气会影响农田浇水吗"
+    )
+    return not is_builtin_routine_p0
+
+
+def is_explicit_entity_information_query_text(text: str) -> bool:
+    stripped = normalize_player_text(text).strip()
+    return bool(re.search(r"(?:查看|查询|查一下|看一下|看看).*(?:信息|资料|属性|详情)", stripped))
+
+
 def looks_like_noise_text(text: str) -> bool:
     stripped = normalize_player_text(text).strip()
     if not stripped:
         return False
-    meaningful = re.findall(r"[A-Za-z0-9]+|[\u4e00-\u9fff]+", stripped)
+    meaningful = re.findall(r"[^\W_]+", stripped)
     meaningful_chars = sum(len(item) for item in meaningful)
     if meaningful_chars == 0:
         return True
     return meaningful_chars < 3 and len(stripped) >= 8
 
 
-def infer_player_action(conn: sqlite3.Connection, user_text: str, *, view: str = PLAYER_VIEW) -> dict[str, Any]:
+def infer_player_action(
+    conn: sqlite3.Connection,
+    user_text: str,
+    *,
+    view: str = PLAYER_VIEW,
+    registry: ActionResolverRegistry | None = None,
+    allow_out_of_world_maintenance: bool = False,
+) -> dict[str, Any]:
+    action_registry = registry if registry is not None else get_default_action_registry()
+    inferred = _infer_player_action(
+        conn,
+        user_text,
+        view=view,
+        registry=action_registry,
+        allow_out_of_world_maintenance=allow_out_of_world_maintenance,
+    )
+    unsupported = inferred_actions_not_in_registry(inferred, registry=action_registry)
+    if not unsupported:
+        return inferred
+    unresolved = unresolved_act(
+        status="clarify",
+        message=(
+            "当前行动注册表不支持解析出的步骤："
+            + "、".join(unsupported)
+            + "。请改用当前 provider 已注册的行动重写请求。"
+        ),
+        repair_id="rewrite_with_registered_action",
+        label="改用已注册行动",
+        action="act",
+        missing_required=tuple(f"registered_action:{action}" for action in unsupported),
+    )
+    if inferred.get("fallback"):
+        unresolved["fallback"] = True
+    return unresolved
+
+
+def _infer_player_action(
+    conn: sqlite3.Connection,
+    user_text: str,
+    *,
+    view: str = PLAYER_VIEW,
+    registry: ActionResolverRegistry | None = None,
+    allow_out_of_world_maintenance: bool = False,
+) -> dict[str, Any]:
     text = user_text.strip()
+    action_registry = registry if registry is not None else get_default_action_registry()
+    if is_out_of_world_maintenance_request(text) and not allow_out_of_world_maintenance:
+        return unresolved_act(
+            status="blocked",
+            message="这是系统、代码或存档维护请求，不会作为角色行动保存。请改成角色在世界内实际执行的维护动作。",
+            repair_id="describe_in_world_maintenance",
+            label="改成世界内行动",
+            action="act",
+            errors=("out-of-world maintenance is not a playable action",),
+        )
+    if is_executable_action_question(text, registry=action_registry):
+        return unresolved_act(
+            status="clarify",
+            message="这句话像在询问是否执行自定义行动，不会直接保存。请明确说明角色现在要执行的动作。",
+            repair_id="confirm_custom_action",
+            label="确认自定义行动",
+            action="act",
+            missing_required=("actual_action",),
+        )
     if is_meta_or_override_text(text):
         return unresolved_act(
             status="blocked",
@@ -1285,16 +1641,16 @@ def infer_player_action(conn: sqlite3.Connection, user_text: str, *, view: str =
             action="act",
             errors=("out-of-world command is not a playable action",),
         )
-    if is_negated_or_hypothetical_action_text(text):
+    if is_negated_or_hypothetical_action_text(text, registry=action_registry):
         return unresolved_act(
             status="clarify",
-            message="这句话像是否定、假设或测试请求，不会保存为角色行动。请直接说明角色现在要实际执行的动作。",
+            message="这句话像信息询问、否定、假设或测试请求，不会保存为角色行动。请直接说明角色现在要实际执行的动作。",
             repair_id="confirm_actual_action",
             label="确认实际行动",
             action="act",
             missing_required=("actual_action",),
         )
-    if looks_like_noise_text(text):
+    if looks_like_noise_text(text) and action_registry.match_action(text) is None:
         return unresolved_act(
             status="clarify",
             message="这段输入没有足够可解析的角色行动。请换成一句明确的游戏内动作。",
@@ -1322,21 +1678,30 @@ def infer_player_action(conn: sqlite3.Connection, user_text: str, *, view: str =
         preferred_types=("reference", "location", "threat", "project", "faction_state", "world_setting"),
         view=view,
     )
-    has_inventory_intent = text_has_any(text, ("盘点", "整理库存", "查看库存", "看看物资", "清点", "inventory", "audit"))
-    has_routine_intent = has_inventory_intent or text_has_any(text, ROUTINE_INTENT_TERMS)
-    has_travel_intent = text_has_any(text, ("去", "前往", "到", "移动", "go", "travel", "move", "walk", "head"))
-    has_social_intent = text_has_any(text, ("问", "聊", "谈", "告诉", "询问", "ask", "talk", "speak", "tell", "chat"))
-    has_find_intent = text_has_any(text, ("找", "寻找", "查找", "find", "look for", "search for"))
-    has_search_intent = has_find_intent or text_has_any(text, ("搜索", "搜寻", "search"))
-    has_explore_intent = text_has_any(text, ("探索", "调查", "搜索", "检查", "侦查", "explore", "investigate", "inspect", "check", "scout"))
-    has_craft_intent = text_has_any(text, CRAFT_INTENT_TERMS)
-    has_rest_intent = text_has_any(text, ("睡", "休息", "守夜", "等到明早", "过夜", "rest", "sleep", "wait"))
-    has_random_intent = text_has_any(text, ("随机", "掷骰", "骰子", "事件表", "随机表", "roll", "dice", "random"))
-    resource_terms = ("草药", "药草", "月白草", "材料", "食材", "芦苇", "河泥", "灰", "纤维", "样本")
-    explicit_gather_intent = text_has_any(
+    has_inventory_intent = action_registry.text_has_term(text, action="routine", role="inventory")
+    has_routine_intent = action_registry.text_has_term(text, action="routine", role="simple")
+    has_travel_intent = action_registry.text_has_term(text, action="travel", role="simple") or action_registry.text_has_term(
         text,
-        ("采", "采集", "采药", "摘", "收", "拾取", "捡", "收集", "弄点", "gather", "collect", "pick", "harvest"),
+        action="travel",
+        role="context.travel",
     )
+    has_social_intent = action_registry.text_has_term(text, action="social", role="playable.social")
+    has_find_intent = action_registry.text_has_term(text, action="social", role="find")
+    has_search_intent = has_find_intent or action_registry.text_has_term(
+        text,
+        action="explore",
+        role="search",
+    )
+    has_explore_intent = action_registry.text_has_term(text, action="explore", role="simple") or action_registry.text_has_term(
+        text,
+        action="routine",
+        role="context.explore",
+    )
+    has_craft_intent = action_registry.text_has_term(text, action="craft", role="playable.craft")
+    has_rest_intent = action_registry.text_has_term(text, action="rest", role="simple")
+    has_random_intent = action_registry.text_has_term(text, action="random_table", role="simple")
+    resource_terms = ("草药", "药草", "月白草", "材料", "食材", "芦苇", "河泥", "灰", "纤维", "样本")
+    explicit_gather_intent = action_registry.text_has_term(text, action="gather", role="simple")
     resource_search_intent = has_find_intent and text_has_any(text, resource_terms) and not has_craft_intent
     has_gather_intent = explicit_gather_intent or resource_search_intent
 
@@ -1352,7 +1717,12 @@ def infer_player_action(conn: sqlite3.Connection, user_text: str, *, view: str =
             "options": {"task": "盘点库存", "user_text": user_text},
         }
 
-    if has_routine_intent and not (has_travel_intent or has_social_intent or has_gather_intent or has_craft_intent):
+    if has_routine_intent and not (
+        has_travel_intent
+        or has_social_intent
+        or has_gather_intent
+        or has_craft_intent
+    ):
         return {
             "kind": "single",
             "action": "routine",
@@ -1589,6 +1959,26 @@ def infer_player_action(conn: sqlite3.Connection, user_text: str, *, view: str =
     }
 
 
+def inferred_actions_not_in_registry(
+    inferred: dict[str, Any],
+    *,
+    registry: ActionResolverRegistry,
+) -> tuple[str, ...]:
+    actions: set[str] = set()
+    action = inferred.get("action")
+    if isinstance(action, str) and action and action != "act":
+        actions.add(action)
+    for step in inferred.get("plan", ()):
+        step_action = step.get("action") if type(step) is dict else getattr(step, "action", None)
+        if isinstance(step_action, str) and step_action:
+            actions.add(step_action)
+    for repair in inferred.get("repair_options", ()):
+        repair_action = repair.get("action") if type(repair) is dict else getattr(repair, "action", None)
+        if isinstance(repair_action, str) and repair_action and repair_action != "act":
+            actions.add(repair_action)
+    return tuple(sorted(action for action in actions if registry.get(action) is None))
+
+
 def unresolved_act(
     *,
     status: UxStatus,
@@ -1661,6 +2051,15 @@ def composite_inventory_plan(
             options={"target": explore_target["id"], "approach": "careful"},
             risk_level="medium",
         )
+    if followup is None:
+        return unresolved_act(
+            status="clarify",
+            message="库存盘点后的行动目标没有解析为可执行步骤。请补充已注册行动及其目标。",
+            repair_id="clarify_inventory_followup",
+            label="补充后续行动",
+            action="act",
+            missing_required=("registered_composite_step",),
+        )
     plan = [
         PlanStep(
             step_id="step:1",
@@ -1670,8 +2069,7 @@ def composite_inventory_plan(
             risk_level="none",
         )
     ]
-    if followup:
-        plan.append(followup)
+    plan.append(followup)
     return {
         "kind": "composite",
         "summary": "先盘点库存，再继续执行后续行动。",
@@ -1822,21 +2220,31 @@ def semantic_trace(suggestion: dict[str, Any] | None) -> dict[str, Any] | None:
     }
 
 
-def detect_preview_action_mismatch(user_text: str | None, action: str) -> dict[str, Any] | None:
+def detect_preview_action_mismatch(
+    user_text: str | None,
+    action: str,
+    *,
+    registry: ActionResolverRegistry | None = None,
+) -> dict[str, Any] | None:
     if not user_text:
         return None
     text = normalize_player_text(user_text).strip()
     action = action.strip()
     if not text or not action:
         return None
-    expected = keyword_expected_action(text)
+    expected = keyword_expected_action(text, registry=registry)
     if expected and expected != action:
         return {
             "severity": "needs_confirmation",
             "expected_action": expected,
             "message": f"source_user_text 更像 `{expected}`，但调用方传入了 `{action}`。请改用 preview_from_text 或确认 action 后重试。",
         }
-    if action == "social" and text_has_any(text, ("去", "前往", "下到", "到")) and text_has_any(text, ("问", "询问", "找")):
+    action_registry = registry if registry is not None else get_default_action_registry()
+    if (
+        action == "social"
+        and action_registry.text_has_term(text, action="travel", role="preview.composite.travel")
+        and action_registry.text_has_term(text, action="social", role="preview.composite.social")
+    ):
         return {
             "severity": "warning",
             "expected_action": "composite",
@@ -1845,19 +2253,17 @@ def detect_preview_action_mismatch(user_text: str | None, action: str) -> dict[s
     return None
 
 
-def keyword_expected_action(text: str) -> str | None:
-    if text_has_any(text, CRAFT_INTENT_TERMS):
-        return "craft"
-    if text_has_any(text, ("采", "采集", "采药", "摘", "收集", "拾取", "捡", "gather", "collect", "harvest")):
-        return "gather"
-    if text_has_any(text, ("去", "前往", "移动到", "go to", "travel to", "head to")):
-        return "travel"
-    if text_has_any(text, ("询问", "问", "交谈", "聊", "talk", "ask", "speak")):
-        return "social"
-    if text_has_any(text, ("睡", "休息", "守夜", "等到明早", "过夜", "rest", "sleep", "wait")):
-        return "rest"
-    if text_has_any(text, ("探索", "调查", "搜索", "侦查", "inspect", "investigate", "explore", "scout")):
-        return "explore"
-    if text_has_any(text, ROUTINE_INTENT_TERMS):
-        return "routine"
-    return None
+def keyword_expected_action(
+    text: str,
+    *,
+    registry: ActionResolverRegistry | None = None,
+) -> str | None:
+    action_registry = registry if registry is not None else get_default_action_registry()
+    builtin_order = ("craft", "gather", "travel", "social", "rest", "explore", "routine")
+    registry_match = action_registry.match_action(text, role="preview.mismatch")
+    if registry_match is not None and registry_match not in builtin_order:
+        return registry_match
+    for action in builtin_order:
+        if action_registry.text_has_term(text, action=action, role="preview.mismatch"):
+            return action
+    return registry_match

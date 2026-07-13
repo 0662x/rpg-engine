@@ -35,6 +35,7 @@ from .base import (
     option_specs_for,
     option_value,
 )
+from .taxonomy import ActionTaxonomySpec, taxonomy_terms
 
 
 def redact_repair_options(conn: sqlite3.Connection, options: tuple[RepairOption, ...]) -> tuple[RepairOption, ...]:
@@ -610,9 +611,24 @@ GATHER_RESOLVER = ActionResolverSpec(
         ActionOptionSpec("output_confirmed", "GM/human-edited delta includes explicit output quantity", dest="output-confirmed"),
         ActionOptionSpec("user_text", "original player action text", dest="user-text"),
     ),
-    keywords=("收", "采", "采集", "挖", "割", "取", "捡", "收获", "能吃", "食物"),
-    semantic_labels=("gather", "harvest", "collect", "forage"),
-    inference_priority=50,
+    taxonomy=ActionTaxonomySpec(
+        terms=(
+            *taxonomy_terms(
+                "zh-Hans",
+                ("采", "采集", "捡", "采药", "摘", "拾取", "收集"),
+                roles=("preview.mismatch", "simple"),
+            ),
+            *taxonomy_terms("zh-Hans", ("收", "挖", "割", "取", "收获", "能吃", "食物", "弄点")),
+            *taxonomy_terms(
+                "en",
+                ("gather", "collect", "harvest"),
+                roles=("preview.mismatch", "simple"),
+            ),
+            *taxonomy_terms("en", ("pick", "forage")),
+        ),
+        semantic_labels=("gather", "harvest", "collect", "forage"),
+        inference_priority=50,
+    ),
     validate_request=validate_gather_request,
     resolve=resolve_gather,
     validate_delta=validate_gather_delta,

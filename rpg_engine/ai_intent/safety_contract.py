@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import hashlib
-import json
 from dataclasses import dataclass
 from typing import Any
+
+from ..canonical_json import canonical_json_sha256
 
 
 SAFETY_FLAG_VALUES = frozenset(
@@ -18,17 +18,6 @@ SAFETY_FLAG_VALUES = frozenset(
 )
 SAFETY_VOCABULARY_VERSION = "1"
 ALLOW_LEGACY_UNVERSIONED_EXTERNAL_CANDIDATE = True
-
-
-def canonical_json_sha256(value: Any) -> str:
-    wire = json.dumps(
-        value,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        allow_nan=False,
-    ).encode("utf-8")
-    return hashlib.sha256(wire).hexdigest()
 
 
 SAFETY_VOCABULARY_DIGEST = canonical_json_sha256(

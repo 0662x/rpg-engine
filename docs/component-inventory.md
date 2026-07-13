@@ -30,7 +30,7 @@
 | 组件 | 文件 | 当前责任 |
 | --- | --- | --- |
 | Intent Router | `rpg_engine/intent_router.py` | 候选准备、规则路由、外部候选、配置与元数据 |
-| Intent Manifest | `rpg_engine/intent_manifest.py` | Manifest v2、确定性完整 digest、versioned safety projection 与意图/动作能力声明 |
+| Intent Manifest | `rpg_engine/intent_manifest.py` | Manifest v3、确定性完整 digest、taxonomy v1 / safety v1 projection 与意图/动作能力声明 |
 | Safety Contract | `rpg_engine/ai_intent/safety_contract.py` | Safety vocabulary v1 唯一真源、digest、legacy policy、typed error 与安全公开投影 |
 | AI Intent Router | `rpg_engine/ai_intent/router.py` | AI 候选收集、preflight 消费、内部复核、共识仲裁、绑定 trace 组装 |
 | AI Provider | `rpg_engine/ai/provider.py` | AI provider 抽象 |
@@ -52,7 +52,8 @@
 
 | 组件 | 文件 | 当前责任 |
 | --- | --- | --- |
-| Registry | `rpg_engine/actions/registry.py` | 动作解析器注册 |
+| Registry | `rpg_engine/actions/registry.py` | 动作解析器注册、taxonomy identity 与 player-safe introspection |
+| Action Taxonomy | `rpg_engine/actions/taxonomy.py` | Frozen per-action terms/roles/locale metadata、NFKC + casefold 匹配、确定性全局 projection/digest 与 collision validation |
 | Builtin | `rpg_engine/actions/builtin.py` | 内建动作聚合 |
 | Explore | `rpg_engine/actions/explore.py` | 探索动作 |
 | Travel | `rpg_engine/actions/travel.py` | 移动/旅行 |
@@ -68,7 +69,7 @@
 
 | 组件 | 文件 | 当前责任 |
 | --- | --- | --- |
-| Action Resolver Contract | `rpg_engine/actions/base.py` | `ActionResolverSpec` 定义动作预览核心合约 |
+| Action Resolver Contract | `rpg_engine/actions/base.py` | `ActionResolverSpec` 定义动作预览核心合约并持有 canonical frozen taxonomy；legacy taxonomy 参数只作互斥迁移适配 |
 | Runtime Preview | `rpg_engine/runtime.py` | `GMRuntime.preview_action()` 编排动作预览 |
 | Preview Helpers | `rpg_engine/preview.py` | 部分动作复用的渲染/delta helper |
 | Turn Proposal | `rpg_engine/proposal.py` | pending/approved `TurnProposal`，承载确认、来源和 intent contract 边界 |

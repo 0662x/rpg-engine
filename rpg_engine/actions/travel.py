@@ -30,6 +30,7 @@ from .base import (
     option_specs_for,
     option_value,
 )
+from .taxonomy import ActionTaxonomySpec, taxonomy_terms
 
 
 def action_request_view(context_data: dict[str, Any] | None) -> str:
@@ -461,9 +462,30 @@ TRAVEL_RESOLVER = ActionResolverSpec(
         ActionOptionSpec("pace", "travel pace", default="normal"),
         ActionOptionSpec("user_text", "original player action text", dest="user-text"),
     ),
-    keywords=("去", "前往", "抵达", "出发", "撤退"),
-    semantic_labels=("travel", "move", "retreat", "approach", "scout-route"),
-    inference_priority=60,
+    taxonomy=ActionTaxonomySpec(
+        terms=(
+            *taxonomy_terms(
+                "zh-Hans",
+                ("去", "前往"),
+                roles=("preview.composite.travel", "preview.mismatch", "simple"),
+            ),
+            *taxonomy_terms("zh-Hans", ("移动到",), roles=("preview.mismatch", "simple")),
+            *taxonomy_terms("zh-Hans", ("抵达", "出发", "撤退", "移动")),
+            *taxonomy_terms(
+                "zh-Hans",
+                ("到", "下到"),
+                roles=("context.travel", "preview.composite.travel"),
+            ),
+            *taxonomy_terms(
+                "en",
+                ("go to", "travel to", "head to"),
+                roles=("preview.mismatch", "simple"),
+            ),
+            *taxonomy_terms("en", ("go", "travel", "move", "walk", "head", "retreat", "approach")),
+        ),
+        semantic_labels=("travel", "move", "retreat", "approach", "scout-route"),
+        inference_priority=60,
+    ),
     validate_request=validate_travel_request,
     resolve=resolve_travel,
     validate_delta=validate_travel_delta,

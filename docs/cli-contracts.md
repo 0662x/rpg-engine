@@ -165,9 +165,12 @@ player duplicate
   永远是 low-trust input；internal intent AI enabled 时保持 external/internal arbitration，显式 `off`
   且候选合法时采用 `external_primary`，`off` 且无候选时保持 deterministic fallback。三条路径都必须
   经过 Kernel schema、registry、safety、binding/query、preview 和 pending/confirm 边界。
-- 当前 client 应从 `intent_manifest` / Python `build_intent_manifest()` 取得 manifest v2 + safety v1 identity，
+- 当前 client 应从 `intent_manifest` / Python `build_intent_manifest()` 取得 manifest v3 + taxonomy v1 + safety v1
+  identity，
   在 candidate 的 optional all-or-nothing `contract` 中原样携带四个字段。省略时只进入显式
   `legacy_unversioned` compatibility；unknown safety 仍 fail closed。
+- Action list/inspect 展示的 taxonomy version/digest/locale terms 来自 registry render helper；CLI 不维护
+  平行 synonyms，也不因此获得 Campaign loader 或动态 plugin authority。
 - `act` 是兼容 wrapper。它不接受 `--external-intent-candidate`，避免旧调用面把 external AI
   候选塞进兼容路径。
 - `confirm --session-id` 只确认当前 pending player action；session id 必须来自 `player turn` 或
