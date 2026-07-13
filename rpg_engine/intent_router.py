@@ -9,9 +9,10 @@ from typing import Any
 from .actions import get_default_action_registry
 from .ai.config import normalize_backend, normalize_fallback_backend
 from .ai.defaults import DEFAULT_AI_MODEL, DEFAULT_AI_PROVIDER, DEFAULT_INTENT_TIMEOUT_SECONDS
-from .ai_intent.external import normalize_external_intent_candidate
+from .ai_intent.external import validate_external_intent_candidate
 from .ai_intent.normalization import normalize_intent_candidate
 from .ai_intent.router import AIIntentRouter
+from .ai_intent.safety_contract import ExternalContractEvidence
 from .ai_intent.types import ClarificationChoice, ClarificationQuestion, IntentCandidate, RouteOutcome
 from .campaign import Campaign
 from .db import entity_subtype_visibility_sql
@@ -205,6 +206,7 @@ class PreparedIntentCandidates:
     legacy_route: LegacyRuleRoute
     rules_candidate: IntentCandidate
     external_low_trust_candidate: IntentCandidate | None
+    external_contract_evidence: ExternalContractEvidence | None
 
 
 def route_intent(
@@ -270,6 +272,7 @@ def route_intent(
     legacy_route = prepared.legacy_route
     rules_candidate = prepared.rules_candidate
     external_candidate = prepared.external_low_trust_candidate
+    external_contract_evidence = prepared.external_contract_evidence
     outcome = legacy_route.outcome
     alternatives: list[ActionAlternative] = list(legacy_route.alternatives)
     guards: list[str] = list(legacy_route.guards)
@@ -302,6 +305,7 @@ def route_intent(
         text,
         intent_ai_mode=ai_config.mode,
         external_candidate=external_candidate,
+        external_contract_evidence=external_contract_evidence,
         rule_candidate=rules_candidate,
         rules_outcome=outcome,
         backend=ai_config.backend,
@@ -443,10 +447,14 @@ def prepare_intent_candidates(
 ) -> PreparedIntentCandidates:
     text = normalize_player_text(user_text).strip()
     external_payload = external_candidate_input.payload if external_candidate_input is not None else None
-    external_candidate = (
-        normalize_external_intent_candidate(external_payload, user_text=text)
+    validated_external = (
+        validate_external_intent_candidate(external_payload, user_text=text)
         if external_payload is not None
         else None
+    )
+    external_candidate = validated_external.candidate if validated_external is not None else None
+    external_contract_evidence = (
+        validated_external.contract_evidence if validated_external is not None else None
     )
     explicit_mode = mode if mode != "auto" else None
     explicit_submode = submode
@@ -476,6 +484,7 @@ def prepare_intent_candidates(
         legacy_route=legacy_route,
         rules_candidate=rules_candidate,
         external_low_trust_candidate=external_candidate,
+        external_contract_evidence=external_contract_evidence,
     )
 
 

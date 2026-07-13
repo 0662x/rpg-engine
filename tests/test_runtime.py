@@ -17,8 +17,10 @@ import yaml
 
 from rpg_engine.ai.defaults import DEFAULT_AI_MODEL, DEFAULT_AI_PROVIDER
 from rpg_engine.ai.provider import AIHelperResult
+from rpg_engine.ai_intent import ExternalIntentContractError
 from rpg_engine.db import connect, init_database, upsert_entity
 from rpg_engine.campaign import load_campaign
+from rpg_engine.context_builder import build_context
 from rpg_engine.intent_router import (
     ExternalCandidateInput,
     make_intent_ai_config,
@@ -2018,6 +2020,126 @@ class GMRuntimeTests(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, r"external_intent_candidate schema validation failed"):
                 runtime.preview_from_text("休息到早上", external_intent_candidate=external)
+
+    def test_external_contract_typed_errors_propagate_before_runtime_context_route_or_preflight_writes(self) -> None:
+        sentinel = "RUNTIME_CONTRACT_SENTINEL_9c2a"
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = GMRuntime.from_path(copy_minimal_campaign(tmp))
+            base = {
+                "kind": "single",
+                "mode": "action",
+                "action": "rest",
+                "slots": {"note": sentinel},
+                "plan": [],
+                "confidence": "high",
+                "missing_slots": [],
+                "needs_confirmation": [],
+                "safety_flags": [sentinel],
+                "reason": sentinel,
+            }
+            candidates = {
+                "unknown": base,
+                "mismatch": {
+                    **base,
+                    "contract": {
+                        "manifest_schema_version": "1",
+                        "manifest_digest": "0" * 64,
+                        "safety_vocabulary_version": "1",
+                        "safety_vocabulary_digest": "0" * 64,
+                    },
+                },
+            }
+            with connect(runtime.campaign) as conn:
+                before_counts = {
+                    table: int(conn.execute(f"select count(*) from {table}").fetchone()[0])
+                    for table in ("turns", "events", "facts", "intent_preflight_cache", "context_runs")
+                }
+
+            for case, candidate in candidates.items():
+                operations = {
+                    "start_turn": lambda: runtime.start_turn(
+                        sentinel,
+                        external_intent_candidate=candidate,
+                    ),
+                    "preview_from_text": lambda: runtime.preview_from_text(
+                        sentinel,
+                        external_intent_candidate=candidate,
+                    ),
+                    "act": lambda: runtime.act(
+                        sentinel,
+                        external_intent_candidate=candidate,
+                    ),
+                    "preflight_intent": lambda: runtime.preflight_intent(
+                        sentinel,
+                        external_intent_candidate=candidate,
+                        message_id=f"msg:{case}",
+                    ),
+                }
+                for surface, operation in operations.items():
+                    with self.subTest(case=case, surface=surface):
+                        with self.assertRaises(ExternalIntentContractError) as caught:
+                            operation()
+                        self.assert_external_contract_error(caught.exception, case, sentinel)
+
+                with connect(runtime.campaign) as conn:
+                    for surface, operation in {
+                        "route_intent": lambda: route_intent(
+                            runtime.campaign,
+                            conn,
+                            sentinel,
+                            external_intent_candidate=candidate,
+                        ),
+                        "build_context": lambda: build_context(
+                            runtime.campaign,
+                            conn,
+                            user_text=sentinel,
+                            external_intent_candidate=candidate,
+                        ),
+                    }.items():
+                        with self.subTest(case=case, surface=surface):
+                            with self.assertRaises(ExternalIntentContractError) as caught:
+                                operation()
+                            self.assert_external_contract_error(caught.exception, case, sentinel)
+
+            with patch.object(runtime, "preview_intent") as preview_intent:
+                for case, candidate in candidates.items():
+                    with self.subTest(case=case, surface="preview_not_called"):
+                        with self.assertRaises(ExternalIntentContractError):
+                            runtime.preview_from_text(
+                                sentinel,
+                                external_intent_candidate=candidate,
+                            )
+                preview_intent.assert_not_called()
+
+            with connect(runtime.campaign) as conn:
+                after_counts = {
+                    table: int(conn.execute(f"select count(*) from {table}").fetchone()[0])
+                    for table in before_counts
+                }
+            self.assertEqual(after_counts, before_counts)
+
+    def assert_external_contract_error(
+        self,
+        error: ExternalIntentContractError,
+        case: str,
+        sentinel: str,
+    ) -> None:
+        if case == "mismatch":
+            self.assertEqual(error.code, "INTENT_CONTRACT_VERSION_MISMATCH")
+            self.assertEqual(error.reason, "contract_version_mismatch")
+            self.assertTrue(error.retriable)
+            self.assertEqual(error.action, "refresh_manifest_and_regenerate_candidate")
+            self.assertEqual(error.path, "$.contract")
+            self.assertEqual(error.message, "External intent contract does not match the current provider.")
+        else:
+            self.assertEqual(error.code, "UNKNOWN_INTENT_SAFETY_FLAG")
+            self.assertEqual(error.reason, "unknown_safety_flag")
+            self.assertFalse(error.retriable)
+            self.assertEqual(error.action, "regenerate_candidate")
+            self.assertEqual(error.path, "$.safety_flags")
+            self.assertEqual(error.message, "External intent candidate contains unsupported safety flags.")
+        self.assertNotIn(sentinel, str(error))
+        self.assertNotIn(sentinel, repr(error))
 
     def test_preview_from_text_bundles_runtime_intent_config_after_empty_text_guard(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

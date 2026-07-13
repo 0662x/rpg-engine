@@ -30,7 +30,8 @@
 | 组件 | 文件 | 当前责任 |
 | --- | --- | --- |
 | Intent Router | `rpg_engine/intent_router.py` | 候选准备、规则路由、外部候选、配置与元数据 |
-| Intent Manifest | `rpg_engine/intent_manifest.py` | 意图/动作能力声明 |
+| Intent Manifest | `rpg_engine/intent_manifest.py` | Manifest v2、确定性完整 digest、versioned safety projection 与意图/动作能力声明 |
+| Safety Contract | `rpg_engine/ai_intent/safety_contract.py` | Safety vocabulary v1 唯一真源、digest、legacy policy、typed error 与安全公开投影 |
 | AI Intent Router | `rpg_engine/ai_intent/router.py` | AI 候选收集、preflight 消费、内部复核、共识仲裁、绑定 trace 组装 |
 | AI Provider | `rpg_engine/ai/provider.py` | AI provider 抽象 |
 | Resident AI Advisory | `rpg_engine/ai/advisory.py` | 严格、深度不可变的 advisory envelope、maintenance representation 与 SQLite-aware player-safe projection；不具事实、确认、hidden 或 commit 权威 |
@@ -41,7 +42,7 @@
 | Arbiter | `rpg_engine/ai_intent/arbiter.py` | 候选裁决 |
 | Binder | `rpg_engine/ai_intent/binder.py` | 槽位绑定 |
 | Adapters | `rpg_engine/ai_intent/adapters.py` | 外部候选适配 |
-| External | `rpg_engine/ai_intent/external.py` | 外部意图接入 |
+| External | `rpg_engine/ai_intent/external.py` | 外部意图共享 strict ingress、contract negotiation、raw safety validation 与 bounded evidence |
 | Internal Review | `rpg_engine/ai_intent/internal_review.py` | 内部复核 |
 | Risk | `rpg_engine/ai_intent/risk.py` | 风险等级判断 |
 | Slot Contract | `rpg_engine/ai_intent/slot_contract.py` | 槽位契约 |

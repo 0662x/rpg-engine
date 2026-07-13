@@ -252,6 +252,12 @@ AI/主持者可以拿到准确、相关、可审计、不会泄露 hidden 的 Co
 
 **FRs covered:** FR-15; reinforces FR-9, FR-13, FR-17
 
+### Epic 6: Intent Contract 与 Player Session Reliability
+
+Oliver 可以依赖 versioned intent contract、明确的 pending/clarification 生命周期、exactly-once confirmation 响应和可解释 audit；RPG Engine 负责 provider、session 与安全边界，Hermes consumer、reconnect 与 self-improvement 保持在独立仓库。完成后，taxonomy、safety、slot、manifest、preflight、session 和 audit 都有单一 owner 或 executable parity gate，且不会改变 AI、玩家确认或 commit authority。
+
+**FRs reinforced:** FR-1, FR-4, FR-6, FR-16; NFR-1, NFR-3, NFR-4, NFR-6, NFR-7
+
 ## Epic 1: 可信本地游玩闭环与入口权限
 
 Oliver 可以通过 player-safe path 长期游玩、确认行动、保存事实，并且 CLI/MCP/platform/low-level 入口不会混淆权限。完成后，引擎拥有可验证的普通玩家写入闭环、surface taxonomy、Save fact authority、projection/outbox 证据边界和核心接口契约基础。
@@ -1113,3 +1119,196 @@ So that hidden/export, backup/restore, eval, coverage, action spec, concurrency,
 **When** boundary tests run
 **Then** player workflow, profile gate, hidden/visibility gate, atomic write, archive staging, skipped-test reporting, coverage/eval metrics, declarative action spec behavior, pending action identity, and platform concurrency do not regress where applicable
 **And** the coordinator remains orchestration and trace rather than authority.
+
+## Epic 6: Intent Contract 与 Player Session Reliability
+
+Oliver 可以依赖 versioned intent contract、明确的 pending/clarification 生命周期、exactly-once confirmation 响应和可解释 audit；RPG Engine 负责 provider、session 与安全边界，Hermes consumer、reconnect 与 self-improvement 保持在独立仓库。完成后，taxonomy、safety、slot、manifest、preflight、session 和 audit 都有单一 owner 或 executable parity gate，且不会改变 AI、玩家确认或 commit authority。
+
+### Story 6.1: Strict External Safety Vocabulary and Version Negotiation
+
+As an external AI integrator,
+I want external safety vocabulary validation and version negotiation to fail closed,
+So that unknown flags or rolling upgrades cannot silently weaken the Kernel trust boundary.
+
+**Acceptance Criteria:**
+
+**Given** an external intent candidate contains a safety flag outside the active versioned vocabulary
+**When** the external candidate boundary validates and normalizes it
+**Then** the candidate is rejected or blocked with a structured unknown-safety error
+**And** the unknown flag is not silently removed, adopted, routed, previewed, or converted into pending state.
+
+**Given** a caller and provider use different manifest or safety-vocabulary versions or digests
+**When** the candidate reaches the provider contract boundary
+**Then** the provider returns a retriable `contract_version_mismatch` requiring manifest refresh and candidate regeneration
+**And** a compatibility-window caller that omits provenance may continue only when every supplied flag belongs to the active allowlist.
+
+**Given** schema, external normalization, arbiter blockers, and manifest projection expose safety vocabulary
+**When** parity and threat/consequence gates run across off, consensus, known-danger, old-caller/new-provider, and new-caller/old-provider cases
+**Then** all owners agree on the active vocabulary and unknown values fail closed
+**And** external AI remains low-trust while Kernel safety, pending, player confirmation, validation, and commit authority remain unchanged.
+
+### Story 6.2: Canonical Action Taxonomy Registry Projection
+
+As an intent contract maintainer,
+I want simple lexical action taxonomy to have one versioned registry owner,
+So that deterministic routing, live manifest, internal prompts, and external consumers cannot drift.
+
+**Acceptance Criteria:**
+
+**Given** builtin action resolvers are registered
+**When** the resolved intent taxonomy is generated
+**Then** `ActionResolverSpec` / `ActionResolverRegistry` owns the versioned simple-term `ActionTaxonomySpec`
+**And** deterministic router, live manifest, and internal prompt consume projections from that same source rather than parallel synonym tables.
+
+**Given** `intent_router` evaluates composite, negation, maintenance, entity-aware, or context-aware grammar
+**When** lexical taxonomy is centralized
+**Then** those grammar responsibilities remain in the router while simple action synonyms move to the registry projection
+**And** current P0 routes, entity/hidden binding, and off-mode external-primary behavior do not regress.
+
+**Given** builtin, custom/campaign, or multilingual locale terms are projected
+**When** taxonomy parity and stale-contract tests run
+**Then** “巡视/巡逻” remains `routine`, custom and locale terms follow the same resolved contract, and manifest version/digest changes with the projection
+**And** a candidate bound to a stale taxonomy version or digest is rejected with the refresh behavior fixed by Story 6.1.
+
+### Story 6.3: Resolved Slot Contract Projection and Parity
+
+As an action contract maintainer,
+I want slot metadata to have a single resolved projection or executable parity gate,
+So that resolver, binder, manifest, and internal prompt do not maintain incompatible requirements.
+
+**Acceptance Criteria:**
+
+**Given** an action declares required slots, any-of groups, aliases, types, AI-fillable fields, binding rules, or confirmation requirements
+**When** its resolved slot contract is built
+**Then** the resolver contract produces one normalized metadata projection consumed by binder, manifest, and internal prompt
+**And** requirement groups such as `random_table` table-or-dice remain expressible without consumer-specific exceptions.
+
+**Given** a legacy runtime table cannot yet be removed safely
+**When** focused parity tests compare it with the resolved projection
+**Then** any missing, extra, or semantically different slot metadata fails with the owning action and field identified
+**And** unguarded parallel hand-maintenance is not accepted as a finished state.
+
+**Given** slot projection cleanup is implemented
+**When** binding and visibility regression gates run
+**Then** current required/any-of behavior, aliases, confirmation, player-visible entity binding, and hidden-content exclusion remain unchanged
+**And** this story does not compress route representations, introduce a Coordinator, or claim a runtime defect that was not reproduced.
+
+### Story 6.4: Atomic Pending Confirmation Claim and Replay Classification
+
+As a player host,
+I want pending confirmation to have an atomic claim and stable replay result,
+So that concurrent or retried confirmation cannot report multiple fresh commits or duplicate facts.
+
+**Acceptance Criteria:**
+
+**Given** two callers concurrently confirm the same valid pending session
+**When** SaveManager claims and commits the proposal
+**Then** exactly one caller receives fresh `committed` and the other receives `already_confirmed` with `idempotent_replay=true`
+**And** SQLite records only one turn/event/fact transition.
+
+**Given** commit succeeds but the process fails before pending state is cleared
+**When** the same identity and session retry confirmation
+**Then** SaveManager and CommitService classify the existing command/event as `already_confirmed`, safely reconcile pending state, and do not report a fresh commit
+**And** recovery is proven with subprocess or equivalent crash-window evidence.
+
+**Given** a replay uses a different identity, active save, session, command, or proposal payload
+**When** confirmation is attempted
+**Then** it returns conflict or the existing identity/session mismatch result rather than idempotent success
+**And** player confirmation, validation, write guard, and commit authority are not weakened.
+
+### Story 6.5: Explicit Pending Supersede and Clarification Lifecycle
+
+As a player host,
+I want pending and clarification sessions to have explicit supersede, expiry, cancel, and correction semantics,
+So that new input cannot silently erase another caller's work or trap a player in an opaque recovery loop.
+
+**Acceptance Criteria:**
+
+**Given** one active Save already has a pending action or clarification
+**When** a new player turn arrives
+**Then** the V1 single-pending contract uses compare-and-supersede: the same identity may replace it only through explicit supersede, while a different actor/session receives conflict
+**And** save switch, expiry, cancel, migration, and orphan cleanup have structured, testable outcomes rather than unconditional deletion.
+
+**Given** a pending clarification is created
+**When** its lifecycle is inspected or a player-safe cancel is requested
+**Then** it uses the same default 1800-second TTL as pending actions, records expiry and origin, and can be canceled without writing gameplay facts
+**And** stale or canceled clarification cannot authorize preview, pending action, confirmation, or commit.
+
+**Given** the clarification origin is `candidate_contract_mismatch`
+**When** the same identity submits the matching `clarification_id`, original text, and corrected external candidate
+**Then** the request may be revalidated without treating candidate correction as player confirmation
+**And** a genuine player-input ambiguity still requires a fresh player answer.
+
+**Given** MCP or platform surfaces track clarification state
+**When** SaveManager persisted state changes
+**Then** adapters mirror, gate, and forward the canonical session instead of owning a second business-state truth
+**And** adapter restart does not create a different clarification lifecycle.
+
+### Story 6.6: Explicit Preflight Consumer Purpose
+
+As a runtime integrator,
+I want every preflight consumer to declare its purpose,
+So that diagnostics cannot accidentally consume authoritative single-use review evidence intended for formal routing.
+
+**Acceptance Criteria:**
+
+**Given** `GMRuntime.start_turn()` is used for context or diagnostics
+**When** matching ready preflight evidence exists
+**Then** `start_turn` declares diagnostic purpose and does not claim or mark the evidence `used`
+**And** it has no opt-in switch that converts the diagnostic entry into an authoritative consumer.
+
+**Given** a formal player route or trusted preview is allowed to consume preflight evidence
+**When** `IntentRequestMeta.consumer_purpose` is evaluated
+**Then** only the named formal route/preview purpose can perform the single-use claim
+**And** missing, unknown, or mismatched purpose fails safely or falls back without borrowing another entry's authority.
+
+**Given** consumer-purpose behavior changes
+**When** preflight regression gates run
+**Then** CAS, identity, TTL, `message_only` isolation, late/used/replay handling, and enabled-mode degradation remain correct
+**And** preflight remains advisory rather than proposal, permission, confirmation, validation, or commit authority.
+
+### Story 6.7: Safe Intent Audit Reconstruction Summary
+
+As an engine maintainer,
+I want provider audit to reconstruct the normalized route class without exposing sensitive payloads,
+So that incidents can be explained without turning audit into a hidden-data or authority surface.
+
+**Acceptance Criteria:**
+
+**Given** an intent request completes, clarifies, blocks, or fails
+**When** MCP/provider audit writes its result summary
+**Then** allowlisted normalized metadata can distinguish external mode/action class, rules mode/action class, selected source/outcome, clarification/failure class, manifest version/digest, and preflight consumer purpose
+**And** an incident such as external=query versus rules=routine can be reconstructed without the raw candidate object.
+
+**Given** candidate slots, reason, player text, session identity, provider output, private reasoning, or hidden context exists
+**When** the audit summary is serialized
+**Then** raw values are omitted or reduced to approved hashes/enums/counts
+**And** privacy/hidden-content tests prove the summary does not expose those values or act as an existence oracle.
+
+**Given** audit writing fails or an audit record is replayed
+**When** the gameplay/tool operation completes
+**Then** audit remains non-authoritative evidence and cannot change profile gate, routing, pending state, player confirmation, validation, or facts
+**And** failure is reported only through the existing safe warning/evidence boundary.
+
+### Story 6.8: RPG Engine Compatibility Fixture for Hermes Stdio E2E
+
+As a cross-repository integration maintainer,
+I want a stable RPG Engine provider fixture for the Hermes compatibility suite,
+So that real stdio behavior can be tested without making RPG Engine own Hermes client lifecycle.
+
+**Acceptance Criteria:**
+
+**Given** the compatibility fixture starts an RPG Engine MCP provider
+**When** a scripted client runs deterministic transcripts
+**Then** it uses real stdio FastMCP, a scripted model contract, temporary Save data, and hooks for manifest version/digest, candidate refresh, `player_turn`, `player_confirm`, and safe audit
+**And** it requires no network or API key.
+
+**Given** the fixture or its tests can write runtime state
+**When** verification runs
+**Then** all writes stay inside temporary Campaign/Save/workspace copies
+**And** source Campaigns, formal Saves, workspace registry, `data/game.sqlite`, and player data fingerprints remain unchanged.
+
+**Given** provider fixture CI and full compatibility CI are assigned
+**When** ownership is checked
+**Then** RPG Engine CI validates only the provider fixture and contract outputs, while Hermes CI owns the real client, tool registration, next-model-turn barrier, reconnect lifecycle, and combined release gate
+**And** Hermes H1-H4 status is not tracked as RPG Engine sprint state.

@@ -17,6 +17,7 @@ import yaml
 
 from rpg_engine.ai.defaults import DEFAULT_AI_MODEL, DEFAULT_AI_PROVIDER
 from rpg_engine.ai.provider import AIHelperResult
+from rpg_engine.ai_intent import ExternalIntentContractError
 from rpg_engine.backup import list_backups
 from rpg_engine.db import connect, upsert_entity
 from rpg_engine.game_session import hash_identity
@@ -1165,6 +1166,79 @@ class SaveManagerTests(unittest.TestCase):
             self.assertFalse(result["ok"], result)
             self.assertTrue(any("external_intent_candidate schema validation failed" in item for item in result["errors"]))
             self.assertFalse((root / ".aigm" / "pending-player-action.json").exists())
+
+    def test_player_turn_direct_contract_error_propagates_without_new_pending_or_save_state(self) -> None:
+        sentinel = "SAVE_CONTRACT_SENTINEL_1ad4"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            campaign_dir = root / "campaigns" / "official"
+            shutil.copytree(OFFICIAL_EXAMPLE, campaign_dir)
+            manager = SaveManager(root, default_campaign="campaigns/official")
+            started = manager.start_or_continue(campaign="campaigns/official")
+            save_path = root / started["save"]["path"]
+            before = authoritative_save_snapshot(save_path)
+            base = {
+                "kind": "single",
+                "mode": "action",
+                "action": "rest",
+                "slots": {"note": sentinel},
+                "plan": [],
+                "confidence": "high",
+                "missing_slots": [],
+                "needs_confirmation": [],
+                "safety_flags": [sentinel],
+                "reason": sentinel,
+            }
+            candidates = {
+                "unknown_safety_flag": base,
+                "contract_version_mismatch": {
+                    **base,
+                    "contract": {
+                        "manifest_schema_version": "1",
+                        "manifest_digest": "0" * 64,
+                        "safety_vocabulary_version": "1",
+                        "safety_vocabulary_digest": "0" * 64,
+                    },
+                },
+            }
+
+            for reason, candidate in candidates.items():
+                with self.subTest(reason=reason):
+                    with self.assertRaises(ExternalIntentContractError) as caught:
+                        manager.player_turn(
+                            user_text=sentinel,
+                            external_intent_candidate=candidate,
+                        )
+                    error = caught.exception
+                    self.assertEqual(error.reason, reason)
+                    self.assertEqual(
+                        error.code,
+                        "UNKNOWN_INTENT_SAFETY_FLAG"
+                        if reason == "unknown_safety_flag"
+                        else "INTENT_CONTRACT_VERSION_MISMATCH",
+                    )
+                    if reason == "unknown_safety_flag":
+                        self.assertFalse(error.retriable)
+                        self.assertEqual(error.action, "regenerate_candidate")
+                        self.assertEqual(error.path, "$.safety_flags")
+                        self.assertEqual(
+                            error.message,
+                            "External intent candidate contains unsupported safety flags.",
+                        )
+                    else:
+                        self.assertTrue(error.retriable)
+                        self.assertEqual(error.action, "refresh_manifest_and_regenerate_candidate")
+                        self.assertEqual(error.path, "$.contract")
+                        self.assertEqual(
+                            error.message,
+                            "External intent contract does not match the current provider.",
+                        )
+                    self.assertNotIn(sentinel, str(error))
+                    self.assertNotIn(sentinel, repr(error))
+
+            self.assertEqual(authoritative_save_snapshot(save_path), before)
+            self.assertFalse(manager.pending_action_path().exists())
+            self.assertFalse(manager.pending_clarification_path().exists())
 
     def test_player_turn_empty_text_keeps_clarification_before_intent_config_validation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

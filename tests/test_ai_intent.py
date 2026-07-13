@@ -16,6 +16,7 @@ from rpg_engine.ai_intent.router import ai_helper_result_from_preflight, summari
 from rpg_engine.ai_intent import (
     AIIntentRouter,
     ConsensusDecision,
+    ExternalIntentContractError,
     IntentCandidate,
     RouteOutcome,
     arbitrate_intent_candidates,
@@ -28,8 +29,21 @@ from rpg_engine.ai_intent import (
     route_outcome_from_consensus_decision,
     assess_rules_fallback,
 )
+from rpg_engine.ai_intent.external import validate_external_intent_candidate
+from rpg_engine.ai_intent.safety_contract import (
+    ExternalContractEvidence,
+    SAFETY_FLAG_VALUES,
+    external_intent_contract_error_detail,
+)
 from rpg_engine.db import upsert_entity
-from rpg_engine.intent_router import build_rules_intent_candidate, extract_entity_query_target
+from rpg_engine.intent_manifest import build_intent_manifest
+from rpg_engine.intent_router import (
+    ExternalCandidateInput,
+    build_rules_intent_candidate,
+    extract_entity_query_target,
+    prepare_intent_candidates,
+    route_intent,
+)
 from rpg_engine.preflight_cache import PreflightLookupResult
 from rpg_engine.resource_paths import read_resource_text
 
@@ -169,26 +183,354 @@ class AIIntentTests(unittest.TestCase):
             finally:
                 os.environ["PATH"] = old_path
 
-    def test_intent_candidate_schema_and_normalizer_bound_values(self) -> None:
+    def test_intent_candidate_schema_and_external_ingress_reject_unknown_safety(self) -> None:
         result = self.run_with_fake_hermes(
             '{"kind":"single","mode":"action","action":"social","slots":{"npc":"夏娃","topic":"菌丝单位","extra":["a","a","b"]},"plan":[{"action":"travel","slots":{"destination":"小溪"},"reason":"先去现场"}],"confidence":"high","missing_slots":[],"needs_confirmation":[],"safety_flags":["prompt_injection","unknown_flag"],"reason":"玩家要求 NPC 汇报信息"}',
             AIHelperTask(
                 name="intent_candidate",
                 prompt="x",
                 output_schema="intent_candidate.schema.json",
-                parser=lambda value: normalize_intent_candidate(value, source="external_ai", user_text="让夏娃汇报菌丝单位").to_dict(),
+                parser=lambda value: normalize_external_intent_candidate(
+                    value,
+                    user_text="让夏娃汇报菌丝单位",
+                ).to_dict(),
             ),
         )
 
-        self.assertTrue(result.ok, result.error)
-        assert result.parsed is not None
-        self.assertEqual(result.parsed["source"], "external_ai")
-        self.assertEqual(result.parsed["source_user_text"], "让夏娃汇报菌丝单位")
-        self.assertEqual(result.parsed["action"], "social")
-        self.assertEqual(result.parsed["slots"]["npc"], "夏娃")
-        self.assertEqual(result.parsed["slots"]["extra"], ["a", "b"])
-        self.assertEqual(result.parsed["plan"][0]["action"], "travel")
-        self.assertEqual(result.parsed["safety_flags"], ["prompt_injection"])
+        self.assertFalse(result.ok)
+        self.assertEqual(result.status, "error")
+        self.assertIn("schema validation failed", result.error or "")
+        self.assertNotIn("unknown_flag", result.error or "")
+
+    def test_external_safety_flags_are_exact_while_internal_normalization_stays_tolerant(self) -> None:
+        class ListSubclass(list[str]):
+            pass
+
+        class StringSubclass(str):
+            pass
+
+        base = {
+            "kind": "single",
+            "mode": "action",
+            "action": "rest",
+            "slots": {"until": "morning"},
+            "plan": [],
+            "confidence": "high",
+            "missing_slots": [],
+            "needs_confirmation": [],
+            "safety_flags": [],
+            "reason": "Player wants to rest.",
+        }
+        known_flags = (
+            "forced_save",
+            "hidden_info",
+            "maintenance_request",
+            "out_of_world",
+            "prompt_injection",
+            "unsafe_command",
+        )
+
+        for flags in ([], *([flag] for flag in known_flags)):
+            with self.subTest(valid=flags):
+                normalized = normalize_external_intent_candidate(
+                    {**base, "safety_flags": flags},
+                    user_text="rest",
+                )
+                self.assertEqual(normalized.safety_flags, tuple(flags))
+
+        for flags in (
+            ["unknown_flag"],
+            ["prompt_injection", "unknown_flag"],
+            ["Prompt_Injection"],
+            [" prompt_injection"],
+            ["prompt_injection "],
+            ["prompt_injection", "prompt_injection"],
+            ["prompt_injection"] * 7,
+            ListSubclass(),
+            [StringSubclass("prompt_injection")],
+        ):
+            with self.subTest(invalid=flags):
+                with self.assertRaises(ValueError):
+                    normalize_external_intent_candidate(
+                        {**base, "safety_flags": flags},
+                        user_text="rest",
+                    )
+
+        tolerant = normalize_intent_candidate(
+            {**base, "safety_flags": ["prompt_injection", "unknown_flag", "prompt_injection"]},
+            source="rules",
+            user_text="rest",
+        )
+        self.assertEqual(tolerant.safety_flags, ("prompt_injection",))
+
+    def test_external_unknown_and_contract_shape_fail_before_domain_normalization(self) -> None:
+        base = {
+            "kind": "single",
+            "mode": "action",
+            "action": "rest",
+            "slots": {"until": "morning"},
+            "plan": [],
+            "confidence": "high",
+            "missing_slots": [],
+            "needs_confirmation": [],
+            "safety_flags": [],
+            "reason": "Player wants to rest.",
+        }
+        stale_contract = {
+            "manifest_schema_version": "1",
+            "manifest_digest": "0" * 64,
+            "safety_vocabulary_version": "1",
+            "safety_vocabulary_digest": "0" * 64,
+        }
+
+        with mock.patch("rpg_engine.ai_intent.external.normalize_intent_candidate") as normalize:
+            with self.assertRaises(ValueError):
+                normalize_external_intent_candidate(
+                    {**base, "safety_flags": ["unknown_flag"]},
+                    user_text="rest",
+                )
+            normalize.assert_not_called()
+
+        with mock.patch("rpg_engine.ai_intent.external.normalize_intent_candidate") as normalize:
+            with self.assertRaises(ValueError):
+                normalize_external_intent_candidate(
+                    {**base, "contract": stale_contract},
+                    user_text="rest",
+                )
+            normalize.assert_not_called()
+
+        with (
+            mock.patch("rpg_engine.intent_router.build_legacy_rule_route") as legacy_route,
+            mock.patch.object(AIIntentRouter, "route_candidates") as ai_route,
+        ):
+            with self.assertRaises(ExternalIntentContractError):
+                route_intent(
+                    SimpleNamespace(campaign_id="test"),
+                    self.make_entity_db(),
+                    "rest",
+                    external_intent_candidate={**base, "safety_flags": ["unknown_flag"]},
+                )
+            legacy_route.assert_not_called()
+            ai_route.assert_not_called()
+
+    def test_external_contract_exact_match_and_legacy_omission_return_bounded_evidence(self) -> None:
+        manifest = build_intent_manifest()
+        base = {
+            "kind": "single",
+            "mode": "action",
+            "action": "rest",
+            "slots": {"until": "morning"},
+            "plan": [],
+            "confidence": "high",
+            "missing_slots": [],
+            "needs_confirmation": [],
+            "safety_flags": [],
+            "reason": "Player wants to rest.",
+        }
+        contract = {
+            "manifest_schema_version": manifest["schema_version"],
+            "manifest_digest": manifest["manifest_digest"],
+            "safety_vocabulary_version": manifest["safety_vocabulary"]["version"],
+            "safety_vocabulary_digest": manifest["safety_vocabulary"]["digest"],
+        }
+
+        matched = validate_external_intent_candidate({**base, "contract": contract}, user_text="rest")
+        legacy = validate_external_intent_candidate(base, user_text="rest")
+
+        self.assertEqual(matched.candidate.action, "rest")
+        self.assertEqual(matched.contract_evidence.status, "matched")
+        self.assertEqual(matched.contract_evidence.validated_manifest_digest, manifest["manifest_digest"])
+        self.assertEqual(legacy.contract_evidence.status, "legacy_unversioned")
+        self.assertEqual(legacy.contract_evidence.validated_safety_vocabulary_digest, contract["safety_vocabulary_digest"])
+        self.assertNotIn("contract", matched.candidate.to_dict())
+
+        prepared = prepare_intent_candidates(
+            self.make_entity_db(),
+            "rest",
+            external_candidate_input=ExternalCandidateInput({**base, "contract": contract}),
+        )
+        self.assertEqual(prepared.external_low_trust_candidate, matched.candidate)
+        self.assertEqual(prepared.external_contract_evidence, matched.contract_evidence)
+
+    def test_external_contract_evidence_trace_is_bounded_and_does_not_upgrade_authority(self) -> None:
+        conn = self.make_entity_db()
+        base = {
+            "kind": "single",
+            "mode": "action",
+            "action": "rest",
+            "slots": {"until": "morning"},
+            "plan": [],
+            "confidence": "high",
+            "missing_slots": [],
+            "needs_confirmation": [],
+            "safety_flags": [],
+            "reason": "low trust explanation",
+        }
+        validated = validate_external_intent_candidate(base, user_text="rest")
+        rules = normalize_intent_candidate(base, source="rules", user_text="rest")
+        result = AIIntentRouter(conn).route_candidates(
+            SimpleNamespace(),
+            "rest",
+            intent_ai_mode="off",
+            external_candidate=validated.candidate,
+            external_contract_evidence=validated.contract_evidence,
+            rule_candidate=rules,
+            rules_outcome=RouteOutcome(
+                mode="action",
+                submode="rest",
+                action="rest",
+                options={"until": "morning"},
+                source="rules",
+            ),
+            backend="off",
+            provider="test",
+            model="test",
+            timeout=3,
+        )
+
+        evidence = result.trace["external_contract"]
+        self.assertEqual(evidence["status"], "legacy_unversioned")
+        self.assertEqual(
+            set(evidence),
+            {
+                "status",
+                "validated_manifest_schema_version",
+                "validated_manifest_digest",
+                "validated_safety_vocabulary_version",
+                "validated_safety_vocabulary_digest",
+            },
+        )
+        self.assertEqual(result.trace["route_authority"], "external_primary")
+        self.assertNotIn("reason", evidence)
+        self.assertNotIn("slots", evidence)
+        self.assertNotIn("safety_flags", evidence)
+
+    def test_external_contract_mismatch_precedes_unknown_and_has_fixed_typed_error(self) -> None:
+        manifest = build_intent_manifest()
+        current_contract = {
+            "manifest_schema_version": manifest["schema_version"],
+            "manifest_digest": manifest["manifest_digest"],
+            "safety_vocabulary_version": manifest["safety_vocabulary"]["version"],
+            "safety_vocabulary_digest": manifest["safety_vocabulary"]["digest"],
+        }
+        base = {
+            "kind": "single",
+            "mode": "action",
+            "action": "rest",
+            "slots": {},
+            "plan": [],
+            "confidence": "high",
+            "missing_slots": [],
+            "needs_confirmation": [],
+            "safety_flags": ["sentinel_unknown_flag"],
+            "reason": "sentinel reason",
+        }
+        mismatches = {
+            "older_manifest_version": {**current_contract, "manifest_schema_version": "1"},
+            "newer_manifest_version": {**current_contract, "manifest_schema_version": "3"},
+            "wrong_manifest_digest": {**current_contract, "manifest_digest": "0" * 64},
+            "older_safety_version": {**current_contract, "safety_vocabulary_version": "0"},
+            "newer_safety_version": {**current_contract, "safety_vocabulary_version": "2"},
+            "wrong_safety_digest": {**current_contract, "safety_vocabulary_digest": "0" * 64},
+        }
+
+        for case, contract in mismatches.items():
+            with self.subTest(case=case):
+                with self.assertRaises(ExternalIntentContractError) as caught:
+                    normalize_external_intent_candidate(
+                        {**base, "contract": contract},
+                        user_text="sentinel user text",
+                    )
+
+                error = caught.exception
+                self.assertEqual(error.code, "INTENT_CONTRACT_VERSION_MISMATCH")
+                self.assertEqual(error.reason, "contract_version_mismatch")
+                self.assertTrue(error.retriable)
+                self.assertEqual(error.action, "refresh_manifest_and_regenerate_candidate")
+                self.assertEqual(error.path, "$.contract")
+                self.assertEqual(error.message, "External intent contract does not match the current provider.")
+                self.assertNotIn("sentinel", str(error))
+                self.assertNotIn("sentinel", repr(error))
+
+    def test_external_contract_error_count_projection_requires_bounded_exact_int(self) -> None:
+        for count in (0, 6):
+            with self.subTest(valid=count):
+                error = ExternalIntentContractError.unknown_safety_flag(count=count)
+                self.assertEqual(external_intent_contract_error_detail(error)["count"], count)
+
+        for count in (True, False, -1, 7, 1.0, "1", None):
+            with self.subTest(invalid=count):
+                error = ExternalIntentContractError.unknown_safety_flag(count=count)  # type: ignore[arg-type]
+                self.assertNotIn("count", external_intent_contract_error_detail(error))
+
+    def test_external_contract_evidence_requires_exact_bounded_identity_fields(self) -> None:
+        manifest = build_intent_manifest()
+        valid = {
+            "status": "matched",
+            "validated_manifest_schema_version": manifest["schema_version"],
+            "validated_manifest_digest": manifest["manifest_digest"],
+            "validated_safety_vocabulary_version": manifest["safety_vocabulary"]["version"],
+            "validated_safety_vocabulary_digest": manifest["safety_vocabulary"]["digest"],
+        }
+        evidence = ExternalContractEvidence(**valid)
+        self.assertEqual(evidence.to_trace_dict(), valid)
+
+        invalid_values = (
+            ("validated_manifest_schema_version", "x" * 33),
+            ("validated_manifest_schema_version", 2),
+            ("validated_manifest_digest", "A" * 64),
+            ("validated_manifest_digest", "0" * 63),
+            ("validated_safety_vocabulary_version", True),
+            ("validated_safety_vocabulary_digest", {"raw": "payload"}),
+        )
+        for field, value in invalid_values:
+            with self.subTest(field=field, value=value):
+                with self.assertRaises(ValueError):
+                    ExternalContractEvidence(**{**valid, field: value})  # type: ignore[arg-type]
+
+    def test_external_contract_shape_requires_exact_builtin_complete_values(self) -> None:
+        class StringSubclass(str):
+            pass
+
+        base = {
+            "kind": "single",
+            "mode": "action",
+            "action": "rest",
+            "slots": {},
+            "plan": [],
+            "confidence": "high",
+            "missing_slots": [],
+            "needs_confirmation": [],
+            "safety_flags": [],
+            "reason": "rest",
+        }
+        manifest = build_intent_manifest()
+        valid = {
+            "manifest_schema_version": manifest["schema_version"],
+            "manifest_digest": manifest["manifest_digest"],
+            "safety_vocabulary_version": manifest["safety_vocabulary"]["version"],
+            "safety_vocabulary_digest": manifest["safety_vocabulary"]["digest"],
+        }
+        invalid_contracts = (
+            {"manifest_schema_version": "2"},
+            {**valid, "extra": "no"},
+            {**valid, "manifest_schema_version": StringSubclass("2")},
+            {**valid, "manifest_digest": "A" * 64},
+            {**valid, "safety_vocabulary_digest": "0" * 63},
+        )
+
+        with mock.patch("rpg_engine.ai_intent.external._build_active_intent_contract") as build_active:
+            with self.assertRaises(ValueError):
+                normalize_external_intent_candidate(
+                    {**base, "contract": {"manifest_schema_version": "2"}}
+                )
+            build_active.assert_not_called()
+
+        for contract in invalid_contracts:
+            with self.subTest(contract=contract):
+                with self.assertRaises(ValueError) as caught:
+                    normalize_external_intent_candidate({**base, "contract": contract})
+                self.assertNotIsInstance(caught.exception, ExternalIntentContractError)
 
     def test_ai_candidate_normalizer_keeps_maintenance_out_of_player_modes(self) -> None:
         candidate = normalize_intent_candidate(
@@ -373,6 +715,12 @@ class AIIntentTests(unittest.TestCase):
         self.assertIn('"risk": "red"', prompt)
         self.assertIn('"player_confirmation_required": true', prompt)
         self.assertIn("允许 mode: action, query, unknown", prompt)
+        self.assertIn("Intent manifest schema_version：2", prompt)
+        self.assertIn("Safety vocabulary version：1", prompt)
+        self.assertIn(
+            "允许 safety_flags: forced_save, hidden_info, maintenance_request, out_of_world, prompt_injection, unsafe_command",
+            prompt,
+        )
         self.assertNotIn("允许 mode: action, query, maintenance", prompt)
 
     def test_internal_prompt_fails_closed_when_redaction_schema_is_missing(self) -> None:
@@ -780,6 +1128,14 @@ class AIIntentTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, expected_path):
                     normalize_external_intent_candidate({**base, "plan": plan}, user_text="休息到早上")
 
+        sentinel = "SECRET_ACTION_SENTINEL"
+        with self.assertRaises(ValueError) as caught:
+            normalize_external_intent_candidate(
+                {**base, "plan": [{"action": sentinel, "slots": {}}]},
+                user_text="休息到早上",
+            )
+        self.assertNotIn(sentinel.lower(), str(caught.exception).lower())
+
     def test_off_mode_external_primary_accepts_bound_action_without_rules_agreement(self) -> None:
         conn = self.make_entity_db()
         external = normalize_intent_candidate(
@@ -824,15 +1180,19 @@ class AIIntentTests(unittest.TestCase):
     def test_off_mode_external_primary_rejects_unsafe_unbound_unknown_and_composite(self) -> None:
         conn = self.make_entity_db()
         cases = (
-            (
-                "unsafe",
-                {"kind": "single", "mode": "action", "action": "rest", "slots": {"until": "morning"}, "safety_flags": ["forced_save"]},
-                "blocked",
-            ),
-            (
-                "maintenance_request",
-                {"kind": "single", "mode": "action", "action": "rest", "slots": {"until": "morning"}, "safety_flags": ["maintenance_request"]},
-                "blocked",
+            *(
+                (
+                    f"known_safety_{flag}",
+                    {
+                        "kind": "single",
+                        "mode": "action",
+                        "action": "rest",
+                        "slots": {"until": "morning"},
+                        "safety_flags": [flag],
+                    },
+                    "blocked",
+                )
+                for flag in sorted(SAFETY_FLAG_VALUES)
             ),
             (
                 "unknown_action",

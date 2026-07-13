@@ -16,6 +16,22 @@
     "reason"
   ],
   "properties": {
+    "contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "manifest_schema_version",
+        "manifest_digest",
+        "safety_vocabulary_version",
+        "safety_vocabulary_digest"
+      ],
+      "properties": {
+        "manifest_schema_version": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "manifest_digest": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[0-9a-f]{64}$" },
+        "safety_vocabulary_version": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "safety_vocabulary_digest": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
     "kind": { "type": "string", "enum": ["single", "composite", "query", "unresolved"] },
     "mode": { "type": "string", "enum": ["action", "query", "unknown"] },
     "action": { "type": "string" },
@@ -37,7 +53,23 @@
     "confidence": { "type": "string", "enum": ["high", "medium", "low"] },
     "missing_slots": { "type": "array", "items": { "type": "string" } },
     "needs_confirmation": { "type": "array", "items": { "type": "string" } },
-    "safety_flags": { "type": "array", "items": { "type": "string" } },
+    "safety_flags": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 6,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": [
+          "forced_save",
+          "hidden_info",
+          "maintenance_request",
+          "out_of_world",
+          "prompt_injection",
+          "unsafe_command"
+        ]
+      }
+    },
     "reason": { "type": "string" },
     "source": { "type": "string" },
     "source_user_text": { "type": "string" }

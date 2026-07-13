@@ -10,21 +10,39 @@ from .ai_intent.slot_contract import (
     AI_SUPPLIED_CONFIRMATION_SLOTS,
     SLOT_ALIASES,
 )
-from .ai_intent.risk import ACTION_BASE_RISK, BLOCKING_SAFETY_FLAGS
+from .ai_intent.risk import ACTION_BASE_RISK
+from .ai_intent.safety_contract import (
+    ALLOW_LEGACY_UNVERSIONED_EXTERNAL_CANDIDATE,
+    SAFETY_FLAG_VALUES,
+    SAFETY_VOCABULARY_DIGEST,
+    SAFETY_VOCABULARY_VERSION,
+    canonical_json_sha256,
+)
 from .capabilities import ACTION_CAPABILITIES
 
 
-MANIFEST_SCHEMA_VERSION = "1"
+MANIFEST_SCHEMA_VERSION = "2"
 QUERY_KINDS = ("scene", "entity", "context")
+CONTRACT_FIELDS = (
+    "manifest_schema_version",
+    "manifest_digest",
+    "safety_vocabulary_version",
+    "safety_vocabulary_digest",
+)
 
 
 def build_intent_manifest(registry: ActionResolverRegistry | None = None) -> dict[str, Any]:
     """Build the kernel-owned machine-readable action/query contract."""
     action_registry = registry or get_default_action_registry()
-    return {
+    payload = {
         "schema_version": MANIFEST_SCHEMA_VERSION,
         "generated_by": "kernel",
         "modes": ("query", "action", "unknown"),
+        "safety_vocabulary": {
+            "version": SAFETY_VOCABULARY_VERSION,
+            "digest": SAFETY_VOCABULARY_DIGEST,
+            "values": tuple(sorted(SAFETY_FLAG_VALUES)),
+        },
         "candidate_shape": {
             "required_fields": (
                 "kind",
@@ -40,7 +58,14 @@ def build_intent_manifest(registry: ActionResolverRegistry | None = None) -> dic
             ),
             "action_names": tuple(action_registry.names()),
             "query_kinds": QUERY_KINDS,
-            "safety_flags": tuple(sorted(BLOCKING_SAFETY_FLAGS)),
+            "safety_flags": tuple(sorted(SAFETY_FLAG_VALUES)),
+            "contract": {
+                "required": False,
+                "all_or_nothing": True,
+                "additional_properties": False,
+                "legacy_unversioned_allowed": ALLOW_LEGACY_UNVERSIONED_EXTERNAL_CANDIDATE,
+                "required_fields_when_present": CONTRACT_FIELDS,
+            },
         },
         "actions": [action_manifest(spec) for spec in action_registry.all()],
         "queries": [query_manifest(kind) for kind in QUERY_KINDS],
@@ -48,6 +73,11 @@ def build_intent_manifest(registry: ActionResolverRegistry | None = None) -> dic
             "rule": "context",
             "default": "entity",
         },
+    }
+    return {
+        "schema_version": payload["schema_version"],
+        "manifest_digest": canonical_json_sha256(payload),
+        **{key: value for key, value in payload.items() if key != "schema_version"},
     }
 
 

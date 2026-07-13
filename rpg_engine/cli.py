@@ -7,6 +7,8 @@ from typing import Any
 
 from .audit import run_audit
 from .archivist import run_archivist_workflow, suggest_archivist
+from .ai_intent import ExternalIntentContractError
+from .ai_intent.safety_contract import external_intent_contract_error_dict
 from .backup import create_backup, list_backups, render_backup_list, restore_backup
 from .campaign import load_campaign
 from .commit_service import commit_turn_delta
@@ -705,49 +707,58 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "context":
-        campaign = load_campaign(args.campaign_dir)
-        with connect(campaign) as conn:
-            if args.context_type == "build":
-                packet = build_context(
-                    campaign,
-                    conn,
-                    user_text=resolve_user_text_arg(args),
-                    mode=args.mode,
-                    submode=args.submode,
-                    budget=args.budget,
-                    output_format=args.format,
-                    max_events=args.max_events,
-                    max_depth=args.max_depth,
-                    include_palettes=args.include_palettes,
-                    debug=args.debug,
-                    semantic_ai=args.semantic_ai,
-                    semantic_model=args.semantic_model,
-                    semantic_provider=args.semantic_provider,
-                    semantic_timeout=args.semantic_timeout,
-                    intent_ai=args.intent_ai,
-                    intent_backend=args.intent_backend,
-                    intent_provider=args.intent_provider,
-                    intent_model=args.intent_model,
-                    intent_timeout=args.intent_timeout,
-                    intent_base_url=args.intent_base_url,
-                    intent_api_key_env=args.intent_api_key_env,
-                    intent_fallback_backend=args.intent_fallback_backend,
-                    external_intent_candidate=load_json_object_arg(
-                        args.external_intent_candidate,
-                        label="--external-intent-candidate",
-                    ),
-                    preflight_id=args.preflight_id,
-                    message_id=args.message_id,
-                    platform=args.platform,
-                    session_key=args.session_key,
-                    source_user_text_hash=args.source_user_text_hash,
-                    audit_context=args.audit_context,
-                    audit_context_run_id=args.context_run_id,
-                )
-                if args.format == "json":
-                    print(packet.to_json_text())
-                else:
-                    print(packet.markdown, end="")
+        try:
+            campaign = load_campaign(args.campaign_dir)
+            with connect(campaign) as conn:
+                if args.context_type == "build":
+                    packet = build_context(
+                        campaign,
+                        conn,
+                        user_text=resolve_user_text_arg(args),
+                        mode=args.mode,
+                        submode=args.submode,
+                        budget=args.budget,
+                        output_format=args.format,
+                        max_events=args.max_events,
+                        max_depth=args.max_depth,
+                        include_palettes=args.include_palettes,
+                        debug=args.debug,
+                        semantic_ai=args.semantic_ai,
+                        semantic_model=args.semantic_model,
+                        semantic_provider=args.semantic_provider,
+                        semantic_timeout=args.semantic_timeout,
+                        intent_ai=args.intent_ai,
+                        intent_backend=args.intent_backend,
+                        intent_provider=args.intent_provider,
+                        intent_model=args.intent_model,
+                        intent_timeout=args.intent_timeout,
+                        intent_base_url=args.intent_base_url,
+                        intent_api_key_env=args.intent_api_key_env,
+                        intent_fallback_backend=args.intent_fallback_backend,
+                        external_intent_candidate=load_json_object_arg(
+                            args.external_intent_candidate,
+                            label="--external-intent-candidate",
+                        ),
+                        preflight_id=args.preflight_id,
+                        message_id=args.message_id,
+                        platform=args.platform,
+                        session_key=args.session_key,
+                        source_user_text_hash=args.source_user_text_hash,
+                        audit_context=args.audit_context,
+                        audit_context_run_id=args.context_run_id,
+                    )
+                    if args.format == "json":
+                        print(packet.to_json_text())
+                    else:
+                        print(packet.markdown, end="")
+        except ExternalIntentContractError as exc:
+            if args.format == "json":
+                print_json(external_intent_contract_error_dict(exc))
+            else:
+                print("FAILED")
+                print(f"- error: {exc.message}")
+                print(f"- action: {exc.action}")
+            return 1
         return 0
 
     if args.command == "memory":

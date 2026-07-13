@@ -267,6 +267,169 @@ class MCPAdapterTests(unittest.TestCase):
             self.assertNotIn("turn_proposal", result)
             self.assertEqual(sqlite_counts(save_dir), before_counts)
 
+    def test_mcp_external_contract_errors_are_canonical_redacted_and_no_write(self) -> None:
+        sentinels = {
+            "flag": "FLAG_SENTINEL_7f1d9c",
+            "reason": "REASON_SENTINEL_7f1d9c",
+            "slot": "SLOT_SENTINEL_7f1d9c",
+            "user": "USER_SENTINEL_7f1d9c",
+            "session": "SESSION_SENTINEL_7f1d9c",
+            "provider_body": "PROVIDER_BODY_SENTINEL_7f1d9c",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            campaign_dir = root / "campaigns" / "minimal"
+            shutil.copytree(MINIMAL_FIXTURE, campaign_dir)
+            adapter = AIGMMCPAdapter(
+                MCPAdapterConfig.from_values(
+                    root,
+                    default_campaign="campaigns/minimal",
+                    registry_active=True,
+                    mcp_profile="developer",
+                )
+            )
+            entry = adapter.start_or_continue(campaign="campaigns/minimal")
+            save_dir = root / str(entry["save"]["path"])
+            before_counts = sqlite_counts(save_dir)
+            unknown = {
+                "kind": "single",
+                "mode": "action",
+                "action": "rest",
+                "slots": {"note": sentinels["slot"]},
+                "plan": [],
+                "confidence": "high",
+                "missing_slots": [],
+                "needs_confirmation": [],
+                "safety_flags": [sentinels["flag"]],
+                "reason": sentinels["reason"],
+                "source": sentinels["provider_body"],
+            }
+            stale = {
+                **unknown,
+                "contract": {
+                    "manifest_schema_version": "1",
+                    "manifest_digest": "0" * 64,
+                    "safety_vocabulary_version": "1",
+                    "safety_vocabulary_digest": "0" * 64,
+                },
+            }
+
+            operations = {
+                "player_turn": lambda candidate: adapter.player_turn(
+                    sentinels["user"],
+                    external_intent_candidate=candidate,
+                    platform="qq",
+                    session_key=sentinels["session"],
+                ),
+                "start_turn": lambda candidate: adapter.start_turn(
+                    sentinels["user"],
+                    external_intent_candidate=candidate,
+                    platform="qq",
+                    session_key=sentinels["session"],
+                ),
+                "preview_from_text": lambda candidate: adapter.preview_from_text(
+                    sentinels["user"],
+                    external_intent_candidate=candidate,
+                    platform="qq",
+                    session_key=sentinels["session"],
+                ),
+                "intent_preflight": lambda candidate: adapter.intent_preflight(
+                    sentinels["user"],
+                    external_intent_candidate=candidate,
+                    platform="qq",
+                    session_key=sentinels["session"],
+                ),
+            }
+            expected = {
+                "unknown": {
+                    "code": "UNKNOWN_INTENT_SAFETY_FLAG",
+                    "reason": "unknown_safety_flag",
+                    "retriable": False,
+                    "action": "regenerate_candidate",
+                    "path": "$.safety_flags",
+                    "message": "External intent candidate contains unsupported safety flags.",
+                    "count": 1,
+                },
+                "mismatch": {
+                    "code": "INTENT_CONTRACT_VERSION_MISMATCH",
+                    "reason": "contract_version_mismatch",
+                    "retriable": True,
+                    "action": "refresh_manifest_and_regenerate_candidate",
+                    "path": "$.contract",
+                    "message": "External intent contract does not match the current provider.",
+                },
+            }
+
+            with mock.patch("rpg_engine.ai_intent.router.collect_internal_intent_candidate") as helper:
+                for case, candidate in (("unknown", unknown), ("mismatch", stale)):
+                    for surface, operation in operations.items():
+                        with self.subTest(case=case, surface=surface):
+                            result = operation(candidate)
+                            self.assertFalse(result["ok"], result)
+                            self.assertEqual(result["errors"], [expected[case]["message"]])
+                            self.assertEqual(result["error_details"], [expected[case]])
+                            wire = json.dumps(result, ensure_ascii=False)
+                            for sentinel in sentinels.values():
+                                self.assertNotIn(sentinel, wire)
+                helper.assert_not_called()
+
+            self.assertEqual(sqlite_counts(save_dir), before_counts)
+            self.assertFalse((root / ".aigm" / "pending-player-action.json").exists())
+            audit_text = (root / "logs" / "aigm-mcp-audit.jsonl").read_text(encoding="utf-8")
+            for sentinel in sentinels.values():
+                self.assertNotIn(sentinel, audit_text)
+
+    def test_mcp_exact_contract_from_live_manifest_reaches_matched_route_trace(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            campaign_dir = root / "campaigns" / "minimal"
+            shutil.copytree(MINIMAL_FIXTURE, campaign_dir)
+            adapter = AIGMMCPAdapter(
+                MCPAdapterConfig.from_values(
+                    root,
+                    default_campaign="campaigns/minimal",
+                    registry_active=True,
+                    mcp_profile="developer",
+                )
+            )
+            adapter.start_or_continue(campaign="campaigns/minimal")
+            manifest = adapter.intent_manifest()
+            candidate = {
+                "contract": {
+                    "manifest_schema_version": manifest["schema_version"],
+                    "manifest_digest": manifest["manifest_digest"],
+                    "safety_vocabulary_version": manifest["safety_vocabulary"]["version"],
+                    "safety_vocabulary_digest": manifest["safety_vocabulary"]["digest"],
+                },
+                "kind": "single",
+                "mode": "action",
+                "action": "rest",
+                "slots": {"until": "morning"},
+                "plan": [],
+                "confidence": "high",
+                "missing_slots": [],
+                "needs_confirmation": [],
+                "safety_flags": [],
+                "reason": "live manifest exact match",
+            }
+
+            result = adapter.start_turn(
+                "休息到早上",
+                intent_ai="off",
+                external_intent_candidate=candidate,
+            )
+
+            self.assertTrue(result["can_proceed"], result)
+            intent_trace = result["decision_trace"]["intent_ai"]
+            evidence = intent_trace["external_contract"]
+            self.assertEqual(evidence["status"], "matched")
+            self.assertEqual(evidence["validated_manifest_digest"], manifest["manifest_digest"])
+            self.assertEqual(
+                evidence["validated_safety_vocabulary_digest"],
+                manifest["safety_vocabulary"]["digest"],
+            )
+            self.assertEqual(intent_trace["route_authority"], "external_primary")
+
     def test_mcp_adapter_player_entry_and_registry_active_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

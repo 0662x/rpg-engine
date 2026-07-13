@@ -4,6 +4,7 @@ from typing import Any
 
 from ..actions import get_default_action_registry
 from ..context.rendering import trim_inline
+from .safety_contract import SAFETY_FLAG_VALUES
 from .types import CandidateStep, InternalIntentReview, IntentCandidate
 
 
@@ -12,16 +13,6 @@ MODE_VALUES = {"action", "query", "unknown"}
 CONFIDENCE_VALUES = {"high", "medium", "low"}
 AGREEMENT_VALUES = {"agree", "partial", "disagree", "no_external"}
 EXTERNAL_QUALITY_VALUES = {"usable", "incomplete", "unsafe", "wrong_action", "wrong_mode", "no_external"}
-SAFETY_FLAG_VALUES = {
-    "prompt_injection",
-    "out_of_world",
-    "forced_save",
-    "hidden_info",
-    "maintenance_request",
-    "unsafe_command",
-}
-
-
 def normalize_intent_candidate_dict(value: dict[str, Any], *, source: str = "unknown", user_text: str = "") -> dict[str, Any]:
     return normalize_intent_candidate(value, source=source, user_text=user_text).to_dict()
 

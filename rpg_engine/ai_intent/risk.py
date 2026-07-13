@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from .safety_contract import SAFETY_FLAG_VALUES
 from .types import BoundIntent, IntentCandidate, RouteOutcome
 
 
@@ -23,14 +24,7 @@ ACTION_BASE_RISK = {
     "combat": RED,
 }
 
-BLOCKING_SAFETY_FLAGS = {
-    "prompt_injection",
-    "out_of_world",
-    "forced_save",
-    "hidden_info",
-    "maintenance_request",
-    "unsafe_command",
-}
+BLOCKING_SAFETY_FLAGS = SAFETY_FLAG_VALUES
 
 
 @dataclass(frozen=True)

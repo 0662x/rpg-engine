@@ -266,6 +266,37 @@ queue、content/save apply、provider、validation/commit owner；application el
 重新运行对应 validation/reference/visibility 与 commit/maintenance gate。Proposal queue lifecycle/report 属于后续
 Story 5.7，不得在本 gate 中通过 production hook 或 queue integration 实现。
 
+External intent contract v2 / safety v1 focused gate：
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q \
+  tests/test_intent_manifest.py \
+  tests/test_ai_intent.py \
+  tests/test_ai_helper.py \
+  tests/test_runtime.py \
+  tests/test_context_quality.py \
+  tests/test_current_native_context.py \
+  tests/test_mcp_adapter.py \
+  tests/test_preflight_cache.py \
+  tests/test_platform_prewarm.py \
+  tests/test_platform_ai_simulation.py \
+  tests/test_platform_sidecar.py \
+  tests/test_save_manager.py \
+  tests/test_v1_cli.py \
+  tests/test_bug_report_regressions.py \
+  tests/test_surface_inventory.py \
+  tests/test_eval_suite.py \
+  tests/test_mcp_transcript.py \
+  tests/test_current_native_player_turn.py \
+  -p no:cacheprovider
+```
+
+该 gate 必须覆盖 manifest v2/safety v1 canonical digest 与 schema parity、不同 `PYTHONHASHSEED` 的跨进程
+wire 稳定性、exact/legacy envelope、old/new/wrong-digest rolling skew、stale-before-unknown precedence、external
+strict/internal tolerant 行为、所有 direct Runtime/SaveManager 入口 typed propagation，以及 MCP/V1/legacy CLI 的
+固定脱敏投影。失败必须发生在 helper/route/preview/cache/new pending/fact write 前；contract evidence 只进入 bounded
+trace，不能提升 authority。Story 6.2 taxonomy projection 与 Hermes reconnect/next-model-turn/E2E 不由本 gate 代替。
+
 Surface / intent 基线材料：
 
 - `tests/fixtures/intent_router_gold_set.yaml`

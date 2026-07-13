@@ -1548,6 +1548,155 @@ class V1CliTests(unittest.TestCase):
             self.assertEqual(commit["turn_id"], "turn:000001")
             self.assertEqual(current_turn(save_dir), "turn:000001")
 
+    def test_external_contract_failures_are_safe_on_v1_cli_surfaces(self) -> None:
+        sentinel = "secret-external-safety-token"
+        user_text = "secret-user-request"
+        base = {
+            "kind": "single",
+            "mode": "action",
+            "action": "rest",
+            "slots": {"until": "morning"},
+            "plan": [],
+            "confidence": "high",
+            "missing_slots": [],
+            "needs_confirmation": [],
+            "safety_flags": [sentinel],
+            "reason": "test external contract boundary",
+        }
+        candidates = {
+            "unknown": base,
+            "mismatch": {
+                **base,
+                "contract": {
+                    "manifest_schema_version": "1",
+                    "manifest_digest": "0" * 64,
+                    "safety_vocabulary_version": "1",
+                    "safety_vocabulary_digest": "0" * 64,
+                },
+            },
+        }
+        expected_details = {
+            "unknown": {
+                "code": "UNKNOWN_INTENT_SAFETY_FLAG",
+                "reason": "unknown_safety_flag",
+                "retriable": False,
+                "action": "regenerate_candidate",
+                "path": "$.safety_flags",
+                "message": "External intent candidate contains unsupported safety flags.",
+                "count": 1,
+            },
+            "mismatch": {
+                "code": "INTENT_CONTRACT_VERSION_MISMATCH",
+                "reason": "contract_version_mismatch",
+                "retriable": True,
+                "action": "refresh_manifest_and_regenerate_candidate",
+                "path": "$.contract",
+                "message": "External intent contract does not match the current provider.",
+            },
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            save_dir = root / "save"
+            workspace = root / "workspace"
+            shutil.copytree(MINIMAL_FIXTURE, workspace / "campaigns" / "minimal")
+            run_cli("save", "init", MINIMAL_FIXTURE, save_dir, "--format", "json")
+            started = load_stdout_json(
+                run_cli(
+                    "player",
+                    "start",
+                    workspace,
+                    "--campaign",
+                    "campaigns/minimal",
+                    "--format",
+                    "json",
+                )
+            )
+            active_save = workspace / str(started["save"]["path"])
+            save_before = tree_digest(save_dir)
+            active_save_before = tree_digest(active_save)
+
+            for case, candidate_value in candidates.items():
+                candidate = json.dumps(candidate_value)
+                expected_detail = expected_details[case]
+                commands = (
+                    (
+                        "play",
+                        "start-turn",
+                        save_dir,
+                        "--user-text",
+                        user_text,
+                        "--external-intent-candidate",
+                        candidate,
+                        "--format",
+                        "json",
+                    ),
+                    (
+                        "play",
+                        "preflight",
+                        save_dir,
+                        "--user-text",
+                        user_text,
+                        "--external-intent-candidate",
+                        candidate,
+                        "--format",
+                        "json",
+                    ),
+                    (
+                        "play",
+                        "act",
+                        save_dir,
+                        user_text,
+                        "--external-intent-candidate",
+                        candidate,
+                        "--format",
+                        "json",
+                    ),
+                    (
+                        "player",
+                        "turn",
+                        workspace,
+                        user_text,
+                        "--external-intent-candidate",
+                        candidate,
+                        "--format",
+                        "json",
+                    ),
+                )
+                for command in commands:
+                    with self.subTest(case=case, command=command[:2]):
+                        result = run_cli(*command, check=False)
+                        data = load_stdout_json(result)
+
+                        self.assertEqual(result.returncode, 1)
+                        self.assertEqual(data["ok"], False)
+                        self.assertEqual(data["error_details"], [expected_detail])
+                        combined = result.stdout + result.stderr
+                        self.assertNotIn(sentinel, combined)
+                        self.assertNotIn(user_text, combined)
+                        self.assertNotIn("Traceback", combined)
+
+                human = run_cli(
+                    "play",
+                    "start-turn",
+                    save_dir,
+                    "--user-text",
+                    user_text,
+                    "--external-intent-candidate",
+                    candidate,
+                    check=False,
+                )
+
+                self.assertEqual(human.returncode, 1)
+                self.assertIn("FAILED", human.stdout)
+                self.assertIn(expected_detail["message"], human.stdout)
+                self.assertIn(expected_detail["action"], human.stdout)
+                self.assertNotIn(sentinel, human.stdout + human.stderr)
+                self.assertNotIn(user_text, human.stdout + human.stderr)
+                self.assertNotIn("Traceback", human.stdout + human.stderr)
+            self.assertEqual(tree_digest(save_dir), save_before)
+            self.assertEqual(tree_digest(active_save), active_save_before)
+            self.assertFalse((workspace / ".aigm" / "pending-player-action.json").exists())
+
     def test_random_table_preview_rejects_table_and_dice_without_delta(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             save_dir = Path(tmp) / "save"

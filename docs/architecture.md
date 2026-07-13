@@ -206,7 +206,11 @@ create/status/allowed transitions/apply/revert/batch/report 仍完整属于 Stor
 关键模块：
 
 - `intent_router.py`：外层兼容/规则候选/`ActionIntent` facade，负责候选准备、配置和请求元数据。
-- `intent_manifest.py`：声明可用意图和动作能力。
+- `intent_manifest.py`：发布 manifest v2、完整 contract digest、versioned safety projection 与可用意图/动作能力。
+- `ai_intent/safety_contract.py`：唯一持有 safety vocabulary v1、canonical digest、compatibility policy、
+  typed contract error 与安全公开投影。
+- `ai_intent/external.py`：共享 external ingress；先验证 contract identity，再严格验证 raw safety token，
+  最后才进入 schema、registry 与 tolerant domain normalization。
 - `ai_intent/router.py`：`AIIntentRouter`，实际 AI 意图链协调者。
 - `ai_intent/adapters.py`：外部候选适配。
 - `ai_intent/arbiter.py`：候选裁决。
@@ -218,6 +222,13 @@ create/status/allowed transitions/apply/revert/batch/report 仍完整属于 Stor
 设计约束：
 
 - AI 可以提供候选和解释，不能直接提交状态。
+- External candidate 可整体省略 contract 进入显式 `legacy_unversioned` compatibility window；一旦提供
+  contract，四个 identity 字段必须完整匹配当前 manifest v2 / safety v1。未知 safety token fail closed，
+  compatibility 不能把它放行。
+- Contract match 只产生 bounded `matched | legacy_unversioned` validation evidence，不提升 route、hidden、
+  confirmation、proposal、validation 或 commit authority。
+- Direct Python/Runtime/SaveManager 传播 `ExternalIntentContractError(ValueError)`；只有 MCP、V1 CLI 与
+  legacy `context build` command boundary 将它投影为固定、脱敏的 public error detail。
 - `external_primary` 只表示 internal intent AI 显式 `off` 时通过 Kernel 校验的 route proposal；它不授予
   fact、hidden、player confirmation、proposal approval、validation 或 commit authority。
 - 规则候选、AI 候选和外部候选必须保留来源信息，便于审计与回放。
@@ -228,6 +239,9 @@ create/status/allowed transitions/apply/revert/batch/report 仍完整属于 Stor
 - 澄清循环要防止无限循环和错误提交。
 - timeout 是 execution control，不是 route、fact、permission、confirmation 或 commit authority。
 - preflight cache 可能包含原始玩家输入、platform/session/message 标识、internal review 和 helper audit，不能作为公开诊断材料提交。
+- RPG Engine 负责 provider-side manifest/safety contract 和 shared ingress；action taxonomy digest 的后续
+  演进属于 Story 6.2。Hermes 负责消费 manifest、在 mismatch 后 refresh 并重新生成候选；Hermes reconnect、
+  next-model-turn barrier 与跨仓 E2E 不由 RPG Engine 6.1 实现。
 
 ## 预览、提案与写入链
 

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -10,6 +12,7 @@ from pathlib import Path
 
 ENGINE_ROOT = Path(__file__).resolve().parents[1]
 SMALL_CN = ENGINE_ROOT / "examples" / "small_cn_campaign"
+MINIMAL_FIXTURE = ENGINE_ROOT / "tests" / "fixtures" / "minimal_campaign"
 
 
 def run_cli(*args: object, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -23,6 +26,116 @@ def run_cli(*args: object, check: bool = True) -> subprocess.CompletedProcess[st
 
 
 class BugReportRegressionTests(unittest.TestCase):
+    def test_context_build_external_contract_failure_is_safe_and_does_not_audit(self) -> None:
+        sentinel = "secret-context-safety-token"
+        user_text = "secret-context-user-request"
+        base = {
+            "kind": "single",
+            "mode": "query",
+            "action": "query",
+            "slots": {},
+            "plan": [],
+            "confidence": "high",
+            "missing_slots": [],
+            "needs_confirmation": [],
+            "safety_flags": [sentinel],
+            "reason": "test legacy context boundary",
+        }
+        cases = {
+            "unknown": (
+                base,
+                {
+                    "code": "UNKNOWN_INTENT_SAFETY_FLAG",
+                    "reason": "unknown_safety_flag",
+                    "retriable": False,
+                    "action": "regenerate_candidate",
+                    "path": "$.safety_flags",
+                    "message": "External intent candidate contains unsupported safety flags.",
+                    "count": 1,
+                },
+            ),
+            "mismatch": (
+                {
+                    **base,
+                    "contract": {
+                        "manifest_schema_version": "1",
+                        "manifest_digest": "0" * 64,
+                        "safety_vocabulary_version": "1",
+                        "safety_vocabulary_digest": "0" * 64,
+                    },
+                },
+                {
+                    "code": "INTENT_CONTRACT_VERSION_MISMATCH",
+                    "reason": "contract_version_mismatch",
+                    "retriable": True,
+                    "action": "refresh_manifest_and_regenerate_candidate",
+                    "path": "$.contract",
+                    "message": "External intent contract does not match the current provider.",
+                },
+            ),
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            save_dir = Path(tmp) / "save"
+            shutil.copytree(MINIMAL_FIXTURE, Path(tmp) / "source")
+            run_cli("save", "init", Path(tmp) / "source", save_dir, "--format", "json")
+            conn = sqlite3.connect(save_dir / "data" / "game.sqlite")
+            try:
+                counts_before = {
+                    table: conn.execute(f"select count(*) from {table}").fetchone()[0]
+                    for table in ("facts", "events", "turns", "context_runs")
+                }
+            finally:
+                conn.close()
+
+            for case, (candidate_value, expected_detail) in cases.items():
+                candidate = json.dumps(candidate_value)
+                json_result = run_cli(
+                    "context",
+                    "build",
+                    save_dir,
+                    "--user-text",
+                    user_text,
+                    "--external-intent-candidate",
+                    candidate,
+                    "--format",
+                    "json",
+                    check=False,
+                )
+                human_result = run_cli(
+                    "context",
+                    "build",
+                    save_dir,
+                    "--user-text",
+                    user_text,
+                    "--external-intent-candidate",
+                    candidate,
+                    check=False,
+                )
+
+                with self.subTest(case=case):
+                    data = json.loads(json_result.stdout)
+                    self.assertEqual(json_result.returncode, 1)
+                    self.assertEqual(data["ok"], False)
+                    self.assertEqual(data["error_details"], [expected_detail])
+                    self.assertEqual(human_result.returncode, 1)
+                    self.assertIn("FAILED", human_result.stdout)
+                    self.assertIn(str(expected_detail["action"]), human_result.stdout)
+                    for result in (json_result, human_result):
+                        combined = result.stdout + result.stderr
+                        self.assertNotIn(sentinel, combined)
+                        self.assertNotIn(user_text, combined)
+                        self.assertNotIn("Traceback", combined)
+
+            conn = sqlite3.connect(save_dir / "data" / "game.sqlite")
+            try:
+                counts_after = {
+                    table: conn.execute(f"select count(*) from {table}").fetchone()[0]
+                    for table in counts_before
+                }
+            finally:
+                conn.close()
+            self.assertEqual(counts_after, counts_before)
+
     def test_user_text_file_handles_chinese_punctuation_next_to_ascii_tokens(self) -> None:
         user_text = "让夏娃启动菌丝从L7泉眼引水自动灌溉十六畦农田。派腐工蕈去菌丝复合屋取小杂鱼和溪虾，送到厨房做成菜"
         with tempfile.TemporaryDirectory() as tmp:

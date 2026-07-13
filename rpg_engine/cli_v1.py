@@ -19,6 +19,8 @@ from .ai.defaults import (
     DEFAULT_STATE_AUDIT_TIMEOUT_SECONDS,
 )
 from .ai.config import AI_HELPER_BACKENDS, AI_HELPER_FALLBACK_BACKENDS, AI_PROFILES
+from .ai_intent import ExternalIntentContractError
+from .ai_intent.safety_contract import external_intent_contract_error_dict
 from .campaign import load_campaign
 from .campaign_validation import render_campaign_test, render_campaign_validation, run_campaign_smoke_tests, validate_campaign_package
 from .cli_text import add_user_text_external_source_args, add_user_text_source_args, resolve_user_text_arg
@@ -860,17 +862,17 @@ def handle_play(args: argparse.Namespace) -> int:
     if args.play_type == "start-turn":
         try:
             user_text = resolve_user_text_arg(args)
-        except ValueError as exc:
+            result = runtime.start_turn(
+                user_text,
+                mode=args.mode,
+                submode=args.submode,
+                budget=args.budget,
+                max_events=args.max_events,
+                max_depth=args.max_depth,
+                **intent_preview_kwargs_from_args(args),
+            )
+        except (ExternalIntentContractError, ValueError) as exc:
             return print_failure(exc, args.format)
-        result = runtime.start_turn(
-            user_text,
-            mode=args.mode,
-            submode=args.submode,
-            budget=args.budget,
-            max_events=args.max_events,
-            max_depth=args.max_depth,
-            **intent_preview_kwargs_from_args(args),
-        )
         if args.format == "json":
             print(result.to_json_text(), end="")
         else:
@@ -879,12 +881,12 @@ def handle_play(args: argparse.Namespace) -> int:
     if args.play_type == "preflight":
         try:
             user_text = resolve_user_text_arg(args)
-        except ValueError as exc:
+            result = runtime.preflight_intent(
+                user_text,
+                **intent_preflight_kwargs_from_args(args),
+            )
+        except (ExternalIntentContractError, ValueError) as exc:
             return print_failure(exc, args.format)
-        result = runtime.preflight_intent(
-            user_text,
-            **intent_preflight_kwargs_from_args(args),
-        )
         if args.format == "json":
             print(result.to_json_text(), end="")
         else:
@@ -906,14 +908,14 @@ def handle_play(args: argparse.Namespace) -> int:
     if args.play_type == "act":
         try:
             user_text = resolve_user_text_arg(args)
-        except ValueError as exc:
+            result = runtime.act(
+                user_text,
+                view=args.view,
+                auto_confirm_low_risk=args.auto_confirm_low_risk,
+                **intent_preview_kwargs_from_args(args),
+            )
+        except (ExternalIntentContractError, ValueError) as exc:
             return print_failure(exc, args.format)
-        result = runtime.act(
-            user_text,
-            view=args.view,
-            auto_confirm_low_risk=args.auto_confirm_low_risk,
-            **intent_preview_kwargs_from_args(args),
-        )
         if args.format == "json":
             print(result.to_json_text(), end="")
         else:
@@ -1435,6 +1437,14 @@ def print_json(data: dict[str, Any]) -> None:
 
 
 def print_failure(exc: Exception, output_format: str) -> int:
+    if isinstance(exc, ExternalIntentContractError):
+        if output_format == "json":
+            print_json(external_intent_contract_error_dict(exc))
+        else:
+            print("FAILED")
+            print(f"- error: {exc.message}")
+            print(f"- action: {exc.action}")
+        return 1
     if output_format == "json":
         print_json({"ok": False, "errors": [str(exc)]})
     else:

@@ -28,6 +28,7 @@ from .binder import bind_intent_candidate
 from .internal_review import collect_internal_intent_candidate
 from .normalization import normalize_intent_candidate
 from .risk import RED, assess_rules_fallback
+from .safety_contract import ExternalContractEvidence
 from .types import BoundIntent, ConsensusDecision, IntentCandidate, RouteOutcome
 
 if TYPE_CHECKING:
@@ -90,6 +91,7 @@ class AIIntentRouter:
         *,
         intent_ai_mode: str,
         external_candidate: IntentCandidate | dict[str, Any] | None,
+        external_contract_evidence: ExternalContractEvidence | None = None,
         rule_candidate: IntentCandidate | dict[str, Any],
         rules_outcome: RouteOutcome | None = None,
         backend: str,
@@ -279,6 +281,11 @@ class AIIntentRouter:
                 allow_record=preflight_provenance_allowed,
             ),
             "external_candidate": external.to_dict() if external else None,
+            "external_contract": (
+                external_contract_evidence.to_trace_dict()
+                if external is not None and external_contract_evidence is not None
+                else None
+            ),
             "internal_candidate": internal_candidate.to_dict() if internal_candidate else None,
             "internal_review": summarize_internal_review_metadata(internal_review_metadata),
             "internal_helper": summarize_ai_helper_result(internal_helper),

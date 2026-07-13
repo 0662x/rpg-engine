@@ -1,18 +1,68 @@
 from __future__ import annotations
 
+from copy import deepcopy
+import hashlib
+import json
+import os
+import subprocess
+import sys
 import unittest
 
+from rpg_engine.ai_intent import arbiter, normalization, risk
 from rpg_engine.ai_intent.risk import ACTION_BASE_RISK
+from rpg_engine.ai_intent.safety_contract import (
+    ALLOW_LEGACY_UNVERSIONED_EXTERNAL_CANDIDATE,
+    ActiveIntentContract,
+    ExternalIntentContractError,
+    SAFETY_FLAG_VALUES,
+    SAFETY_VOCABULARY_DIGEST,
+    SAFETY_VOCABULARY_VERSION,
+    canonical_json_sha256,
+)
+from rpg_engine.ai_intent.external import validate_external_intent_candidate
 from rpg_engine.ai_intent.slot_contract import ACTION_REQUIRED_SLOTS, AI_SUPPLIED_CONFIRMATION_SLOTS
 from rpg_engine.capabilities import ACTION_CAPABILITIES
 from rpg_engine.intent_manifest import QUERY_KINDS, build_intent_manifest
+from rpg_engine.resource_paths import schema_resource_text
 
 
 class IntentManifestTests(unittest.TestCase):
+    def test_safety_contract_is_canonical_immutable_and_digest_is_reproducible(self) -> None:
+        expected_values = (
+            "forced_save",
+            "hidden_info",
+            "maintenance_request",
+            "out_of_world",
+            "prompt_injection",
+            "unsafe_command",
+        )
+        payload = {
+            "version": SAFETY_VOCABULARY_VERSION,
+            "values": list(expected_values),
+        }
+        canonical = json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+
+        self.assertIsInstance(SAFETY_FLAG_VALUES, frozenset)
+        self.assertEqual(tuple(sorted(SAFETY_FLAG_VALUES)), expected_values)
+        self.assertEqual(SAFETY_VOCABULARY_VERSION, "1")
+        self.assertEqual(SAFETY_VOCABULARY_DIGEST, hashlib.sha256(canonical).hexdigest())
+        self.assertTrue(ALLOW_LEGACY_UNVERSIONED_EXTERNAL_CANDIDATE)
+
+    def test_all_runtime_safety_aliases_reference_the_canonical_value(self) -> None:
+        self.assertIs(normalization.SAFETY_FLAG_VALUES, SAFETY_FLAG_VALUES)
+        self.assertIs(risk.BLOCKING_SAFETY_FLAGS, SAFETY_FLAG_VALUES)
+        self.assertIs(arbiter.BLOCKER_SAFETY_FLAGS, SAFETY_FLAG_VALUES)
+
     def test_manifest_lists_all_registered_actions_and_query_kinds(self) -> None:
         manifest = build_intent_manifest()
 
-        self.assertEqual(manifest["schema_version"], "1")
+        self.assertEqual(manifest["schema_version"], "2")
         self.assertEqual(manifest["generated_by"], "kernel")
         self.assertEqual(
             [action["name"] for action in manifest["actions"]],
@@ -21,6 +71,152 @@ class IntentManifestTests(unittest.TestCase):
         self.assertEqual([query["kind"] for query in manifest["queries"]], list(QUERY_KINDS))
         self.assertEqual([query["kind"] for query in manifest["queries"]], ["scene", "entity", "context"])
         self.assertNotIn("rule", [query["kind"] for query in manifest["queries"]])
+
+    def test_manifest_publishes_complete_contract_identity_and_canonical_digest(self) -> None:
+        manifest = build_intent_manifest()
+        payload = dict(manifest)
+        digest = payload.pop("manifest_digest")
+
+        self.assertRegex(digest, r"^[0-9a-f]{64}$")
+        self.assertEqual(digest, canonical_json_sha256(payload))
+        self.assertEqual(
+            manifest["safety_vocabulary"],
+            {
+                "version": "1",
+                "digest": SAFETY_VOCABULARY_DIGEST,
+                "values": tuple(sorted(SAFETY_FLAG_VALUES)),
+            },
+        )
+        self.assertEqual(manifest["candidate_shape"]["safety_flags"], tuple(sorted(SAFETY_FLAG_VALUES)))
+        self.assertEqual(
+            manifest["candidate_shape"]["contract"],
+            {
+                "required": False,
+                "all_or_nothing": True,
+                "additional_properties": False,
+                "legacy_unversioned_allowed": True,
+                "required_fields_when_present": (
+                    "manifest_schema_version",
+                    "manifest_digest",
+                    "safety_vocabulary_version",
+                    "safety_vocabulary_digest",
+                ),
+            },
+        )
+        self.assertEqual(
+            canonical_json_sha256({"values": ("a", "b")}),
+            canonical_json_sha256({"values": ["a", "b"]}),
+        )
+        with self.assertRaises(ValueError):
+            canonical_json_sha256({"invalid": float("nan")})
+
+    def test_manifest_wire_and_digests_are_stable_across_hash_seeds(self) -> None:
+        script = (
+            "import json; "
+            "from rpg_engine.intent_manifest import build_intent_manifest; "
+            "print(json.dumps(build_intent_manifest(), ensure_ascii=False, sort_keys=True, "
+            "separators=(',', ':'), allow_nan=False))"
+        )
+        outputs: list[str] = []
+        for seed in ("1", "8675309"):
+            env = {**os.environ, "PYTHONHASHSEED": seed, "PYTHONDONTWRITEBYTECODE": "1"}
+            result = subprocess.run(
+                [sys.executable, "-c", script],
+                cwd=os.fspath(os.path.dirname(os.path.dirname(__file__))),
+                env=env,
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+            outputs.append(result.stdout.strip())
+
+        self.assertEqual(outputs[0], outputs[1])
+        manifests = [json.loads(output) for output in outputs]
+        self.assertEqual(manifests[0]["manifest_digest"], manifests[1]["manifest_digest"])
+        self.assertEqual(
+            manifests[0]["safety_vocabulary"]["digest"],
+            manifests[1]["safety_vocabulary"]["digest"],
+        )
+
+    def test_independent_safety_change_rotates_both_digests_and_rejects_stale_candidate(self) -> None:
+        baseline = build_intent_manifest()
+        changed_values = (*baseline["safety_vocabulary"]["values"], "future_safety_flag")
+        changed_safety_digest = canonical_json_sha256(
+            {
+                "version": baseline["safety_vocabulary"]["version"],
+                "values": list(changed_values),
+            }
+        )
+        changed_payload = deepcopy(baseline)
+        changed_payload.pop("manifest_digest")
+        changed_payload["safety_vocabulary"]["values"] = changed_values
+        changed_payload["safety_vocabulary"]["digest"] = changed_safety_digest
+        changed_payload["candidate_shape"]["safety_flags"] = changed_values
+        changed_manifest_digest = canonical_json_sha256(changed_payload)
+
+        self.assertNotEqual(changed_safety_digest, baseline["safety_vocabulary"]["digest"])
+        self.assertNotEqual(changed_manifest_digest, baseline["manifest_digest"])
+
+        stale_candidate = {
+            "contract": {
+                "manifest_schema_version": baseline["schema_version"],
+                "manifest_digest": baseline["manifest_digest"],
+                "safety_vocabulary_version": baseline["safety_vocabulary"]["version"],
+                "safety_vocabulary_digest": baseline["safety_vocabulary"]["digest"],
+            },
+            "kind": "single",
+            "mode": "action",
+            "action": "rest",
+            "slots": {"until": "morning"},
+            "plan": [],
+            "confidence": "high",
+            "missing_slots": [],
+            "needs_confirmation": [],
+            "safety_flags": [],
+            "reason": "stale provider candidate",
+        }
+        changed_contract = ActiveIntentContract(
+            manifest_schema_version=baseline["schema_version"],
+            manifest_digest=changed_manifest_digest,
+            safety_vocabulary_version=baseline["safety_vocabulary"]["version"],
+            safety_vocabulary_digest=changed_safety_digest,
+        )
+
+        with self.assertRaises(ExternalIntentContractError) as raised:
+            validate_external_intent_candidate(stale_candidate, _active_contract=changed_contract)
+
+        self.assertEqual(raised.exception.code, "INTENT_CONTRACT_VERSION_MISMATCH")
+        self.assertEqual(raised.exception.reason, "contract_version_mismatch")
+        self.assertTrue(raised.exception.retriable)
+        self.assertEqual(raised.exception.action, "refresh_manifest_and_regenerate_candidate")
+
+    def test_candidate_schema_matches_canonical_safety_and_contract_envelope(self) -> None:
+        schema = json.loads(schema_resource_text("intent_candidate.schema.json"))
+        properties = schema["properties"]
+        safety = properties["safety_flags"]
+        contract = properties["contract"]
+
+        self.assertEqual(safety["items"]["enum"], sorted(SAFETY_FLAG_VALUES))
+        self.assertTrue(safety["uniqueItems"])
+        self.assertEqual(safety["minItems"], 0)
+        self.assertEqual(safety["maxItems"], 6)
+        self.assertFalse(contract["additionalProperties"])
+        self.assertEqual(
+            contract["required"],
+            [
+                "manifest_schema_version",
+                "manifest_digest",
+                "safety_vocabulary_version",
+                "safety_vocabulary_digest",
+            ],
+        )
+        for key in ("manifest_schema_version", "safety_vocabulary_version"):
+            self.assertEqual(contract["properties"][key]["minLength"], 1)
+            self.assertEqual(contract["properties"][key]["maxLength"], 32)
+        for key in ("manifest_digest", "safety_vocabulary_digest"):
+            self.assertEqual(contract["properties"][key]["minLength"], 64)
+            self.assertEqual(contract["properties"][key]["maxLength"], 64)
+            self.assertEqual(contract["properties"][key]["pattern"], "^[0-9a-f]{64}$")
 
     def test_manifest_merges_resolver_binder_risk_and_capability_contracts(self) -> None:
         manifest = build_intent_manifest()

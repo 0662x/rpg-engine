@@ -165,6 +165,9 @@ player duplicate
   永远是 low-trust input；internal intent AI enabled 时保持 external/internal arbitration，显式 `off`
   且候选合法时采用 `external_primary`，`off` 且无候选时保持 deterministic fallback。三条路径都必须
   经过 Kernel schema、registry、safety、binding/query、preview 和 pending/confirm 边界。
+- 当前 client 应从 `intent_manifest` / Python `build_intent_manifest()` 取得 manifest v2 + safety v1 identity，
+  在 candidate 的 optional all-or-nothing `contract` 中原样携带四个字段。省略时只进入显式
+  `legacy_unversioned` compatibility；unknown safety 仍 fail closed。
 - `act` 是兼容 wrapper。它不接受 `--external-intent-candidate`，避免旧调用面把 external AI
   候选塞进兼容路径。
 - `confirm --session-id` 只确认当前 pending player action；session id 必须来自 `player turn` 或
@@ -203,6 +206,11 @@ play ux-metrics
 - `commit` 只能提交已经 validation 和 approval 过的 TurnProposal/delta；默认应保留 backup、
   State Auditor 和 projection evidence。普通玩家保存仍应从 `player confirm` 进入。
 - `health` 和 `ux-metrics` 是只读诊断。
+
+`play start-turn`、`play preflight`、`play act` 和 `player turn` 遇到 typed external contract failure 时，
+JSON 固定返回 `ok=false`、`errors`、`error_details` 并以非零退出；human mode 只输出 concise message 与 recovery
+action，不输出 traceback 或 raw candidate。Mismatch 要求 refresh manifest 后重生成；unknown safety 要求按
+当前 vocabulary 重生成。
 
 任何使用 `play commit` 的脚本都必须能解释 proposal 来源、approval 来源、delta 来源和 backup/audit
 策略。不能把 raw AI 文本、external candidate 或未确认 preview 直接交给 `commit`。
@@ -320,6 +328,8 @@ importer
 - 它们可以保留为维护面，但不应成为新普通玩家体验的入口。
 - 会写入的命令必须遵守 backup、validation、projection/outbox、approval 和 path boundary。
 - `query`、`context`、`preview`、`validate`、`check`、`audit` 等只读或诊断命令不得被客户端解释为事实已发生。
+- Legacy `context build` 只在顶层投影 `ExternalIntentContractError`；unknown/mismatch 均非零退出、脱敏且不创建
+  context audit row（除非其他成功调用显式请求 `--audit-context`）。
 - `save-turn`、`turn accept-response`、`proposal apply`、`apply-content-delta`、`package upgrade` 等写入命令
   只能在 trusted maintenance / GM / migration 场景使用。
 - `projection repair` 输出必须保留 repair evidence：profile、requested/skipped names、requested/global
@@ -377,6 +387,8 @@ importer
 
 - `--external-intent-candidate` 只在明确支持的入口中出现，尤其是 `player turn` 和低层 `play` intent preview
   能力；它不能表达确认、approval、hidden access 或保存授权。
+- CLI 不提供关闭 legacy compatibility 的 flag，也不接受 per-call active-contract override；contract policy
+  只能由 Kernel manifest schema version 演进。
 - Internal AI、semantic helper、Archivist 和 State Auditor 都是辅助角色。它们可以影响 review、suggestion
   或 audit evidence，不能替代 confirm / validation / commit。
 - `--intent-timeout` 表示一次 player-facing intent helper operation 的 hard total budget，默认候选约

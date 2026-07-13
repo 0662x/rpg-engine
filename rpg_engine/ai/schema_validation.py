@@ -38,6 +38,12 @@ def format_jsonschema_error(error: Any) -> str:
                 )
                 return f"{base}.{extras[0]}: unknown field" if base != "$" else f"$.{extras[0]}: unknown field"
     path = "$" + "".join(f"[{item}]" if isinstance(item, int) else f".{item}" for item in error.absolute_path)
+    if error.validator == "enum":
+        return f"{path}: value is not allowed"
+    if error.validator == "type":
+        return f"{path}: expected {error.validator_value}"
+    if error.validator == "uniqueItems":
+        return f"{path}: values must be unique"
     return f"{path}: {error.message}"
 
 

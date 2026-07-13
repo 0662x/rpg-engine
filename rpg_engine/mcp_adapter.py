@@ -19,6 +19,8 @@ from .ai.defaults import (
     DEFAULT_STATE_AUDIT_TIMEOUT_SECONDS,
 )
 from .ai.config import AI_HELPER_BACKENDS, AI_HELPER_FALLBACK_BACKENDS, AI_PROFILES, resolve_ai_helper_settings
+from .ai_intent import ExternalIntentContractError
+from .ai_intent.safety_contract import external_intent_contract_error_dict
 from .campaign_validation import validate_campaign_package
 from .db import connect, utc_now
 from .game_session import hash_identity
@@ -1670,6 +1672,8 @@ def normalize_mcp_profile(value: str | None) -> str:
 
 
 def error_dict(exc: Exception) -> dict[str, Any]:
+    if isinstance(exc, ExternalIntentContractError):
+        return external_intent_contract_error_dict(exc)
     message = str(exc)
     if isinstance(exc, MCPProfilePermissionError):
         return {
@@ -1723,6 +1727,7 @@ def mcp_audit_identity(tool: str, request: dict[str, Any], *, profile: str) -> d
 
 def mcp_audit_sensitive_terms(request: dict[str, Any]) -> tuple[str, ...]:
     terms = {
+        str(request.get("user_text") or "").strip(),
         str(request.get("session_key") or "").strip(),
         str(request.get("actor_id") or "").strip(),
         str(request.get("user_id") or "").strip(),

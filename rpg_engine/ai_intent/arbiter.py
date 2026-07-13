@@ -10,17 +10,11 @@ from ..visibility import PLAYER_VIEW
 from .binder import bind_intent_candidate, find_entity_candidates, normalize_slot_name
 from .normalization import normalize_intent_candidate
 from .risk import ACTION_BASE_RISK, YELLOW_FAST
+from .safety_contract import SAFETY_FLAG_VALUES
 from .types import BoundIntent, CandidateStep, ConsensusDecision, IntentCandidate
 
 
-BLOCKER_SAFETY_FLAGS = {
-    "prompt_injection",
-    "out_of_world",
-    "forced_save",
-    "hidden_info",
-    "maintenance_request",
-    "unsafe_command",
-}
+BLOCKER_SAFETY_FLAGS = SAFETY_FLAG_VALUES
 QUERY_KIND_SET = set(QUERY_KINDS)
 
 

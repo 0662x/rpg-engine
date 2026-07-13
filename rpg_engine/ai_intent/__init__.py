@@ -11,6 +11,7 @@ from .normalization import (
     normalize_intent_candidate_dict,
 )
 from .risk import IntentRiskDecision, assess_rules_fallback
+from .safety_contract import ExternalIntentContractError
 from .types import (
     BoundIntent,
     CandidateStep,
@@ -32,6 +33,7 @@ __all__ = [
     "ClarificationQuestion",
     "ConsensusDecision",
     "ConsensusRouteAdoption",
+    "ExternalIntentContractError",
     "InternalIntentReview",
     "IntentCandidate",
     "IntentRiskDecision",
