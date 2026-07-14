@@ -165,7 +165,7 @@ player duplicate
   永远是 low-trust input；internal intent AI enabled 时保持 external/internal arbitration，显式 `off`
   且候选合法时采用 `external_primary`，`off` 且无候选时保持 deterministic fallback。三条路径都必须
   经过 Kernel schema、registry、safety、binding/query、preview 和 pending/confirm 边界。
-- 当前 client 应从 `intent_manifest` / Python `build_intent_manifest()` 取得 manifest v3 + taxonomy v1 + safety v1
+- 当前 client 应从 `intent_manifest` / Python `build_intent_manifest()` 取得 manifest v4 + taxonomy v1 + safety v1
   identity，
   在 candidate 的 optional all-or-nothing `contract` 中原样携带四个字段。省略时只进入显式
   `legacy_unversioned` compatibility；unknown safety 仍 fail closed。

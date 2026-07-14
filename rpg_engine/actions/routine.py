@@ -18,6 +18,7 @@ from .base import (
     option_specs_for,
     option_value,
 )
+from .slot_contract import ActionRequirementGroupSpec
 from .taxonomy import ActionTaxonomySpec, taxonomy_term_matches, taxonomy_terms
 
 
@@ -309,10 +310,17 @@ ROUTINE_RESOLVER = ActionResolverSpec(
     response_template="action.md",
     option_specs=option_specs_for(
         ActionOptionSpec("task", "routine task such as upkeep, feeding, checking or golden-light transfer"),
-        ActionOptionSpec("target", "optional entity id/name/alias"),
+        ActionOptionSpec("target", "optional entity id/name/alias", binding_type="entity_or_text", aliases=("object",)),
         ActionOptionSpec("focus", "optional focus or safety concern"),
-        ActionOptionSpec("time_cost", "estimated routine time", dest="time"),
-        ActionOptionSpec("user_text", "original player action text", dest="user-text"),
+        ActionOptionSpec("time_cost", "estimated routine time", dest="time", aliases=("time",)),
+        ActionOptionSpec("user_text", "original player action text", dest="user-text", ai_fillable=False),
+    ),
+    requirement_groups=(
+        ActionRequirementGroupSpec(
+            "routine_scope",
+            ("task", "target"),
+            binding_rule="source_user_text_fallback",
+        ),
     ),
     taxonomy=ROUTINE_TAXONOMY,
     validate_request=validate_routine_request,

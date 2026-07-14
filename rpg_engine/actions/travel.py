@@ -454,13 +454,24 @@ TRAVEL_RESOLVER = ActionResolverSpec(
     name="travel",
     preview=preview_travel,
     response_template="scene_entry.md",
-    required_options=("destination",),
     option_specs=option_specs_for(
-        ActionOptionSpec("destination", "destination location id/name/alias"),
-        ActionOptionSpec("location", "optional current/search location for palette candidates"),
+        ActionOptionSpec(
+            "destination",
+            "destination location id/name/alias",
+            required=True,
+            binding_type="entity",
+            allowed_entity_types=("location",),
+            aliases=("target", "to", "place"),
+        ),
+        ActionOptionSpec(
+            "location",
+            "optional current/search location for palette candidates",
+            binding_type="entity",
+            allowed_entity_types=("location",),
+        ),
         ActionOptionSpec("palette_id", "location palette candidate id used as a travel lead", dest="palette-id"),
         ActionOptionSpec("pace", "travel pace", default="normal"),
-        ActionOptionSpec("user_text", "original player action text", dest="user-text"),
+        ActionOptionSpec("user_text", "original player action text", dest="user-text", ai_fillable=False),
     ),
     taxonomy=ActionTaxonomySpec(
         terms=(

@@ -3,13 +3,8 @@ from __future__ import annotations
 from typing import Any
 
 from .actions import ActionResolverRegistry, get_default_action_registry
-from .actions.base import ActionOptionSpec, ActionResolverSpec
-from .ai_intent.slot_contract import (
-    ACTION_REQUIRED_SLOTS,
-    ACTION_SLOT_BINDINGS,
-    AI_SUPPLIED_CONFIRMATION_SLOTS,
-    SLOT_ALIASES,
-)
+from .actions.base import ActionResolverSpec
+from .actions.slot_contract import ActionRequirementGroup, ActionSlotSpec
 from .ai_intent.risk import ACTION_BASE_RISK
 from .ai_intent.safety_contract import (
     ALLOW_LEGACY_UNVERSIONED_EXTERNAL_CANDIDATE,
@@ -21,7 +16,7 @@ from .ai_intent.safety_contract import (
 from .capabilities import ACTION_CAPABILITIES
 
 
-MANIFEST_SCHEMA_VERSION = "3"
+MANIFEST_SCHEMA_VERSION = "4"
 QUERY_KINDS = ("scene", "entity", "context")
 CONTRACT_FIELDS = (
     "manifest_schema_version",
@@ -88,10 +83,7 @@ def build_intent_manifest(registry: ActionResolverRegistry | None = None) -> dic
 
 
 def action_manifest(spec: ActionResolverSpec, taxonomy_action: dict[str, Any]) -> dict[str, Any]:
-    required_slots = tuple(ACTION_REQUIRED_SLOTS.get(spec.name, ()))
-    requirement_groups = action_requirement_groups(spec.name)
-    group_slots = {slot for group in requirement_groups for slot in group["any_of"]}
-    confirmation_slots = AI_SUPPLIED_CONFIRMATION_SLOTS.get(spec.name, set())
+    requirement_groups = [requirement_group_manifest(group) for group in spec.slot_contract.requirement_groups]
     return {
         "name": spec.name,
         "mode": "action",
@@ -106,13 +98,8 @@ def action_manifest(spec: ActionResolverSpec, taxonomy_action: dict[str, Any]) -
         "semantic_labels": tuple(taxonomy_action["semantic_labels"]),
         "inference_priority": taxonomy_action["inference_priority"],
         "slots": [
-            slot_manifest(
-                spec.name,
-                option,
-                required=option.name in required_slots and option.name not in group_slots,
-                player_confirmation_required=option.name in confirmation_slots,
-            )
-            for option in spec.option_specs
+            slot_manifest(slot)
+            for slot in spec.slot_contract.slots
         ],
         "requirement_groups": requirement_groups,
         "resolver_contract": {
@@ -130,56 +117,31 @@ def action_manifest(spec: ActionResolverSpec, taxonomy_action: dict[str, Any]) -
 
 
 def slot_manifest(
-    action: str,
-    option: ActionOptionSpec,
-    *,
-    required: bool,
-    player_confirmation_required: bool,
+    slot: ActionSlotSpec,
 ) -> dict[str, Any]:
-    slot_type = ACTION_SLOT_BINDINGS.get(action, {}).get(option.name, "text")
     return {
-        "name": option.name,
-        "dest": option.dest,
-        "description": option.help,
-        "type": manifest_slot_type(slot_type),
-        "allowed_entity_types": manifest_allowed_entity_types(slot_type),
-        "aliases": tuple(slot_aliases(action, option.name)),
-        "required": required,
-        "default": option.default,
-        "ai_fillable": option.name != "user_text" and not player_confirmation_required,
-        "player_confirmation_required": player_confirmation_required,
+        "name": slot.name,
+        "dest": slot.dest,
+        "description": slot.description,
+        "type": slot.binding_type,
+        "allowed_entity_types": slot.allowed_entity_types,
+        "aliases": slot.aliases,
+        "required": slot.required,
+        "default": slot.to_projection()["default"],
+        "ai_fillable": slot.ai_fillable,
+        "player_confirmation_required": slot.player_confirmation_required,
     }
 
 
-def action_requirement_groups(action: str) -> list[dict[str, Any]]:
-    if action == "random_table":
-        return [{"name": "random_source", "any_of": ("table", "dice"), "required": True}]
-    if action == "routine":
-        return [{"name": "routine_scope", "any_of": ("task", "target"), "required": True}]
-    return []
-
-
-def slot_aliases(action: str, slot: str) -> list[str]:
-    aliases = SLOT_ALIASES.get(action, {})
-    return sorted(alias for alias, canonical in aliases.items() if canonical == slot)
-
-
-def manifest_slot_type(slot_type: Any) -> str:
-    if isinstance(slot_type, tuple):
-        return "entity"
-    if slot_type in {"entity_or_text", "text_or_entity"}:
-        return str(slot_type)
-    if isinstance(slot_type, str) and slot_type not in {"text", "text_list", "dice_expr", "random_table_id"}:
-        return "entity"
-    return str(slot_type)
-
-
-def manifest_allowed_entity_types(slot_type: Any) -> tuple[str, ...]:
-    if isinstance(slot_type, tuple):
-        return tuple(str(item) for item in slot_type)
-    if isinstance(slot_type, str) and slot_type not in {"text", "text_list", "dice_expr", "random_table_id", "entity_or_text", "text_or_entity"}:
-        return (slot_type,)
-    return ()
+def requirement_group_manifest(group: ActionRequirementGroup) -> dict[str, Any]:
+    """Project every executable group constraint into the public manifest."""
+    return {
+        "name": group.name,
+        "any_of": group.members,
+        "required": group.required,
+        "cardinality": group.cardinality,
+        "binding_rule": group.binding_rule,
+    }
 
 
 def query_manifest(kind: str) -> dict[str, Any]:

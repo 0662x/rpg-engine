@@ -786,6 +786,7 @@ class GMRuntime:
                 external_candidate=helper_external.to_dict() if helper_external else None,
                 rule_candidate=rule_candidate.to_dict(),
                 action_taxonomy_digest=self.action_registry.taxonomy_digest,
+                action_slot_digest=str(self.action_registry.slot_projection()["digest"]),
                 identity_profile=effective_identity_profile,
                 ttl_seconds=ttl_seconds,
             )

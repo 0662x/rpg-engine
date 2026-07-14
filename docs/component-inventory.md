@@ -30,7 +30,7 @@
 | 组件 | 文件 | 当前责任 |
 | --- | --- | --- |
 | Intent Router | `rpg_engine/intent_router.py` | 候选准备、规则路由、外部候选、配置与元数据 |
-| Intent Manifest | `rpg_engine/intent_manifest.py` | Manifest v3、确定性完整 digest、taxonomy v1 / safety v1 projection 与意图/动作能力声明 |
+| Intent Manifest | `rpg_engine/intent_manifest.py` | Manifest v4、确定性完整 digest、taxonomy v1 / safety v1 与 resolver-owned slot/group projection（含 cardinality / binding rule） |
 | Safety Contract | `rpg_engine/ai_intent/safety_contract.py` | Safety vocabulary v1 唯一真源、digest、legacy policy、typed error 与安全公开投影 |
 | AI Intent Router | `rpg_engine/ai_intent/router.py` | AI 候选收集、preflight 消费、内部复核、共识仲裁、绑定 trace 组装 |
 | AI Provider | `rpg_engine/ai/provider.py` | AI provider 抽象 |
@@ -40,12 +40,12 @@
 | AI Policy | `rpg_engine/ai/policy.py` | AI 策略约束 |
 | AI Schema Validation | `rpg_engine/ai/schema_validation.py` | AI 输出 schema 校验 |
 | Arbiter | `rpg_engine/ai_intent/arbiter.py` | 候选裁决 |
-| Binder | `rpg_engine/ai_intent/binder.py` | 槽位绑定 |
+| Binder | `rpg_engine/ai_intent/binder.py` | 只消费 active registry resolved slot contract，并通过 player-view SQL 执行 alias/type/group/confirmation 绑定与安全分类 |
 | Adapters | `rpg_engine/ai_intent/adapters.py` | 外部候选适配 |
 | External | `rpg_engine/ai_intent/external.py` | 外部意图共享 strict ingress、contract negotiation、raw safety validation 与 bounded evidence |
 | Internal Review | `rpg_engine/ai_intent/internal_review.py` | 内部复核 |
 | Risk | `rpg_engine/ai_intent/risk.py` | 风险等级判断 |
-| Slot Contract | `rpg_engine/ai_intent/slot_contract.py` | 槽位契约 |
+| Legacy Slot Adapter | `rpg_engine/ai_intent/slot_contract.py` | Canonical slot 类型 re-export 与 default registry 派生只读 compatibility view；不持有独立 metadata table |
 | Preflight Cache | `rpg_engine/preflight_cache.py` | advisory internal intent review cache，不具备最终状态权威 |
 
 ## 动作系统
@@ -54,6 +54,7 @@
 | --- | --- | --- |
 | Registry | `rpg_engine/actions/registry.py` | 动作解析器注册、taxonomy identity 与 player-safe introspection |
 | Action Taxonomy | `rpg_engine/actions/taxonomy.py` | Frozen per-action terms/roles/locale metadata、NFKC + casefold 匹配、确定性全局 projection/digest 与 collision validation |
+| Action Slot Contract | `rpg_engine/actions/slot_contract.py` | Frozen/JSON-safe slot 与 requirement-group、严格 normalization/validation、确定性 registry projection/digest 与 legacy required-option 单向适配 |
 | Builtin | `rpg_engine/actions/builtin.py` | 内建动作聚合 |
 | Explore | `rpg_engine/actions/explore.py` | 探索动作 |
 | Travel | `rpg_engine/actions/travel.py` | 移动/旅行 |
@@ -69,7 +70,7 @@
 
 | 组件 | 文件 | 当前责任 |
 | --- | --- | --- |
-| Action Resolver Contract | `rpg_engine/actions/base.py` | `ActionResolverSpec` 定义动作预览核心合约并持有 canonical frozen taxonomy；legacy taxonomy 参数只作互斥迁移适配 |
+| Action Resolver Contract | `rpg_engine/actions/base.py` | `ActionResolverSpec` 定义动作预览核心合约并持有 canonical frozen taxonomy + resolved slot contract；registry 注册 taxonomy/slot prospective projection 均 fail closed |
 | Runtime Preview | `rpg_engine/runtime.py` | `GMRuntime.preview_action()` 编排动作预览 |
 | Preview Helpers | `rpg_engine/preview.py` | 部分动作复用的渲染/delta helper |
 | Turn Proposal | `rpg_engine/proposal.py` | pending/approved `TurnProposal`，承载确认、来源和 intent contract 边界 |

@@ -492,14 +492,25 @@ EXPLORE_RESOLVER = ActionResolverSpec(
     name="explore",
     preview=preview_explore,
     response_template="scene_entry.md",
-    required_options=("target",),
     option_specs=option_specs_for(
-        ActionOptionSpec("target", "place, object, clue or area to inspect"),
-        ActionOptionSpec("location", "optional location id/name/alias"),
+        ActionOptionSpec(
+            "target",
+            "place, object, clue or area to inspect",
+            required=True,
+            binding_type="entity_or_text",
+            aliases=("object", "clue"),
+        ),
+        ActionOptionSpec(
+            "location",
+            "optional location id/name/alias",
+            binding_type="entity",
+            allowed_entity_types=("location",),
+            aliases=("place",),
+        ),
         ActionOptionSpec("approach", "how the player explores or handles risk"),
         ActionOptionSpec("unknown_lead", "allow unresolved target as an explicit unknown lead", dest="unknown-lead"),
         ActionOptionSpec("palette_id", "palette candidate id to inspect as a controlled clue", dest="palette-id"),
-        ActionOptionSpec("user_text", "original player action text", dest="user-text"),
+        ActionOptionSpec("user_text", "original player action text", dest="user-text", ai_fillable=False),
     ),
     taxonomy=ActionTaxonomySpec(
         terms=(

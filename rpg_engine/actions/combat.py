@@ -246,12 +246,41 @@ COMBAT_RESOLVER = ActionResolverSpec(
     preview=preview_combat,
     response_template="combat_turn.md",
     option_specs=option_specs_for(
-        ActionOptionSpec("target", "target entity id/name/alias"),
-        ActionOptionSpec("weapon", "weapon entity id/name/alias"),
-        ActionOptionSpec("ammo", "ammunition entity id/name/alias"),
-        ActionOptionSpec("distance", "distance band or exact distance"),
-        ActionOptionSpec("ready_state", "explicit weapon ready/loading confirmation"),
-        ActionOptionSpec("user_text", "original player action text", dest="user-text"),
+        ActionOptionSpec(
+            "target",
+            "target entity id/name/alias",
+            required=True,
+            binding_type="entity",
+            allowed_entity_types=("threat", "character", "species"),
+            aliases=("enemy", "foe"),
+        ),
+        ActionOptionSpec(
+            "weapon",
+            "weapon entity id/name/alias",
+            required=True,
+            binding_type="entity",
+            allowed_entity_types=("equipment", "item"),
+        ),
+        ActionOptionSpec(
+            "ammo",
+            "ammunition entity id/name/alias",
+            required=True,
+            binding_type="entity",
+            allowed_entity_types=("item",),
+        ),
+        ActionOptionSpec(
+            "distance",
+            "distance band or exact distance",
+            required=True,
+            aliases=("range",),
+        ),
+        ActionOptionSpec(
+            "ready_state",
+            "explicit weapon ready/loading confirmation",
+            ai_fillable=False,
+            player_confirmation_required=True,
+        ),
+        ActionOptionSpec("user_text", "original player action text", dest="user-text", ai_fillable=False),
     ),
     taxonomy=ActionTaxonomySpec(
         terms=(

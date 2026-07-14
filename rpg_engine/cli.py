@@ -101,13 +101,13 @@ from .cli_text import add_user_text_source_args, resolve_user_text_arg
 
 def add_action_option(parser: argparse.ArgumentParser, option: ActionOptionSpec) -> None:
     if option.name == "user_text":
-        add_user_text_source_args(parser, required=option.required, help_text=option.help)
+        add_user_text_source_args(parser, required=False, help_text=option.help)
         return
     flag = "--" + (option.dest or option.name).replace("_", "-")
     kwargs: dict[str, object] = {
         "dest": option.name,
         "help": option.help,
-        "required": option.required,
+        "required": False,
     }
     if option.default is not None:
         kwargs["default"] = option.default

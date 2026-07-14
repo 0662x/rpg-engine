@@ -1,5 +1,15 @@
 from .base import ActionResolverSpec, ActionResolverRegistry
 from .registry import get_default_action_registry
+from .slot_contract import (
+    ACTION_SLOT_CONTRACT_VERSION,
+    MAX_ACTION_CANDIDATE_SLOTS,
+    MAX_ACTION_SLOT_IDENTIFIER_LENGTH,
+    ActionOptionSpec,
+    ActionRequirementGroup,
+    ActionRequirementGroupSpec,
+    ActionSlotSpec,
+    ResolvedActionSlotContract,
+)
 from .taxonomy import (
     ACTION_TAXONOMY_VERSION,
     MAX_ACTION_TAXONOMY_ACTIONS,
@@ -18,6 +28,9 @@ from .taxonomy import (
 
 __all__ = [
     "ACTION_TAXONOMY_VERSION",
+    "ACTION_SLOT_CONTRACT_VERSION",
+    "MAX_ACTION_CANDIDATE_SLOTS",
+    "MAX_ACTION_SLOT_IDENTIFIER_LENGTH",
     "MAX_ACTION_TAXONOMY_ACTIONS",
     "MAX_ACTION_TAXONOMY_LOCALE_LENGTH",
     "MAX_ACTION_TAXONOMY_ROLES_PER_TERM",
@@ -26,10 +39,15 @@ __all__ = [
     "MAX_ACTION_TAXONOMY_TERMS_PER_ACTION",
     "MAX_ACTION_TAXONOMY_VERSION_LENGTH",
     "SUPPORTED_EXECUTABLE_TAXONOMY_LANGUAGES",
+    "ActionOptionSpec",
+    "ActionRequirementGroup",
+    "ActionRequirementGroupSpec",
     "ActionResolverSpec",
     "ActionResolverRegistry",
+    "ActionSlotSpec",
     "ActionTaxonomySpec",
     "ActionTaxonomyTerm",
+    "ResolvedActionSlotContract",
     "get_default_action_registry",
     "taxonomy_term",
     "taxonomy_terms",

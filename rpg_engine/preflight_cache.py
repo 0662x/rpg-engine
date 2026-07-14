@@ -143,9 +143,11 @@ def create_pending_intent_preflight(
     external_candidate: dict[str, Any] | None = None,
     rule_candidate: dict[str, Any] | None = None,
     action_taxonomy_digest: str = "",
+    action_slot_digest: str,
     identity_profile: str = PREFLIGHT_IDENTITY_CANDIDATE_BOUND,
     ttl_seconds: int = PREFLIGHT_TTL_SECONDS,
 ) -> PreflightRecord:
+    action_slot_digest = require_action_slot_digest(action_slot_digest)
     profile = validate_preflight_creation_identity(
         identity_profile,
         platform=platform,
@@ -166,6 +168,7 @@ def create_pending_intent_preflight(
         external_candidate=stored_external_candidate,
         rule_candidate=rule_candidate,
         action_taxonomy_digest=action_taxonomy_digest,
+        action_slot_digest=action_slot_digest,
         identity_profile=profile,
     )
     preflight_id = f"preflight:{uuid.uuid4().hex}"
@@ -324,8 +327,10 @@ def consume_intent_preflight(
     external_candidate: dict[str, Any] | None = None,
     rule_candidate: dict[str, Any] | None = None,
     action_taxonomy_digest: str = "",
+    action_slot_digest: str,
     pending_wait_ms: int = 0,
 ) -> PreflightLookupResult:
+    action_slot_digest = require_action_slot_digest(action_slot_digest)
     row = conn.execute("select * from intent_preflight_cache where id=?", (preflight_id,)).fetchone()
     if row is None:
         return PreflightLookupResult("miss", reason="preflight id not found")
@@ -347,6 +352,7 @@ def consume_intent_preflight(
         external_candidate=external_candidate,
         rule_candidate=rule_candidate,
         action_taxonomy_digest=action_taxonomy_digest,
+        action_slot_digest=action_slot_digest,
     )
 
 
@@ -366,8 +372,10 @@ def consume_intent_preflight_by_message(
     external_candidate: dict[str, Any] | None = None,
     rule_candidate: dict[str, Any] | None = None,
     action_taxonomy_digest: str = "",
+    action_slot_digest: str,
     pending_wait_ms: int = 0,
 ) -> PreflightLookupResult:
+    action_slot_digest = require_action_slot_digest(action_slot_digest)
     if not clean(message_id):
         return PreflightLookupResult("miss", reason="message_id is required for message lookup")
     if not clean(platform) or not clean(session_key):
@@ -386,6 +394,7 @@ def consume_intent_preflight_by_message(
         external_candidate=external_candidate,
         rule_candidate=rule_candidate,
         action_taxonomy_digest=action_taxonomy_digest,
+        action_slot_digest=action_slot_digest,
         identity_profile=PREFLIGHT_IDENTITY_MESSAGE_ONLY,
     )
     rows = message_preflight_rows(
@@ -418,6 +427,7 @@ def consume_intent_preflight_by_message(
         external_candidate=external_candidate,
         rule_candidate=rule_candidate,
         action_taxonomy_digest=action_taxonomy_digest,
+        action_slot_digest=action_slot_digest,
         identity_profile=PREFLIGHT_IDENTITY_MESSAGE_ONLY,
     )
     rows = message_preflight_rows(
@@ -463,6 +473,7 @@ def consume_intent_preflight_by_message(
         external_candidate=external_candidate,
         rule_candidate=rule_candidate,
         action_taxonomy_digest=action_taxonomy_digest,
+        action_slot_digest=action_slot_digest,
     )
 
 
@@ -541,7 +552,9 @@ def consume_intent_preflight_row(
     external_candidate: dict[str, Any] | None = None,
     rule_candidate: dict[str, Any] | None = None,
     action_taxonomy_digest: str = "",
+    action_slot_digest: str,
 ) -> PreflightLookupResult:
+    action_slot_digest = require_action_slot_digest(action_slot_digest)
     record = record_from_row(row)
     if is_expired(str(row["expires_at"])):
         if update_preflight_status(conn, record.id, PREFLIGHT_EXPIRED, reason="expired", current_status=record.status):
@@ -569,6 +582,7 @@ def consume_intent_preflight_row(
                     external_candidate=external_candidate,
                     rule_candidate=rule_candidate,
                     action_taxonomy_digest=action_taxonomy_digest,
+                    action_slot_digest=action_slot_digest,
                 )
         return PreflightLookupResult(PREFLIGHT_PENDING, record=record, reason="preflight is pending")
     if record.status != PREFLIGHT_READY:
@@ -610,6 +624,7 @@ def consume_intent_preflight_row(
         external_candidate=external_candidate,
         rule_candidate=rule_candidate,
         action_taxonomy_digest=action_taxonomy_digest,
+        action_slot_digest=action_slot_digest,
         identity_profile=record.identity.identity_profile,
     )
     mismatch = identity_mismatch(
@@ -698,8 +713,10 @@ def build_preflight_identity(
     external_candidate: dict[str, Any] | None = None,
     rule_candidate: dict[str, Any] | None = None,
     action_taxonomy_digest: str = "",
+    action_slot_digest: str,
     identity_profile: str = PREFLIGHT_IDENTITY_CANDIDATE_BOUND,
 ) -> PreflightContextIdentity:
+    action_slot_digest = require_action_slot_digest(action_slot_digest)
     profile = normalize_identity_profile(identity_profile)
     resolved_hash = hash_text(user_text)
     helper_identity = {
@@ -726,6 +743,7 @@ def build_preflight_identity(
         "external_candidate_hash": external_hash,
         "rule_candidate_hash": rule_hash,
         "action_taxonomy_digest": clean(action_taxonomy_digest),
+        "action_slot_digest": clean(action_slot_digest),
     }
     context_hash = hash_json(context_seed)
     model_version = (
@@ -760,6 +778,13 @@ def build_preflight_identity(
         external_candidate_hash=external_hash,
         rule_candidate_hash=rule_hash,
     )
+
+
+def require_action_slot_digest(value: str) -> str:
+    digest = clean(value)
+    if not digest:
+        raise ValueError("action_slot_digest is required")
+    return digest
 
 
 def record_from_row(row: sqlite3.Row) -> PreflightRecord:

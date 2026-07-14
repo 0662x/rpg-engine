@@ -605,11 +605,24 @@ GATHER_RESOLVER = ActionResolverSpec(
     preview=preview_gather,
     response_template="gather_turn.md",
     option_specs=option_specs_for(
-        ActionOptionSpec("target", "target crop/resource/item id/name/alias"),
-        ActionOptionSpec("location", "location id/name/alias; defaults to current location"),
+        ActionOptionSpec(
+            "target",
+            "target crop/resource/item id/name/alias",
+            required=True,
+            binding_type="entity",
+            allowed_entity_types=("plant", "item", "material", "crop_plot"),
+            aliases=("resource",),
+        ),
+        ActionOptionSpec(
+            "location",
+            "location id/name/alias; defaults to current location",
+            binding_type="entity",
+            allowed_entity_types=("location",),
+            aliases=("destination", "place"),
+        ),
         ActionOptionSpec("palette_id", "palette candidate id to consume under gather rules", dest="palette-id"),
         ActionOptionSpec("output_confirmed", "GM/human-edited delta includes explicit output quantity", dest="output-confirmed"),
-        ActionOptionSpec("user_text", "original player action text", dest="user-text"),
+        ActionOptionSpec("user_text", "original player action text", dest="user-text", ai_fillable=False),
     ),
     taxonomy=ActionTaxonomySpec(
         terms=(

@@ -39,8 +39,8 @@ player_turn(user_text, optional external_intent_candidate)
 - `developer` profile 可以使用低层工具，但 hidden / GM / maintenance 视图读取仍只给
   `trusted_gm`、`maintenance`、`admin`。
 - `external_intent_candidate` 是 low-trust 候选输入，不是确认、approval、hidden access 或保存授权。
-- `intent_manifest` 当前发布 manifest v3、action taxonomy v1 projection/digest、完整 manifest digest 与 safety
-  vocabulary v1 identity。External candidate 可携带
+- `intent_manifest` 当前发布 manifest v4、action taxonomy v1 projection/digest、resolver-owned slot/group
+  projection（含 group cardinality/binding rule）、完整 manifest digest 与 safety vocabulary v1 identity。External candidate 可携带
   optional all-or-nothing contract；显式 mismatch 必须 refresh + regenerate，unknown safety 必须 fail closed。
 - Internal intent AI enabled 时 external/internal 保持既有 arbitration；显式 `off` 且 external candidate
   通过 schema、registry、safety、query/binding 检查时，它以 `external_primary` 成为 route proposal，
@@ -195,7 +195,7 @@ admin profiles。
 | `save_create` | 创建 Save Package；可以 activate，但不能推进剧情。 |
 | `save_switch` | 切换 active save；不改 save 内事实。 |
 | `start_or_continue` | 继续或创建 onboarding context；gameplay facts 仍要走 `player_turn/player_confirm`。 |
-| `intent_manifest` | 只读 manifest v3 action/query/slot/taxonomy/safety/version contract；不是玩法入口或授权。 |
+| `intent_manifest` | 只读 manifest v4 action/query/slot/taxonomy/safety/version contract；不是玩法入口或授权。 |
 | `player_turn` | 标准自然语言入口；返回 query、clarification、blocked 或 pending action。 |
 | `player_confirm` | 用 `player_turn` 返回的 `session_id` 确认并保存 pending action。 |
 | `campaign_validate` | 只读校验 configured campaign package。 |
@@ -350,7 +350,9 @@ RPG Engine MCP adapter 只发布并校验 contract，不实现 Hermes consumer l
 `intent_manifest`、缓存当前 identity、为每个 fresh candidate 填充 contract，并在 mismatch 后刷新再生成；
 reconnect、next-model-turn barrier 和跨仓 E2E 仍属于 Hermes 自身工作。
 
-MCP `intent_manifest` 只是 `build_intent_manifest()` 的 thin wrapper，不自行拼装 taxonomy。Consumer 必须以
+MCP `intent_manifest` 只是 `build_intent_manifest()` 的 thin wrapper，不自行拼装 taxonomy 或 slot metadata。
+Per-action slots/groups 由 active `ActionResolverRegistry` 的 resolved slot contract 投影；metadata 变化旋转完整
+manifest digest，custom/falsey registry 不得回退 default contract。Consumer 必须以
 `action_taxonomy.actions[].terms/semantic_labels/inference_priority` 为当前 lexical contract；taxonomy 内容改变会
 旋转 taxonomy 与 manifest digest，绑定旧 identity 的 candidate 必须刷新 manifest 后整体重新生成。
 

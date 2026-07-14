@@ -7,6 +7,7 @@ from typing import Any
 
 from ..actions import ActionResolverRegistry, get_default_action_registry
 from ..actions.base import ActionResolverSpec
+from ..actions.slot_contract import ActionSlotSpec
 from ..db import entity_subtype_visibility_sql
 from ..visibility import (
     PLAYER_VIEW,
@@ -16,14 +17,6 @@ from ..visibility import (
     normalize_visibility_view,
 )
 from .normalization import normalize_intent_candidate
-from .slot_contract import (
-    ACTION_REQUIRED_SLOTS,
-    ACTION_SLOT_BINDINGS,
-    AI_SUPPLIED_CONFIRMATION_SLOTS,
-    ENTITY_SLOT_TYPES,
-    SLOT_ALIASES,
-    TEXT_SLOT_TYPES,
-)
 from .types import BoundIntent, IntentCandidate
 
 
@@ -75,8 +68,8 @@ def bind_intent_candidate(
             decision_trace={"binder": {"status": "invalid"}},
         )
 
+    contract = spec.slot_contract
     allowed_options = option_names(spec)
-    slot_types = ACTION_SLOT_BINDINGS.get(spec.name, {})
     options: dict[str, Any] = {"user_text": normalized.source_user_text}
     entity_bindings: dict[str, str] = {}
     missing: list[str] = []
@@ -85,22 +78,40 @@ def bind_intent_candidate(
     errors: list[str] = []
     warnings: list[str] = []
     slot_trace: dict[str, Any] = {}
+    seen_raw_slots: dict[str, str] = {}
 
     for raw_name, raw_value in normalized.slots.items():
-        slot = normalize_slot_name(spec.name, raw_name)
+        slot = contract.normalize_name(raw_name)
         if slot not in allowed_options:
             warnings.append(f"ignored slot outside resolver contract: {raw_name}")
             slot_trace[raw_name] = {"status": "ignored", "reason": "outside resolver contract"}
             continue
         if slot == "user_text":
             continue
-        if slot in AI_SUPPLIED_CONFIRMATION_SLOTS.get(spec.name, set()):
-            warnings.append(f"ignored AI-supplied safety confirmation slot: {slot}")
-            confirmations.append(f"{slot} requires direct player confirmation")
-            slot_trace[slot] = {"status": "ignored", "reason": "safety_critical_confirmation"}
+        previous_raw_name = seen_raw_slots.get(slot)
+        if previous_raw_name is not None:
+            errors.append(f"duplicate normalized slot: {slot}")
+            trace_key = raw_name if raw_name not in slot_trace else f"{raw_name}#duplicate"
+            slot_trace[trace_key] = {
+                "status": "invalid",
+                "reason": "duplicate_normalized_slot",
+                "canonical_slot": slot,
+                "first_raw_slot": previous_raw_name,
+            }
             continue
-        slot_type = slot_types.get(slot, "text")
-        bound = bind_slot_value(conn, slot, raw_value, slot_type, view=view)
+        seen_raw_slots[slot] = raw_name
+        slot_spec = contract.slot(slot)
+        if not slot_spec.ai_fillable:
+            if slot_spec.player_confirmation_required:
+                warnings.append(f"ignored AI-supplied safety confirmation slot: {slot}")
+                confirmations.append(f"{slot} requires direct player confirmation")
+                reason = "safety_critical_confirmation"
+            else:
+                warnings.append(f"ignored AI-supplied non-fillable slot: {slot}")
+                reason = "not_ai_fillable"
+            slot_trace[slot] = {"status": "ignored", "reason": reason}
+            continue
+        bound = bind_slot_value(conn, slot_spec, raw_value, view=view)
         slot_trace[slot] = bound["trace"]
         if bound["status"] == "bound":
             options[slot] = bound["value"]
@@ -117,7 +128,40 @@ def bind_intent_candidate(
         elif bound["status"] == "invalid":
             errors.append(f"{slot} is invalid: {raw_value}")
 
-    missing.extend(required_missing(spec, options))
+    requirement_evaluation = contract.evaluate_requirements(options)
+    confirmation_only_missing = {
+        slot.name
+        for slot in contract.slots
+        if slot.required
+        and slot.player_confirmation_required
+        and not options.get(slot.name)
+    }
+    confirmation_only_groups = {
+        " or ".join(group.members): group
+        for group in contract.requirement_groups
+        if group.required
+        and all(
+            contract.slot(member).player_confirmation_required
+            for member in group.members
+        )
+    }
+    confirmations.extend(
+        f"{name} requires direct player confirmation"
+        for name in sorted(confirmation_only_missing)
+    )
+    confirmations.extend(
+        f"{group.name} requires direct player confirmation: one of {', '.join(group.members)}"
+        for label, group in sorted(confirmation_only_groups.items())
+        if label in requirement_evaluation.missing
+        or not any(options.get(member) for member in group.members)
+    )
+    missing.extend(
+        item
+        for item in requirement_evaluation.missing
+        if item not in confirmation_only_missing
+        and item not in confirmation_only_groups
+    )
+    errors.extend(requirement_evaluation.errors)
     missing = dedupe(missing)
     confirmations = dedupe(confirmations)
     errors = dedupe(errors)
@@ -147,14 +191,14 @@ def bind_intent_candidate(
 
 def bind_slot_value(
     conn: sqlite3.Connection,
-    slot: str,
+    slot: ActionSlotSpec,
     value: Any,
-    slot_type: Any,
     *,
     view: str,
 ) -> dict[str, Any]:
     if value is None or value == "":
         return {"status": "missing", "trace": {"status": "missing"}}
+    slot_type = slot.binding_type
     if slot_type == "text_list":
         text = text_list_value(value)
         return {"status": "text", "value": text, "trace": {"status": "text", "value": text}}
@@ -162,11 +206,11 @@ def bind_slot_value(
         text = text_value(value)
         status = "text" if DICE_EXPR_RE.match(text) else "invalid"
         return {"status": status, "value": text, "trace": {"status": status, "value": text}}
-    if slot_type in TEXT_SLOT_TYPES:
+    if slot_type in {"text", "random_table_id"}:
         text = text_value(value)
         return {"status": "text", "value": text, "trace": {"status": "text", "value": text}}
 
-    allowed_types = allowed_entity_types(slot_type)
+    allowed_types = allowed_entity_types(slot)
     if allowed_types is None:
         text = text_value(value)
         return {"status": "text", "value": text, "trace": {"status": "text", "value": text}}
@@ -196,24 +240,25 @@ def bind_slot_value(
 
 
 def option_names(spec: ActionResolverSpec) -> set[str]:
-    names = {option.name for option in spec.option_specs}
-    names.update(spec.required_options)
-    names.add("user_text")
-    return names
+    return {slot.name for slot in spec.slot_contract.slots}
 
 
-def normalize_slot_name(action: str, name: str) -> str:
-    text = str(name or "").strip()
-    return SLOT_ALIASES.get(action, {}).get(text, text)
+def normalize_slot_name(
+    action: str,
+    name: str,
+    *,
+    registry: ActionResolverRegistry | None = None,
+) -> str:
+    action_registry = registry if registry is not None else get_default_action_registry()
+    spec = action_registry.get(action)
+    if spec is None:
+        return str(name or "").strip()
+    return spec.slot_contract.normalize_name(name)
 
 
-def allowed_entity_types(slot_type: Any) -> set[str] | None:
-    if isinstance(slot_type, tuple):
-        return {str(item) for item in slot_type if str(item)}
-    if slot_type in ENTITY_SLOT_TYPES:
-        return set() if slot_type in {"entity_or_text", "text_or_entity"} else {str(slot_type)}
-    if isinstance(slot_type, str) and slot_type not in TEXT_SLOT_TYPES:
-        return {slot_type}
+def allowed_entity_types(slot: ActionSlotSpec) -> set[str] | None:
+    if slot.binding_type in {"entity", "entity_or_text", "text_or_entity"}:
+        return set(slot.allowed_entity_types)
     return None
 
 
@@ -296,13 +341,7 @@ def has_table(conn: sqlite3.Connection, name: str) -> bool:
 
 
 def required_missing(spec: ActionResolverSpec, options: dict[str, Any]) -> list[str]:
-    required = list(spec.required_options)
-    required.extend(ACTION_REQUIRED_SLOTS.get(spec.name, ()))
-    if spec.name == "random_table":
-        return [] if options.get("table") or options.get("dice") else ["table or dice"]
-    if spec.name == "routine" and (options.get("task") or options.get("target") or options.get("user_text")):
-        return []
-    return [name for name in dedupe(required) if not options.get(name)]
+    return list(spec.slot_contract.evaluate_requirements(options).missing)
 
 
 def binding_status(

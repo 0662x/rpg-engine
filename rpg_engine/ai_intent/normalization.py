@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..actions import ActionResolverRegistry, get_default_action_registry
+from ..actions import (
+    MAX_ACTION_CANDIDATE_SLOTS,
+    MAX_ACTION_SLOT_IDENTIFIER_LENGTH,
+    ActionResolverRegistry,
+    get_default_action_registry,
+)
 from ..context.rendering import trim_inline
 from .safety_contract import SAFETY_FLAG_VALUES
 from .types import CandidateStep, InternalIntentReview, IntentCandidate
@@ -128,13 +133,16 @@ def normalize_slots(value: Any) -> dict[str, Any]:
         return {}
     result: dict[str, Any] = {}
     for key, item in value.items():
-        name = clean_short(key, limit=60)
+        name = clean_short(key, limit=MAX_ACTION_SLOT_IDENTIFIER_LENGTH)
         if not name:
             continue
         normalized = normalize_slot_value(item)
         if normalized is not None:
-            result[name] = normalized
-        if len(result) >= 24:
+            storage_name = name
+            while storage_name in result:
+                storage_name = f" {storage_name}"
+            result[storage_name] = normalized
+        if len(result) >= MAX_ACTION_CANDIDATE_SLOTS:
             break
     return result
 

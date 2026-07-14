@@ -1,91 +1,109 @@
 from __future__ import annotations
 
+from collections.abc import Iterator, Mapping
+from types import MappingProxyType
 from typing import Any
 
+from ..actions.slot_contract import (
+    ACTION_SLOT_CONTRACT_VERSION,
+    SLOT_BINDING_TYPES,
+    ActionRequirementGroup,
+    ActionRequirementGroupSpec,
+    ActionSlotSpec,
+    ResolvedActionSlotContract,
+)
 
-TEXT_SLOT_TYPES = {"text", "text_list", "dice_expr", "random_table_id"}
-ENTITY_SLOT_TYPES = {"location", "entity_or_text", "text_or_entity"}
 
-ACTION_SLOT_BINDINGS: dict[str, dict[str, Any]] = {
-    "travel": {
-        "destination": "location",
-        "location": "location",
-        "pace": "text",
-    },
-    "social": {
-        "npc": ("character", "faction", "faction_state"),
-        "target": ("character", "faction", "faction_state"),
-        "topic": "text",
-        "approach": "text",
-        "palette_id": "text",
-    },
-    "gather": {
-        "target": ("plant", "item", "material", "crop_plot"),
-        "location": "location",
-        "destination": "location",
-        "palette_id": "text",
-        "output_confirmed": "text",
-    },
-    "explore": {
-        "target": "entity_or_text",
-        "location": "location",
-        "approach": "text",
-        "unknown_lead": "text",
-        "palette_id": "text",
-    },
-    "craft": {
-        "project": "project",
-        "target": "text_or_entity",
-        "materials": "text_list",
-        "time_cost": "text",
-        "palette_id": "text",
-    },
-    "combat": {
-        "target": ("threat", "character", "species"),
-        "weapon": ("equipment", "item"),
-        "ammo": "item",
-        "distance": "text",
-        "ready_state": "text",
-    },
-    "rest": {
-        "until": "text",
-    },
-    "routine": {
-        "task": "text",
-        "target": "entity_or_text",
-        "focus": "text",
-        "time_cost": "text",
-    },
-    "random_table": {
-        "table": "random_table_id",
-        "dice": "dice_expr",
-        "reason": "text",
-    },
-}
+TEXT_SLOT_TYPES = frozenset({"text", "text_list", "dice_expr", "random_table_id"})
+ENTITY_SLOT_TYPES = frozenset({"location", "entity_or_text", "text_or_entity"})
 
-SLOT_ALIASES: dict[str, dict[str, str]] = {
-    "travel": {"target": "destination", "to": "destination", "place": "destination"},
-    "social": {"character": "npc", "faction": "npc", "question": "topic"},
-    "gather": {"resource": "target", "destination": "location", "place": "location"},
-    "explore": {"object": "target", "clue": "target", "place": "location"},
-    "craft": {"output": "target", "item": "target", "time": "time_cost"},
-    "combat": {"enemy": "target", "foe": "target", "range": "distance"},
-    "rest": {"time": "until"},
-    "routine": {"object": "target", "time": "time_cost"},
-    "random_table": {"table_id": "table"},
-}
 
-ACTION_REQUIRED_SLOTS: dict[str, tuple[str, ...]] = {
-    "travel": ("destination",),
-    "social": ("npc",),
-    "gather": ("target",),
-    "explore": ("target",),
-    "craft": ("target",),
-    "combat": ("target", "weapon", "ammo", "distance"),
-    "routine": ("task",),
-    "random_table": ("table or dice",),
-}
+class _DerivedSlotMapping(Mapping[str, Any]):
+    """Read-only compatibility view derived from the default resolver registry."""
 
-AI_SUPPLIED_CONFIRMATION_SLOTS: dict[str, set[str]] = {
-    "combat": {"ready_state"},
-}
+    def __init__(self, projection: str) -> None:
+        self._projection = projection
+
+    def _data(self) -> Mapping[str, Any]:
+        from ..actions import get_default_action_registry
+
+        values: dict[str, Any] = {}
+        for spec in get_default_action_registry().all():
+            contract = spec.slot_contract
+            if self._projection == "bindings":
+                item = {
+                    slot.name: _legacy_binding_value(slot)
+                    for slot in contract.slots
+                    if slot.name != "user_text"
+                }
+                values[spec.name] = MappingProxyType(item)
+            elif self._projection == "aliases":
+                item = {
+                    alias: slot.name
+                    for slot in contract.slots
+                    for alias in slot.aliases
+                }
+                values[spec.name] = MappingProxyType(item)
+            elif self._projection == "required":
+                required = [slot.name for slot in contract.slots if slot.required]
+                required.extend(
+                    _legacy_group_requirement(group)
+                    for group in contract.requirement_groups
+                    if group.required
+                )
+                if required:
+                    values[spec.name] = tuple(required)
+            elif self._projection == "confirmation":
+                confirmation = frozenset(
+                    slot.name for slot in contract.slots if slot.player_confirmation_required
+                )
+                if confirmation:
+                    values[spec.name] = confirmation
+            else:  # pragma: no cover - constructor is module-owned
+                raise AssertionError(f"unknown compatibility projection: {self._projection}")
+        return MappingProxyType(values)
+
+    def __getitem__(self, key: str) -> Any:
+        return self._data()[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._data())
+
+    def __len__(self) -> int:
+        return len(self._data())
+
+
+def _legacy_binding_value(slot: ActionSlotSpec) -> Any:
+    if slot.binding_type == "entity":
+        if len(slot.allowed_entity_types) == 1:
+            return slot.allowed_entity_types[0]
+        return slot.allowed_entity_types
+    return slot.binding_type
+
+
+def _legacy_group_requirement(group: ActionRequirementGroup) -> str:
+    if group.binding_rule == "source_user_text_fallback":
+        return group.members[0]
+    return " or ".join(group.members)
+
+
+ACTION_SLOT_BINDINGS: Mapping[str, Mapping[str, Any]] = _DerivedSlotMapping("bindings")
+SLOT_ALIASES: Mapping[str, Mapping[str, str]] = _DerivedSlotMapping("aliases")
+ACTION_REQUIRED_SLOTS: Mapping[str, tuple[str, ...]] = _DerivedSlotMapping("required")
+AI_SUPPLIED_CONFIRMATION_SLOTS: Mapping[str, frozenset[str]] = _DerivedSlotMapping("confirmation")
+
+
+__all__ = [
+    "ACTION_REQUIRED_SLOTS",
+    "ACTION_SLOT_BINDINGS",
+    "ACTION_SLOT_CONTRACT_VERSION",
+    "AI_SUPPLIED_CONFIRMATION_SLOTS",
+    "ENTITY_SLOT_TYPES",
+    "SLOT_ALIASES",
+    "SLOT_BINDING_TYPES",
+    "TEXT_SLOT_TYPES",
+    "ActionRequirementGroup",
+    "ActionRequirementGroupSpec",
+    "ActionSlotSpec",
+    "ResolvedActionSlotContract",
+]

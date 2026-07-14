@@ -280,7 +280,7 @@ def arbitrate_external_primary(
             decision_trace=trace,
         )
 
-    duplicate_slots = duplicate_normalized_slots(external)
+    duplicate_slots = duplicate_normalized_slots(external, registry=registry)
     if duplicate_slots:
         trace["consensus"] = {
             "status": "blocked",
@@ -435,7 +435,7 @@ def validate_composite_candidate(
         top_bound,
         candidate=replace(safe_candidate, kind="single", plan=()),
     )
-    duplicate_slots = duplicate_normalized_slots(candidate)
+    duplicate_slots = duplicate_normalized_slots(candidate, registry=registry)
     if duplicate_slots:
         disagreements = tuple(
             f"{source_label} composite repeats normalized action slot: {slot}"
@@ -525,7 +525,7 @@ def validate_candidate_plan(
             slots=dict(step.slots),
             confidence=candidate.confidence,
         )
-        duplicate_slots = duplicate_normalized_slots(step_candidate)
+        duplicate_slots = duplicate_normalized_slots(step_candidate, registry=registry)
         if duplicate_slots:
             errors = tuple(
                 f"{source_label} plan step {index} repeats normalized action slot: {slot}"
@@ -608,13 +608,17 @@ def canonical_query_slots(candidate: IntentCandidate) -> tuple[str, str]:
     return query_kind, "" if query_kind == "scene" else query_text
 
 
-def duplicate_normalized_slots(candidate: IntentCandidate) -> tuple[str, ...]:
+def duplicate_normalized_slots(
+    candidate: IntentCandidate,
+    *,
+    registry: ActionResolverRegistry | None = None,
+) -> tuple[str, ...]:
     if not candidate.action:
         return ()
     seen: set[str] = set()
     duplicates: list[str] = []
     for raw_slot in candidate.slots:
-        normalized = normalize_slot_name(candidate.action, raw_slot)
+        normalized = normalize_slot_name(candidate.action, raw_slot, registry=registry)
         if normalized in seen and normalized not in duplicates:
             duplicates.append(normalized)
         seen.add(normalized)
@@ -681,7 +685,7 @@ def validate_candidate_before_disagreement(
             safe_slots["query_text"] = query_text
         return status, issues, replace(candidate, slots=safe_slots), None
 
-    duplicate_slots = duplicate_normalized_slots(candidate)
+    duplicate_slots = duplicate_normalized_slots(candidate, registry=registry)
     if duplicate_slots:
         issues = tuple(
             f"{source_label} duplicate normalized action slot: {slot}"
@@ -902,8 +906,14 @@ def arbitrate_external_internal(
     trace["external_binding"] = external_bound.to_dict()
     trace["internal_binding"] = internal_bound.to_dict()
     structural_issues = [
-        *(f"external duplicate normalized action slot: {slot}" for slot in duplicate_normalized_slots(external)),
-        *(f"internal duplicate normalized action slot: {slot}" for slot in duplicate_normalized_slots(internal)),
+        *(
+            f"external duplicate normalized action slot: {slot}"
+            for slot in duplicate_normalized_slots(external, registry=registry)
+        ),
+        *(
+            f"internal duplicate normalized action slot: {slot}"
+            for slot in duplicate_normalized_slots(internal, registry=registry)
+        ),
         *(f"external ignored slot outside resolver contract: {slot}" for slot in outside_contract_slots(external_bound)),
         *(f"internal ignored slot outside resolver contract: {slot}" for slot in outside_contract_slots(internal_bound)),
     ]

@@ -23,7 +23,14 @@ from rpg_engine.ai_intent.external import validate_external_intent_candidate
 from rpg_engine.ai_intent.slot_contract import ACTION_REQUIRED_SLOTS, AI_SUPPLIED_CONFIRMATION_SLOTS
 from rpg_engine.capabilities import ACTION_CAPABILITIES
 from rpg_engine.intent_manifest import QUERY_KINDS, build_intent_manifest
-from rpg_engine.actions import get_default_action_registry
+from rpg_engine.actions import (
+    ActionOptionSpec,
+    ActionRequirementGroupSpec,
+    ActionResolverRegistry,
+    ActionResolverSpec,
+    get_default_action_registry,
+)
+from rpg_engine.ai_intent.prompts import internal_prompt_action_contract
 from rpg_engine.resource_paths import schema_resource_text
 
 
@@ -63,7 +70,7 @@ class IntentManifestTests(unittest.TestCase):
     def test_manifest_lists_all_registered_actions_and_query_kinds(self) -> None:
         manifest = build_intent_manifest()
 
-        self.assertEqual(manifest["schema_version"], "3")
+        self.assertEqual(manifest["schema_version"], "4")
         self.assertEqual(manifest["generated_by"], "kernel")
         self.assertEqual(
             [action["name"] for action in manifest["actions"]],
@@ -73,7 +80,7 @@ class IntentManifestTests(unittest.TestCase):
         self.assertEqual([query["kind"] for query in manifest["queries"]], ["scene", "entity", "context"])
         self.assertNotIn("rule", [query["kind"] for query in manifest["queries"]])
 
-    def test_manifest_v3_embeds_the_exact_registry_taxonomy_projection(self) -> None:
+    def test_manifest_v4_embeds_the_exact_registry_taxonomy_projection(self) -> None:
         registry = get_default_action_registry()
         manifest = build_intent_manifest(registry=registry)
         taxonomy = registry.taxonomy_projection()
@@ -275,7 +282,15 @@ class IntentManifestTests(unittest.TestCase):
         random_table = actions["random_table"]
         self.assertEqual(
             random_table["requirement_groups"],
-            [{"name": "random_source", "any_of": ("table", "dice"), "required": True}],
+            [
+                {
+                    "name": "random_source",
+                    "any_of": ("table", "dice"),
+                    "required": True,
+                    "cardinality": "exactly_one",
+                    "binding_rule": "slots_only",
+                }
+            ],
         )
         random_slots = {slot["name"]: slot for slot in random_table["slots"]}
         self.assertEqual(random_slots["table"]["type"], "random_table_id")
@@ -284,7 +299,15 @@ class IntentManifestTests(unittest.TestCase):
         routine = actions["routine"]
         self.assertEqual(
             routine["requirement_groups"],
-            [{"name": "routine_scope", "any_of": ("task", "target"), "required": True}],
+            [
+                {
+                    "name": "routine_scope",
+                    "any_of": ("task", "target"),
+                    "required": True,
+                    "cardinality": "at_least_one",
+                    "binding_rule": "source_user_text_fallback",
+                }
+            ],
         )
 
     def test_query_manifest_is_read_only_and_owned_by_kernel(self) -> None:
@@ -304,6 +327,128 @@ class IntentManifestTests(unittest.TestCase):
                 self.assertTrue(slots["query_kind"]["required"])
                 self.assertEqual(slots["query_text"]["required"], query["kind"] in {"entity", "context"})
         self.assertEqual(manifest["unsupported_query_kind_policy"], {"rule": "context", "default": "entity"})
+
+    def test_manifest_slots_and_groups_are_exact_registry_contract_projections(self) -> None:
+        registry = get_default_action_registry()
+        manifest = build_intent_manifest(registry=registry)
+        actions = {action["name"]: action for action in manifest["actions"]}
+
+        for spec in registry.all():
+            expected_slots = [
+                {
+                    "name": slot.name,
+                    "dest": slot.dest,
+                    "description": slot.description,
+                    "type": slot.binding_type,
+                    "allowed_entity_types": slot.allowed_entity_types,
+                    "aliases": slot.aliases,
+                    "required": slot.required,
+                    "default": slot.to_projection()["default"],
+                    "ai_fillable": slot.ai_fillable,
+                    "player_confirmation_required": slot.player_confirmation_required,
+                }
+                for slot in spec.slot_contract.slots
+            ]
+            expected_groups = [
+                {
+                    "name": group.name,
+                    "any_of": group.members,
+                    "required": group.required,
+                    "cardinality": group.cardinality,
+                    "binding_rule": group.binding_rule,
+                }
+                for group in spec.slot_contract.requirement_groups
+            ]
+            with self.subTest(action=spec.name):
+                self.assertEqual(actions[spec.name]["slots"], expected_slots)
+                self.assertEqual(actions[spec.name]["requirement_groups"], expected_groups)
+
+    def test_group_behavior_change_rotates_manifest_digest_at_schema_v4(self) -> None:
+        def registry_with_group(
+            cardinality: str,
+            binding_rule: str,
+        ) -> ActionResolverRegistry:
+            registry = ActionResolverRegistry()
+            registry.register(
+                ActionResolverSpec(
+                    name="survey",
+                    preview=lambda *_args: "preview\n",
+                    response_template="action.md",
+                    option_specs=(
+                        ActionOptionSpec("target", "survey target"),
+                        ActionOptionSpec("approach", "survey approach"),
+                    ),
+                    requirement_groups=(
+                        ActionRequirementGroupSpec(
+                            "survey_scope",
+                            ("target", "approach"),
+                            cardinality=cardinality,
+                            binding_rule=binding_rule,
+                        ),
+                    ),
+                )
+            )
+            return registry
+
+        baseline = build_intent_manifest(
+            registry=registry_with_group("at_least_one", "slots_only")
+        )
+        cardinality_changed = build_intent_manifest(
+            registry=registry_with_group("exactly_one", "slots_only")
+        )
+        binding_rule_changed = build_intent_manifest(
+            registry=registry_with_group("at_least_one", "source_user_text_fallback")
+        )
+
+        self.assertEqual(baseline["schema_version"], "4")
+        self.assertEqual(cardinality_changed["schema_version"], "4")
+        self.assertEqual(binding_rule_changed["schema_version"], "4")
+        self.assertEqual(
+            cardinality_changed["actions"][0]["requirement_groups"][0]["cardinality"],
+            "exactly_one",
+        )
+        self.assertEqual(
+            binding_rule_changed["actions"][0]["requirement_groups"][0]["binding_rule"],
+            "source_user_text_fallback",
+        )
+        self.assertNotEqual(baseline["manifest_digest"], cardinality_changed["manifest_digest"])
+        self.assertNotEqual(baseline["manifest_digest"], binding_rule_changed["manifest_digest"])
+
+    def test_falsey_custom_registry_reaches_manifest_and_internal_prompt_projection(self) -> None:
+        class FalseyRegistry(ActionResolverRegistry):
+            def __bool__(self) -> bool:
+                return False
+
+        registry = FalseyRegistry()
+        registry.register(
+            ActionResolverSpec(
+                name="survey",
+                preview=lambda *_args: "preview\n",
+                response_template="action.md",
+                option_specs=(
+                    ActionOptionSpec("target", "survey target", required=True, aliases=("subject",)),
+                    ActionOptionSpec(
+                        "approval",
+                        "direct player approval",
+                        ai_fillable=False,
+                        player_confirmation_required=True,
+                    ),
+                    ActionOptionSpec("user_text", "source text", ai_fillable=False),
+                ),
+            )
+        )
+        manifest = build_intent_manifest(registry=registry)
+        action = manifest["actions"][0]
+        taxonomy_action = manifest["action_taxonomy"]["actions"][0]
+        prompt_contract = internal_prompt_action_contract(action, taxonomy_action)
+        slots = {slot["name"]: slot for slot in prompt_contract["slots"]}
+
+        self.assertEqual([item["name"] for item in manifest["actions"]], ["survey"])
+        self.assertEqual(slots["target"]["aliases"], ["subject"])
+        self.assertTrue(slots["target"]["required"])
+        self.assertFalse(slots["approval"]["ai_fillable"])
+        self.assertTrue(slots["approval"]["player_confirmation_required"])
+        self.assertNotIn("user_text", slots)
 
 
 if __name__ == "__main__":

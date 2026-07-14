@@ -540,12 +540,23 @@ CRAFT_RESOLVER = ActionResolverSpec(
     preview=preview_craft,
     response_template="craft_turn.md",
     option_specs=option_specs_for(
-        ActionOptionSpec("project", "project entity id/name/alias"),
-        ActionOptionSpec("target", "target item/output name or entity"),
-        ActionOptionSpec("materials", "comma-separated materials/tools to check"),
-        ActionOptionSpec("time_cost", "estimated crafting time", dest="time"),
+        ActionOptionSpec(
+            "project",
+            "project entity id/name/alias",
+            binding_type="entity",
+            allowed_entity_types=("project",),
+        ),
+        ActionOptionSpec(
+            "target",
+            "target item/output name or entity",
+            required=True,
+            binding_type="text_or_entity",
+            aliases=("output", "item"),
+        ),
+        ActionOptionSpec("materials", "comma-separated materials/tools to check", binding_type="text_list"),
+        ActionOptionSpec("time_cost", "estimated crafting time", dest="time", aliases=("time",)),
         ActionOptionSpec("palette_id", "material or recipe palette candidate id used in a craft plan", dest="palette-id"),
-        ActionOptionSpec("user_text", "original player action text", dest="user-text"),
+        ActionOptionSpec("user_text", "original player action text", dest="user-text", ai_fillable=False),
     ),
     taxonomy=ActionTaxonomySpec(
         terms=(

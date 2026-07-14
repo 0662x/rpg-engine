@@ -3463,6 +3463,7 @@ class GMRuntimeTests(unittest.TestCase):
                     session_key="qq:user:1",
                     source_user_text_hash=hash_text("休息到早上"),
                     action_taxonomy_digest=runtime.action_registry.taxonomy_digest,
+                    action_slot_digest=str(runtime.action_registry.slot_projection()["digest"]),
                     identity_profile=PREFLIGHT_IDENTITY_MESSAGE_ONLY,
                 )
                 conn.commit()

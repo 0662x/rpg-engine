@@ -404,11 +404,18 @@ SOCIAL_RESOLVER = ActionResolverSpec(
     preview=preview_social,
     response_template="social_turn.md",
     option_specs=option_specs_for(
-        ActionOptionSpec("npc", "NPC or faction entity id/name/alias"),
-        ActionOptionSpec("topic", "topic, promise, trade or question"),
+        ActionOptionSpec(
+            "npc",
+            "NPC or faction entity id/name/alias",
+            required=True,
+            binding_type="entity",
+            allowed_entity_types=("character", "faction", "faction_state"),
+            aliases=("character", "faction"),
+        ),
+        ActionOptionSpec("topic", "topic, promise, trade or question", aliases=("question",)),
         ActionOptionSpec("approach", "approach, gift, posture or communication method"),
         ActionOptionSpec("palette_id", "palette candidate id used as a rumor/contact topic", dest="palette-id"),
-        ActionOptionSpec("user_text", "original player action text", dest="user-text"),
+        ActionOptionSpec("user_text", "original player action text", dest="user-text", ai_fillable=False),
     ),
     taxonomy=ActionTaxonomySpec(
         terms=(

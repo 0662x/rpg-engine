@@ -2,7 +2,10 @@
 
 Use this prompt in any AI client connected to AIGM through MCP or CLI.
 
-Prompt version: `2026-07-13.intent-contract-v3-taxonomy-v1-safety-v1`
+Prompt version: `2026-07-14.intent-contract-v4-taxonomy-v1-safety-v1`
+
+Contract ownership note: resolver-owned slot metadata is projected through manifest v4; requirement groups expose
+their executable `cardinality` and `binding_rule`, and clients must obey both fields.
 
 Surface profile: `external_agent_low_trust`
 
@@ -23,6 +26,7 @@ Authority:
 Core loop:
 1. If the player asks to continue or start, call start_or_continue.
 2. Use intent_manifest as the read-only kernel source for manifest schema version/digest, action taxonomy version/digest/normalization/actions/locale terms/roles/semantic labels/priorities, safety vocabulary version/digest/values, available actions, query kinds, slots, requirement groups, risk classes, AI-fillable fields, and player-confirmation slots. Do not treat it as permission to execute anything. Do not maintain a parallel synonym list.
+   Interpret requirement groups exactly as published: `required=true` means the group must be satisfied; `cardinality=at_least_one` accepts one or more listed members, while `cardinality=exactly_one` accepts one and rejects multiple members. `binding_rule=slots_only` is satisfied only by listed candidate slots. `binding_rule=source_user_text_fallback` lets the Kernel use the original player text as a completeness fallback, but the client should still populate an appropriate listed AI-fillable member when the text supports one. Never emit source-only `user_text` as a candidate slot.
 3. For every normal player natural-language request on the default player-safe MCP profile, refresh or read the current intent_manifest first, then construct a fresh low-trust external_intent_candidate from the player text, player-visible context, and that manifest. Include an all-or-nothing top-level `contract` with `manifest_schema_version`, `manifest_digest`, `safety_vocabulary_version`, and `safety_vocabulary_digest`, then call player_turn with the original user_text and that candidate. Use only exact action taxonomy and safety tokens listed by the current manifest; do not change case, add whitespace, duplicate tokens, or invent new tokens.
    The kernel applies this route-proposal matrix: when internal intent AI is enabled, external and internal candidates use the existing arbitration path; when internal intent AI is explicitly off and the external candidate passes schema, registry, safety, query/binding checks, it may be selected as `external_primary` while deterministic rules remain diagnostic evidence; when internal intent AI is off and no external candidate exists, the current deterministic fallback remains. Do not confuse helper timeout/unavailability with explicitly configured off mode. A soft-wait signal does not change authority, a hard-timeout/late result cannot be adopted later, and background/preflight latency never authorizes a commit.
 4. Let player_turn decide query/action/clarify/block. If it returns a query result, answer only from the returned player-visible scene, context, or entity text.

@@ -14,6 +14,7 @@ from .base import (
     option_specs_for,
     option_value,
 )
+from .slot_contract import ActionRequirementGroupSpec
 from .taxonomy import ActionTaxonomySpec, taxonomy_terms
 
 
@@ -232,10 +233,17 @@ RANDOM_TABLE_RESOLVER = ActionResolverSpec(
     preview=preview_random_table,
     response_template="action.md",
     option_specs=option_specs_for(
-        ActionOptionSpec("table", "random table id to roll"),
-        ActionOptionSpec("dice", "dice expression such as d20, 2d6 or 2d6+1"),
+        ActionOptionSpec("table", "random table id to roll", binding_type="random_table_id", aliases=("table_id",)),
+        ActionOptionSpec("dice", "dice expression such as d20, 2d6 or 2d6+1", binding_type="dice_expr"),
         ActionOptionSpec("reason", "why the kernel random result is needed"),
-        ActionOptionSpec("user_text", "original player action text", dest="user-text"),
+        ActionOptionSpec("user_text", "original player action text", dest="user-text", ai_fillable=False),
+    ),
+    requirement_groups=(
+        ActionRequirementGroupSpec(
+            "random_source",
+            ("table", "dice"),
+            cardinality="exactly_one",
+        ),
     ),
     taxonomy=ActionTaxonomySpec(
         terms=(

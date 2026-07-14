@@ -156,8 +156,8 @@ REST_RESOLVER = ActionResolverSpec(
     preview=preview_rest,
     response_template="rest_turn.md",
     option_specs=option_specs_for(
-        ActionOptionSpec("until", "target rest time", default="morning"),
-        ActionOptionSpec("user_text", "original player action text", dest="user-text"),
+        ActionOptionSpec("until", "target rest time", default="morning", aliases=("time",)),
+        ActionOptionSpec("user_text", "original player action text", dest="user-text", ai_fillable=False),
     ),
     taxonomy=ActionTaxonomySpec(
         terms=(

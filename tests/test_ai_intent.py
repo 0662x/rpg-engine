@@ -108,6 +108,14 @@ class AIIntentTests(unittest.TestCase):
                 "aliases": ["秘者"],
             },
             {
+                "id": "char:archived",
+                "type": "character",
+                "name": "旧守卫",
+                "status": "archived",
+                "visibility": "known",
+                "summary": "Archived NPC.",
+            },
+            {
                 "id": "item:fishing-trap",
                 "type": "item",
                 "name": "鱼笼",
@@ -426,8 +434,8 @@ class AIIntentTests(unittest.TestCase):
             "reason": "sentinel reason",
         }
         mismatches = {
-            "older_manifest_version": {**current_contract, "manifest_schema_version": "1"},
-            "newer_manifest_version": {**current_contract, "manifest_schema_version": "4"},
+            "older_manifest_version": {**current_contract, "manifest_schema_version": "3"},
+            "newer_manifest_version": {**current_contract, "manifest_schema_version": "5"},
             "wrong_manifest_digest": {**current_contract, "manifest_digest": "0" * 64},
             "older_safety_version": {**current_contract, "safety_vocabulary_version": "0"},
             "newer_safety_version": {**current_contract, "safety_vocabulary_version": "2"},
@@ -715,7 +723,7 @@ class AIIntentTests(unittest.TestCase):
         self.assertIn('"risk": "red"', prompt)
         self.assertIn('"player_confirmation_required": true', prompt)
         self.assertIn("允许 mode: action, query, unknown", prompt)
-        self.assertIn("Intent manifest schema_version：3", prompt)
+        self.assertIn("Intent manifest schema_version：4", prompt)
         self.assertIn("Action taxonomy version：1", prompt)
         self.assertIn("Action taxonomy digest：", prompt)
         self.assertIn("Safety vocabulary version：1", prompt)
@@ -859,6 +867,58 @@ class AIIntentTests(unittest.TestCase):
         self.assertNotIn("npc", bound.options)
         self.assertIn("npc", bound.missing_required)
         self.assertEqual(bound.entity_bindings, {})
+
+    def test_binder_visibility_and_archived_binding_are_read_only(self) -> None:
+        conn = self.make_entity_db()
+        conn.executescript(read_resource_text("migrations", "0006_intent_preflight_cache.sql"))
+        tables = ("facts", "intent_preflight_cache", "turns", "events")
+        before_rows = {
+            table: [tuple(row) for row in conn.execute(f"select * from {table} order by rowid")]
+            for table in tables
+        }
+        before_changes = conn.total_changes
+        hidden_candidate = normalize_intent_candidate(
+            {
+                "kind": "single",
+                "mode": "action",
+                "action": "social",
+                "slots": {"npc": "秘者"},
+            },
+            source="internal_ai",
+            user_text="找秘者",
+        )
+        archived_candidate = normalize_intent_candidate(
+            {
+                "kind": "single",
+                "mode": "action",
+                "action": "social",
+                "slots": {"npc": "旧守卫"},
+            },
+            source="internal_ai",
+            user_text="找旧守卫",
+        )
+
+        player_hidden = bind_intent_candidate(conn, hidden_candidate, view="player")
+        gm_hidden = bind_intent_candidate(conn, hidden_candidate, view="gm")
+        player_archived = bind_intent_candidate(conn, archived_candidate, view="player")
+        gm_archived = bind_intent_candidate(conn, archived_candidate, view="gm")
+
+        self.assertEqual(player_hidden.binding_status, "missing")
+        self.assertNotIn("npc", player_hidden.options)
+        self.assertEqual(gm_hidden.binding_status, "bound")
+        self.assertEqual(gm_hidden.options["npc"], "char:hidden")
+        for bound in (player_archived, gm_archived):
+            self.assertEqual(bound.binding_status, "missing")
+            self.assertNotIn("npc", bound.options)
+            self.assertNotIn("char:archived", str(bound.to_dict()))
+        self.assertEqual(conn.total_changes, before_changes)
+        self.assertEqual(
+            {
+                table: [tuple(row) for row in conn.execute(f"select * from {table} order by rowid")]
+                for table in tables
+            },
+            before_rows,
+        )
 
     def test_ai_intent_router_builds_action_intent_from_bound_candidate(self) -> None:
         conn = self.make_entity_db()

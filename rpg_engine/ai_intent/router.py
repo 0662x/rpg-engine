@@ -385,6 +385,7 @@ class AIIntentRouter:
                     external_candidate=external_candidate,
                     rule_candidate=rule_candidate,
                     action_taxonomy_digest=self.registry.taxonomy_digest,
+                    action_slot_digest=str(self.registry.slot_projection()["digest"]),
                     pending_wait_ms=pending_wait_ms,
                 )
             return consume_intent_preflight_by_message(
@@ -402,6 +403,7 @@ class AIIntentRouter:
                 external_candidate=external_candidate,
                 rule_candidate=rule_candidate,
                 action_taxonomy_digest=self.registry.taxonomy_digest,
+                action_slot_digest=str(self.registry.slot_projection()["digest"]),
                 pending_wait_ms=pending_wait_ms,
             )
 

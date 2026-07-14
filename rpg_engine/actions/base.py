@@ -3,11 +3,19 @@ from __future__ import annotations
 import sqlite3
 import re
 import unicodedata
-from dataclasses import dataclass, field
+from collections.abc import Mapping
+from dataclasses import dataclass, field, fields
 from typing import Any, Callable
 
 from ..campaign import Campaign
 from ..ux import PlanStep, RepairOption
+from .slot_contract import (
+    ActionOptionSpec,
+    ActionRequirementGroupSpec,
+    ResolvedActionSlotContract,
+    build_action_slot_contract,
+    build_action_slot_registry_projection,
+)
 from .taxonomy import (
     ACTION_TAXONOMY_VERSION,
     ActionTaxonomySpec,
@@ -29,15 +37,6 @@ ValidateDeltaAction = Callable[
     [Campaign, sqlite3.Connection, dict[str, Any], Any, dict[str, Any]],
     "ActionValidationResult",
 ]
-
-
-@dataclass(frozen=True)
-class ActionOptionSpec:
-    name: str
-    help: str
-    required: bool = False
-    default: Any = None
-    dest: str | None = None
 
 
 @dataclass(frozen=True)
@@ -108,6 +107,8 @@ class ActionResolverSpec:
     proposal_model: type = dict
     required_options: tuple[str, ...] = field(default_factory=tuple)
     option_specs: tuple[ActionOptionSpec, ...] = field(default_factory=tuple)
+    requirement_groups: tuple[ActionRequirementGroupSpec, ...] = field(default_factory=tuple)
+    slot_contract: ResolvedActionSlotContract = field(init=False)
     taxonomy: ActionTaxonomySpec = field(default_factory=ActionTaxonomySpec)
     required_context: RequiredContextAction | None = None
     validate_request: ValidateRequestAction | None = None
@@ -123,6 +124,7 @@ class ActionResolverSpec:
         proposal_model: type = dict,
         required_options: tuple[str, ...] = (),
         option_specs: tuple[ActionOptionSpec, ...] = (),
+        requirement_groups: tuple[ActionRequirementGroupSpec, ...] = (),
         keywords: tuple[str, ...] | object = _TAXONOMY_UNSET,
         semantic_labels: tuple[str, ...] | object = _TAXONOMY_UNSET,
         inference_priority: int | object = _TAXONOMY_UNSET,
@@ -146,14 +148,29 @@ class ActionResolverSpec:
         elif type(taxonomy) is not ActionTaxonomySpec:
             raise TypeError("taxonomy must be an exact ActionTaxonomySpec")
 
+        slot_contract = build_action_slot_contract(
+            name,
+            option_specs,
+            legacy_required_options=required_options,
+            requirement_groups=requirement_groups,
+        )
+        normalized_options = tuple(
+            slot.to_option_spec(read_only_default=True)
+            for slot in slot_contract.slots
+        )
+        normalized_required = tuple(slot.name for slot in slot_contract.slots if slot.required)
+        normalized_groups = tuple(group.to_spec() for group in slot_contract.requirement_groups)
+
         for key, value in (
             ("name", name),
             ("preview", preview),
             ("response_template", response_template),
             ("request_model", request_model),
             ("proposal_model", proposal_model),
-            ("required_options", required_options),
-            ("option_specs", option_specs),
+            ("required_options", normalized_required),
+            ("option_specs", normalized_options),
+            ("requirement_groups", normalized_groups),
+            ("slot_contract", slot_contract),
             ("taxonomy", taxonomy),
             ("required_context", required_context),
             ("validate_request", validate_request),
@@ -200,6 +217,12 @@ class ActionResolverSpec:
                 warnings=validation.warnings,
                 narrative_constraints=("Use preview output and validated state only.",),
             )
+        if validation.errors:
+            return ResolutionResult(
+                status="blocked",
+                warnings=tuple(dict.fromkeys((*validation.warnings, *validation.errors))),
+                narrative_constraints=("Do not resolve an invalid action request.",),
+            )
         return ResolutionResult(
             status="needs_confirmation",
             confirmations=validation.missing_required,
@@ -222,8 +245,19 @@ class ActionResolverSpec:
 
 
 def validate_required_options(spec: ActionResolverSpec, options: Any) -> ActionValidationResult:
-    missing = tuple(name for name in spec.required_options if not option_value(options, name))
-    return ActionValidationResult(missing_required=missing)
+    if isinstance(options, Mapping):
+        values = options
+    else:
+        values = {
+            slot.name: option_value(options, slot.name)
+            for slot in spec.slot_contract.slots
+        }
+        values["user_text"] = option_value(options, "user_text")
+    evaluation = spec.slot_contract.evaluate_requirements(values)
+    return ActionValidationResult(
+        errors=evaluation.errors,
+        missing_required=evaluation.missing,
+    )
 
 
 def option_specs_for(*specs: ActionOptionSpec) -> tuple[ActionOptionSpec, ...]:
@@ -301,6 +335,25 @@ def _suffix_is_non_target_grammar(suffix: str, locale: str) -> bool:
     return False
 
 
+def _exact_compatibility_equal(actual: Any, expected: Any) -> bool:
+    if type(actual) is not type(expected):
+        return False
+    if type(expected) is tuple:
+        return len(actual) == len(expected) and all(
+            _exact_compatibility_equal(actual_item, expected_item)
+            for actual_item, expected_item in zip(actual, expected, strict=True)
+        )
+    if type(expected) in {ActionOptionSpec, ActionRequirementGroupSpec}:
+        return all(
+            _exact_compatibility_equal(
+                getattr(actual, item.name),
+                getattr(expected, item.name),
+            )
+            for item in fields(expected)
+        )
+    return bool(actual == expected)
+
+
 class ActionResolverRegistry:
     def __init__(self, *, taxonomy_version: str = ACTION_TAXONOMY_VERSION) -> None:
         build_action_taxonomy_projection((), version=taxonomy_version)
@@ -310,10 +363,50 @@ class ActionResolverRegistry:
     def register(self, spec: ActionResolverSpec) -> None:
         if not isinstance(spec, ActionResolverSpec):
             raise TypeError("action resolver must be an ActionResolverSpec")
+        build_action_slot_registry_projection(((spec.name, spec.slot_contract),))
         if spec.name in self._specs:
             raise ValueError(f"Duplicate action resolver: {spec.name}")
         validate_executable_taxonomy_locales(spec.taxonomy)
         prospective = {**self._specs, spec.name: spec}
+        for name, item in prospective.items():
+            if type(item.name) is not str or item.name != name:
+                raise ValueError(
+                    f"{name}.resolver name mismatch: {item.name!r}"
+                )
+        build_action_slot_registry_projection(
+            ((name, item.slot_contract) for name, item in prospective.items()),
+        )
+        for name, item in prospective.items():
+            expected_options = tuple(
+                slot.to_option_spec(read_only_default=True)
+                for slot in item.slot_contract.slots
+            )
+            expected_required = tuple(
+                slot.name for slot in item.slot_contract.slots if slot.required
+            )
+            expected_groups = tuple(
+                group.to_spec() for group in item.slot_contract.requirement_groups
+            )
+            for field_name, actual, expected in (
+                ("option_specs", item.option_specs, expected_options),
+                ("required_options", item.required_options, expected_required),
+                ("requirement_groups", item.requirement_groups, expected_groups),
+            ):
+                if not _exact_compatibility_equal(actual, expected):
+                    raise ValueError(
+                        f"{name}.slot_contract compatibility mismatch: {field_name}"
+                    )
+            if any(
+                actual.default is not expected.default
+                for actual, expected in zip(
+                    item.option_specs,
+                    expected_options,
+                    strict=True,
+                )
+            ):
+                raise ValueError(
+                    f"{name}.slot_contract compatibility mismatch: option_specs.default"
+                )
         build_action_taxonomy_projection(
             ((name, item.taxonomy) for name, item in prospective.items()),
             version=self._taxonomy_version,
@@ -333,6 +426,11 @@ class ActionResolverRegistry:
         return build_action_taxonomy_projection(
             ((spec.name, spec.taxonomy) for spec in self.all()),
             version=self._taxonomy_version,
+        )
+
+    def slot_projection(self) -> dict[str, Any]:
+        return build_action_slot_registry_projection(
+            ((spec.name, spec.slot_contract) for spec in self.all()),
         )
 
     @property

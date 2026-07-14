@@ -6,6 +6,7 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 from rpg_engine.campaign import load_campaign
@@ -14,11 +15,11 @@ from rpg_engine.preflight_cache import (
     PREFLIGHT_EXPIRED,
     PREFLIGHT_IDENTITY_MESSAGE_ONLY,
     PREFLIGHT_REJECTED,
-    build_preflight_identity,
-    consume_intent_preflight_by_message,
-    consume_intent_preflight_row,
-    consume_intent_preflight,
-    create_pending_intent_preflight,
+    build_preflight_identity as _build_preflight_identity,
+    consume_intent_preflight as _consume_intent_preflight,
+    consume_intent_preflight_by_message as _consume_intent_preflight_by_message,
+    consume_intent_preflight_row as _consume_intent_preflight_row,
+    create_pending_intent_preflight as _create_pending_intent_preflight,
     hash_text,
     mark_intent_preflight_failed,
     mark_intent_preflight_ready,
@@ -28,6 +29,31 @@ from rpg_engine.preflight_cache import (
 
 ENGINE_ROOT = Path(__file__).resolve().parents[1]
 MINIMAL_FIXTURE = ENGINE_ROOT / "tests" / "fixtures" / "minimal_campaign"
+TEST_ACTION_SLOT_DIGEST = "slots:test"
+
+
+def _with_test_slot_digest(kwargs: dict[str, Any]) -> dict[str, Any]:
+    return {"action_slot_digest": TEST_ACTION_SLOT_DIGEST, **kwargs}
+
+
+def build_preflight_identity(*args: Any, **kwargs: Any) -> Any:
+    return _build_preflight_identity(*args, **_with_test_slot_digest(kwargs))
+
+
+def create_pending_intent_preflight(*args: Any, **kwargs: Any) -> Any:
+    return _create_pending_intent_preflight(*args, **_with_test_slot_digest(kwargs))
+
+
+def consume_intent_preflight(*args: Any, **kwargs: Any) -> Any:
+    return _consume_intent_preflight(*args, **_with_test_slot_digest(kwargs))
+
+
+def consume_intent_preflight_by_message(*args: Any, **kwargs: Any) -> Any:
+    return _consume_intent_preflight_by_message(*args, **_with_test_slot_digest(kwargs))
+
+
+def consume_intent_preflight_row(*args: Any, **kwargs: Any) -> Any:
+    return _consume_intent_preflight_row(*args, **_with_test_slot_digest(kwargs))
 
 
 def cached_rest_review() -> dict[str, object]:
@@ -55,7 +81,7 @@ class PreflightCacheTests(unittest.TestCase):
         init_database(load_campaign(target), force=True)
         return target
 
-    def test_message_identity_binds_active_action_taxonomy_digest(self) -> None:
+    def test_message_identity_binds_active_action_taxonomy_and_slot_digests(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             campaign = load_campaign(self.copy_campaign(tmp))
             with connect(campaign) as conn:
@@ -67,6 +93,7 @@ class PreflightCacheTests(unittest.TestCase):
                     model="deepseek-v4-flash",
                     backend="direct",
                     action_taxonomy_digest="taxonomy:default",
+                    action_slot_digest="slots:default",
                     identity_profile=PREFLIGHT_IDENTITY_MESSAGE_ONLY,
                 )
                 custom_identity = build_preflight_identity(
@@ -77,6 +104,18 @@ class PreflightCacheTests(unittest.TestCase):
                     model="deepseek-v4-flash",
                     backend="direct",
                     action_taxonomy_digest="taxonomy:custom",
+                    action_slot_digest="slots:default",
+                    identity_profile=PREFLIGHT_IDENTITY_MESSAGE_ONLY,
+                )
+                custom_slot_identity = build_preflight_identity(
+                    conn,
+                    campaign,
+                    "休息到早上",
+                    provider="deepseek",
+                    model="deepseek-v4-flash",
+                    backend="direct",
+                    action_taxonomy_digest="taxonomy:default",
+                    action_slot_digest="slots:custom",
                     identity_profile=PREFLIGHT_IDENTITY_MESSAGE_ONLY,
                 )
                 record = create_pending_intent_preflight(
@@ -91,6 +130,7 @@ class PreflightCacheTests(unittest.TestCase):
                     session_key="qq:user:taxonomy-bound",
                     source_user_text_hash=hash_text("休息到早上"),
                     action_taxonomy_digest="taxonomy:default",
+                    action_slot_digest="slots:default",
                     identity_profile=PREFLIGHT_IDENTITY_MESSAGE_ONLY,
                 )
                 mark_intent_preflight_ready(conn, record.id, internal_review=cached_rest_review())
@@ -106,6 +146,21 @@ class PreflightCacheTests(unittest.TestCase):
                     session_key="qq:user:taxonomy-bound",
                     source_user_text_hash=record.identity.source_user_text_hash,
                     action_taxonomy_digest="taxonomy:custom",
+                    action_slot_digest="slots:default",
+                )
+                wrong_slots = consume_intent_preflight_by_message(
+                    conn,
+                    campaign,
+                    "休息到早上",
+                    provider="deepseek",
+                    model="deepseek-v4-flash",
+                    backend="direct",
+                    message_id="qq:taxonomy-bound",
+                    platform="qq",
+                    session_key="qq:user:taxonomy-bound",
+                    source_user_text_hash=record.identity.source_user_text_hash,
+                    action_taxonomy_digest="taxonomy:default",
+                    action_slot_digest="slots:custom",
                 )
                 matching_taxonomy = consume_intent_preflight_by_message(
                     conn,
@@ -119,12 +174,33 @@ class PreflightCacheTests(unittest.TestCase):
                     session_key="qq:user:taxonomy-bound",
                     source_user_text_hash=record.identity.source_user_text_hash,
                     action_taxonomy_digest="taxonomy:default",
+                    action_slot_digest="slots:default",
                 )
 
             self.assertNotEqual(default_identity.context_hash, custom_identity.context_hash)
             self.assertNotEqual(default_identity.intent_context_id, custom_identity.intent_context_id)
+            self.assertNotEqual(default_identity.context_hash, custom_slot_identity.context_hash)
+            self.assertNotEqual(default_identity.intent_context_id, custom_slot_identity.intent_context_id)
             self.assertEqual(wrong_taxonomy.status, "miss")
+            self.assertEqual(wrong_slots.status, "miss")
             self.assertTrue(matching_taxonomy.hit)
+
+    def test_preflight_identity_requires_action_slot_digest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = load_campaign(self.copy_campaign(tmp))
+            with connect(campaign) as conn, self.assertRaisesRegex(
+                ValueError,
+                "action_slot_digest is required",
+            ):
+                _build_preflight_identity(
+                    conn,
+                    campaign,
+                    "休息到早上",
+                    provider="deepseek",
+                    model="deepseek-v4-flash",
+                    backend="direct",
+                    action_slot_digest="",
+                )
 
     def test_preflight_cache_ready_hit_is_single_use(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -177,7 +177,8 @@ python3 -m pytest -q \
 
 Preflight boundary 变更还必须覆盖 provider/model/backend/fallback 逐字段 mismatch、分隔符碰撞拒绝、
 `message_only` 缺 platform/session/message 时在 cache 写入与 helper 调用前失败、NFKC/trim text hash 不可伪造、
-active action taxonomy digest 不同的 default/custom registry 不得复用 cached internal review、
+active action taxonomy digest 或 action slot projection digest 不同的 default/custom registry 不得复用
+cached internal review，low-level preflight identity 缺少 slot digest 时必须 fail closed、
 双连接并发消费只有一个 hit 且其他连接观察 `used`，以及 late reject/expire 不能覆盖 used。公开
 preflight/player/prewarm evidence 不得包含 raw session key、raw prompt、helper audit/provider body 或 hidden token。
 
@@ -267,10 +268,11 @@ queue、content/save apply、provider、validation/commit owner；application el
 重新运行对应 validation/reference/visibility 与 commit/maintenance gate。Proposal queue lifecycle/report 属于后续
 Story 5.7，不得在本 gate 中通过 production hook 或 queue integration 实现。
 
-External intent manifest v3 / taxonomy v1 / safety v1 focused gate：
+External intent manifest v4 / taxonomy v1 / safety v1 focused gate：
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q \
+  tests/test_action_slot_contract.py \
   tests/test_intent_manifest.py \
   tests/test_action_taxonomy.py \
   tests/test_ai_intent.py \
@@ -293,13 +295,18 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q \
   -p no:cacheprovider
 ```
 
-该 gate 必须覆盖 manifest v3/taxonomy v1/safety v1 canonical digest 与 schema parity、不同
-`PYTHONHASHSEED` 的跨进程 wire 稳定性、taxonomy frozen/validation/collision/registration-order/custom-locale
-projection、term/locale/priority/version digest 旋转、exact/legacy envelope、old/new/wrong-digest rolling skew、
+该 gate 必须覆盖 manifest v4/taxonomy v1/safety v1 canonical digest 与 schema parity、requirement-group
+`cardinality` / `binding_rule` 投影及 digest 旋转、不同
+`PYTHONHASHSEED` 的跨进程 taxonomy/slot/manifest wire 稳定性、taxonomy frozen/validation/collision/
+registration-order/custom-locale projection、slot frozen/defensive-copy/exact-type/alias-group collision/
+registration atomicity/legacy normalization、term/locale/priority/version 与 slot metadata digest 旋转、
+exact/legacy envelope、old/new/wrong-digest rolling skew、
 stale-before-unknown precedence、external
 strict/internal tolerant 行为、所有 direct Runtime/SaveManager 入口 typed propagation，以及 MCP/V1/legacy CLI 的
 固定脱敏投影。失败必须发生在 helper/route/preview/cache/new pending/fact write 前；contract evidence 只进入 bounded
-trace，不能提升 authority。Story 6.3 slot ownership 与 Hermes reconnect/next-model-turn/E2E 不由本 gate 代替。
+trace，不能提升 authority。Slot gate 还必须逐 action 锁定 required/group cardinality、alias/type、custom/falsey
+registry、confirmation/visibility/no-mutation，并以 `action.slot.field` 报告 parity 失败。Story 6.3 只关闭本仓
+slot ownership/parity design debt；Hermes reconnect/next-model-turn/E2E 仍不由本 gate 代替。
 
 Surface / intent 基线材料：
 
