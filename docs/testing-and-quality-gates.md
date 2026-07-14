@@ -424,6 +424,29 @@ SQLite 读取。
 - `message_only` preflight 是否仍不带 external candidate？
 - `player_turn` 是否仍不提交事实？
 - `player_confirm` 是否仍是 commit gate？
+- 两线程与两进程确认是否精确产生一个 fresh `committed` 和一个
+  `already_confirmed/idempotent_replay=true`？
+- SQLite commit 后、receipt/pending clear 前的进程退出是否能由 parent retry 收敛，且 lock 自动释放？
+- SQLite commit 后、`UnitOfWork.finalize_artifacts()` 前的进程退出是否能以 dirty-only repair 收敛
+  events outbox、snapshots、cards 与 stale registry，而不重复 clean work？
+- `player_turn` 发布新 pending 与 in-flight confirm 交错时，新 session 是否仍存在；发布失败时旧 receipt
+  是否恢复？
+- replay identity/payload/receipt mismatch 是否 fail closed，backup、archivist、projection/outbox、registry
+  与 platform `saved_count` 是否只在 fresh commit 执行/计数一次？
+- receipt identity/payload/result 被修改并重算 workspace digest 后，是否仍因 SQLite anchor mismatch 被拒绝；
+  low-level proposal 自报 `player_confirm` provenance 是否仍不能取得 replay success？
+- fresh confirm 的 refresh 窗口切换 active save 是否仍写入首次 bound path；platform replay 是否保持既有
+  binding TTL；若 fresh platform completion 从未落地，是否只凭匹配的 hashed confirmation correlation
+  补做状态 transition，而不覆盖更新 action/deactivate/save context？
+- missing pending save path、duplicate receipt key、lock acquire/release failure 是否 fail closed 且脱敏；
+  confirm registry merge 与 platform completion 是否保留并发 switch/latest message reservation？
+- receipt 缺失的 durable retry 若重绑 save/identity并重算 claim，是否仍因 SQLite claim anchor 拒绝；普通
+  stale/integrity failure 是否恢复原 pending 且不留下 claim meta；commit 后可捕获异常是否保留 durable
+  claim 并在过期后 replay；registry owner 崩溃是否自动释放 OS lock；start/act/confirm completion、prewarm、
+  deactivate 与 expiry 是否共用跨平台锁，并以 revision 拒绝 stale activation；registry refresh 是否可能用
+  锁外旧快照或 caller 的 stale metadata 覆盖 concurrent confirm merge；旧 confirm 是否可能抢占更新 start
+  revision；confirm message-only reservation 是否会反向阻断有效 act/start completion；旧 schema revision=0
+  回填是否同时要求 owner-validated hash、精确 Save/state 且拒绝任何新权威 generation？
 - MCP player profile 是否仍不能调用低层工具？
 - platform sidecar 是否仍只 gate / forward passive identity？
 
@@ -441,7 +464,7 @@ Round 4B 已把旧长评审中仍有效的后续风险摘到
 - skipped tests 豁免清单和按模块 coverage 增长。
 - eval report 版本化与历史趋势对比。
 - declarative action spec 的第二个非 random 示例。
-- pending action session / concurrency 语义。
+- pending supersede/cancel/clarification lifecycle（atomic confirmation/replay 已由 Story 6.4 关闭）。
 - TurnCoordinator 不得回退 player workflow、profile gate、atomic write 和 eval metrics。
 
 ## CI 对齐

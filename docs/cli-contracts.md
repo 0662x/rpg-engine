@@ -180,6 +180,11 @@ player duplicate
 玩家可见 preview、确认提示和 `session_id`。确认成功后 pending action 必须清理。
 Pending action 有过期时间；过期、session id 不匹配、active save 不匹配、平台 session/actor
 不匹配时，`confirm` 必须拒绝保存，过期 action 会被清理并要求玩家重新发起 `turn`。
+确认 JSON 结果透传 Kernel 的 `write_status` 与 `idempotent_replay`：仅 fresh `committed` 使用
+`saved=true` 和“本次已写入”文案；合法重试使用 `already_confirmed`、`idempotent_replay=true`、
+`saved=false` 和“此前已确认”文案。Kernel 在完成 session/identity 核验后还可返回 bounded
+`confirmation_session_hash`，用于可信 platform completion correlation；它不授予确认或 commit authority。
+CLI 不读取 receipt 或自行分类，也不把 replay 描述为新保存。
 
 ## Play 命令
 

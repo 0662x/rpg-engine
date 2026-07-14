@@ -27,7 +27,11 @@ class GameSessionBinding:
     last_message_id: str = ""
     last_action_message_id: str = ""
     last_confirm_message_id: str = ""
+    pending_confirmation_session_hash: str = ""
+    pending_confirmation_revision: int = 0
+    last_completed_confirmation_session_hash: str = ""
     clarification_id: str = ""
+    revision: int = 0
     updated_at: str = ""
 
     @classmethod
@@ -43,7 +47,11 @@ class GameSessionBinding:
         last_message_id: str = "",
         last_action_message_id: str = "",
         last_confirm_message_id: str = "",
+        pending_confirmation_session_hash: str = "",
+        pending_confirmation_revision: int = 0,
+        last_completed_confirmation_session_hash: str = "",
         clarification_id: str = "",
+        revision: int = 0,
         updated_at: str = "",
     ) -> GameSessionBinding:
         return cls(
@@ -56,7 +64,11 @@ class GameSessionBinding:
             last_message_id=clean(last_message_id),
             last_action_message_id=clean(last_action_message_id),
             last_confirm_message_id=clean(last_confirm_message_id),
+            pending_confirmation_session_hash=clean(pending_confirmation_session_hash),
+            pending_confirmation_revision=max(0, int(pending_confirmation_revision)),
+            last_completed_confirmation_session_hash=clean(last_completed_confirmation_session_hash),
             clarification_id=clean(clarification_id),
+            revision=max(0, int(revision)),
             updated_at=clean(updated_at),
         )
 

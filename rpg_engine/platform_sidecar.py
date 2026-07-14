@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from contextlib import contextmanager
 import json
 import re
 import sqlite3
@@ -41,16 +40,11 @@ from .platform_prewarm import (
     PrewarmQueue,
     PrewarmWorker,
     elapsed_ms,
+    game_session_binding_lock as platform_entry_file_lock,
     percentile,
 )
 from .save_manager import SaveManager
 from .runtime import GMRuntime
-
-try:
-    import fcntl
-except ImportError:  # pragma: no cover - non-POSIX fallback keeps in-process lock behavior
-    fcntl = None
-
 
 DEFAULT_PLATFORM_SESSION_TTL_SECONDS = 1800
 DEFAULT_PLATFORM_PLAYER_PENDING_WAIT_MS = 200
@@ -272,10 +266,20 @@ class PlatformSidecar:
         started = time.monotonic()
         gate = platform_start_gate(message)
         start_key = platform_start_reservation_key(message)
-        start_placeholder = False
+        start_previous: GameSessionBinding | None = None
+        start_reservation: GameSessionBinding | None = None
         if gate.allow:
             with self._entry_lock, platform_entry_file_lock(self.root):
-                gate, start_placeholder = self._reserve_platform_start_message(message, gate, start_key=start_key)
+                start_previous = self.binding_store.get(
+                    platform=message.platform,
+                    session_key=message.session_key,
+                )
+                gate, _ = self._reserve_platform_start_message(message, gate, start_key=start_key)
+                if gate.allow:
+                    start_reservation = self.binding_store.get(
+                        platform=message.platform,
+                        session_key=message.session_key,
+                    )
         if not gate.allow:
             result = platform_gate_rejection(gate)
             duration_ms = elapsed_ms(started)
@@ -309,20 +313,39 @@ class PlatformSidecar:
                 platform_exception_result(exc),
                 duration_ms=elapsed_ms(started),
             )
-            with self._entry_lock:
+            with self._entry_lock, platform_entry_file_lock(self.root):
                 self._start_message_reservations.discard(start_key)
-            if start_placeholder:
-                with platform_entry_file_lock(self.root):
-                    self._clear_platform_start_reservation(message)
+                self._rollback_platform_start_reservation(
+                    message,
+                    expected=start_reservation,
+                    previous=start_previous,
+                )
             raise
         duration_ms = elapsed_ms(started)
         self.metrics.record_player_result(result, duration_ms=duration_ms, kind="start")
-        binding = self.activate_from_result(message, result)
-        with self._entry_lock:
+        with self._entry_lock, platform_entry_file_lock(self.root):
+            current = self.binding_store.get(platform=message.platform, session_key=message.session_key)
+            if (
+                start_reservation is None
+                or current is None
+                or completion_binding_context_changed(start_reservation, current)
+            ):
+                binding = current
+            else:
+                activated = self.activate_from_result(message, result, reserved_binding=current)
+                if activated is None:
+                    self._rollback_platform_start_reservation(
+                        message,
+                        expected=start_reservation,
+                        previous=start_previous,
+                    )
+                    binding = self.binding_store.get(
+                        platform=message.platform,
+                        session_key=message.session_key,
+                    )
+                else:
+                    binding = activated
             self._start_message_reservations.discard(start_key)
-        if binding is None and start_placeholder:
-            with platform_entry_file_lock(self.root):
-                self._clear_platform_start_reservation(message)
         action_result = PlatformActionResult(
             result=result,
             binding=binding_to_public_dict(binding),
@@ -412,7 +435,17 @@ class PlatformSidecar:
             result = platform_manager_error(exc, gate=gate)
         duration_ms = elapsed_ms(started)
         self.metrics.record_player_result(result, duration_ms=duration_ms, kind="act")
-        binding = self.activate_from_result(message, result, last_action_message_id=message.message_id)
+        with self._entry_lock, platform_entry_file_lock(self.root):
+            current = self.binding_store.get(platform=message.platform, session_key=message.session_key)
+            if current is None or completion_binding_context_changed(binding, current):
+                binding = current or binding
+            else:
+                binding = self.activate_from_result(
+                    message,
+                    result,
+                    last_action_message_id=message.message_id,
+                    reserved_binding=current,
+                ) or current
         action_result = PlatformActionResult(
             result=result,
             prewarm=prewarm.to_dict(),
@@ -464,7 +497,12 @@ class PlatformSidecar:
             result = platform_manager_error(exc, gate=gate)
         duration_ms = elapsed_ms(started)
         self.metrics.record_player_result(result, duration_ms=duration_ms, kind="confirm")
-        binding = self.activate_from_result(message, result, last_confirm_message_id=message.message_id)
+        binding = self._merge_confirm_result_binding(
+            message,
+            result,
+            fallback=binding,
+            confirmation_session_id=session_id,
+        )
         action_result = PlatformActionResult(
             result=result,
             binding=binding_to_public_dict(binding),
@@ -514,6 +552,7 @@ class PlatformSidecar:
                     active_until="",
                     user_id_hash=hash_identity(message.actor_id) if clean(message.actor_id) else "",
                     last_message_id=clean(message.message_id),
+                    revision=1,
                     updated_at=utc_now_compat(),
                 )
             )
@@ -529,30 +568,52 @@ class PlatformSidecar:
                 last_message_id=clean(message.message_id),
                 last_action_message_id=existing.last_action_message_id,
                 last_confirm_message_id=existing.last_confirm_message_id,
+                pending_confirmation_session_hash=existing.pending_confirmation_session_hash,
+                pending_confirmation_revision=existing.pending_confirmation_revision,
+                last_completed_confirmation_session_hash=existing.last_completed_confirmation_session_hash,
                 clarification_id=existing.clarification_id,
+                revision=existing.revision + 1,
                 updated_at=utc_now_compat(),
             )
         )
         return gate, False
 
-    def _clear_platform_start_reservation(self, message: PlatformMessage) -> None:
-        session_hash = hash_identity(message.session_key)
-        message_id = clean(message.message_id)
-        state = self.binding_store.read_state()
-        bindings = []
-        for item in state.get("bindings", []):
-            if not isinstance(item, dict):
-                continue
-            if (
-                clean(item.get("platform")) == clean(message.platform)
-                and clean(item.get("session_key_hash")) == session_hash
-                and not clean(item.get("active_save"))
-                and clean(item.get("last_message_id")) == message_id
-            ):
-                continue
-            bindings.append(item)
-        state["bindings"] = bindings
-        self.binding_store.write_state(state)
+    def _rollback_platform_start_reservation(
+        self,
+        message: PlatformMessage,
+        *,
+        expected: GameSessionBinding | None,
+        previous: GameSessionBinding | None,
+    ) -> None:
+        current = self.binding_store.get(platform=message.platform, session_key=message.session_key)
+        if expected is None or current is None or start_reservation_context_changed(expected, current):
+            return
+        if previous is None:
+            self.binding_store.delete(platform=message.platform, session_key=message.session_key)
+            return
+        self.binding_store.upsert(
+            GameSessionBinding(
+                platform=previous.platform,
+                session_key_hash=previous.session_key_hash,
+                active_save=previous.active_save,
+                state=previous.state,
+                active_until=previous.active_until,
+                user_id_hash=previous.user_id_hash,
+                last_message_id=(
+                    previous.last_message_id
+                    if clean(current.last_message_id) == clean(message.message_id)
+                    else current.last_message_id
+                ),
+                last_action_message_id=previous.last_action_message_id,
+                last_confirm_message_id=current.last_confirm_message_id,
+                pending_confirmation_session_hash=previous.pending_confirmation_session_hash,
+                pending_confirmation_revision=previous.pending_confirmation_revision,
+                last_completed_confirmation_session_hash=previous.last_completed_confirmation_session_hash,
+                clarification_id=previous.clarification_id,
+                revision=previous.revision,
+                updated_at=utc_now_compat(),
+            )
+        )
 
     def _reserve_platform_message(
         self,
@@ -571,7 +632,11 @@ class PlatformSidecar:
             last_message_id=message.message_id,
             last_action_message_id=message.message_id if kind == "act" else binding.last_action_message_id,
             last_confirm_message_id=message.message_id if kind == "confirm" else binding.last_confirm_message_id,
+            pending_confirmation_session_hash=binding.pending_confirmation_session_hash,
+            pending_confirmation_revision=binding.pending_confirmation_revision,
+            last_completed_confirmation_session_hash=binding.last_completed_confirmation_session_hash,
             clarification_id=binding.clarification_id,
+            revision=binding.revision + (1 if kind == "act" else 0),
             updated_at=utc_now_compat(),
         )
         self.binding_store.upsert(reserved)
@@ -580,7 +645,27 @@ class PlatformSidecar:
     def deactivate_from_message(self, event: PlatformMessage | dict[str, Any]) -> dict[str, Any] | None:
         started = time.monotonic()
         message = ensure_platform_message(event)
-        existing = self.binding_store.get(platform=message.platform, session_key=message.session_key)
+        with self._entry_lock, platform_entry_file_lock(self.root):
+            existing = self.binding_store.get(platform=message.platform, session_key=message.session_key)
+            if existing is not None:
+                inactive = GameSessionBinding(
+                    platform=existing.platform,
+                    session_key_hash=existing.session_key_hash,
+                    active_save=existing.active_save,
+                    state=INACTIVE,
+                    active_until="",
+                    user_id_hash=existing.user_id_hash,
+                    last_message_id=existing.last_message_id,
+                    last_action_message_id=existing.last_action_message_id,
+                    last_confirm_message_id=existing.last_confirm_message_id,
+                    pending_confirmation_session_hash=existing.pending_confirmation_session_hash,
+                    pending_confirmation_revision=existing.pending_confirmation_revision,
+                    last_completed_confirmation_session_hash=existing.last_completed_confirmation_session_hash,
+                    clarification_id=existing.clarification_id,
+                    revision=existing.revision + 1,
+                    updated_at=utc_now_compat(),
+                )
+                self.binding_store.upsert(inactive)
         if existing is None:
             self._write_platform_audit_record(
                 "PlatformSidecar.deactivate_from_message",
@@ -589,20 +674,6 @@ class PlatformSidecar:
                 duration_ms=elapsed_ms(started),
             )
             return None
-        inactive = GameSessionBinding(
-            platform=existing.platform,
-            session_key_hash=existing.session_key_hash,
-            active_save=existing.active_save,
-            state=INACTIVE,
-            active_until="",
-            user_id_hash=existing.user_id_hash,
-            last_message_id=existing.last_message_id,
-            last_action_message_id=existing.last_action_message_id,
-            last_confirm_message_id=existing.last_confirm_message_id,
-            clarification_id=existing.clarification_id,
-            updated_at=utc_now_compat(),
-        )
-        self.binding_store.upsert(inactive)
         result = binding_to_public_dict(inactive)
         self._write_platform_audit_record(
             "PlatformSidecar.deactivate_from_message",
@@ -619,6 +690,8 @@ class PlatformSidecar:
         *,
         last_action_message_id: str = "",
         last_confirm_message_id: str = "",
+        reserved_binding: GameSessionBinding | None = None,
+        completed_confirmation_session_hash: str | None = None,
     ) -> GameSessionBinding | None:
         if not bool(result.get("ok")) and not result.get("active_save_id"):
             return None
@@ -633,7 +706,14 @@ class PlatformSidecar:
         else:
             state = ACTIVE_GAME
         clarification_id = str(clarification.get("clarification_id") or "") if clarification else ""
+        pending_confirmation_session_hash = ""
+        if state == PENDING_APPROVAL and clean(result.get("session_id")):
+            pending_confirmation_session_hash = hash_identity(clean(result.get("session_id")))
         active_until = (datetime.now(timezone.utc) + timedelta(seconds=max(1, self.config.active_ttl_seconds))).isoformat()
+        last_message_id = reserved_binding.last_message_id if reserved_binding else message.message_id
+        if reserved_binding is not None:
+            last_action_message_id = reserved_binding.last_action_message_id or last_action_message_id
+            last_confirm_message_id = reserved_binding.last_confirm_message_id or last_confirm_message_id
         return self.binding_store.upsert_raw(
             platform=message.platform,
             session_key=message.session_key,
@@ -641,33 +721,97 @@ class PlatformSidecar:
             active_save=save_path,
             state=state,
             active_until=active_until,
-            last_message_id=message.message_id,
+            last_message_id=last_message_id,
             last_action_message_id=last_action_message_id,
             last_confirm_message_id=last_confirm_message_id,
+            pending_confirmation_session_hash=pending_confirmation_session_hash,
+            last_completed_confirmation_session_hash=completed_confirmation_session_hash,
             clarification_id=clarification_id,
         )
+
+    def _merge_confirm_result_binding(
+        self,
+        message: PlatformMessage,
+        result: dict[str, Any],
+        *,
+        fallback: GameSessionBinding,
+        confirmation_session_id: str,
+    ) -> GameSessionBinding:
+        confirmation_session_hash = hash_identity(clean(confirmation_session_id))
+        with self._entry_lock, platform_entry_file_lock(self.root):
+            current = self.binding_store.get(platform=message.platform, session_key=message.session_key)
+            if result.get("idempotent_replay") is True:
+                if replay_confirmation_binding_needs_reconcile(
+                    self.root,
+                    current,
+                    result,
+                    confirmation_session_hash=confirmation_session_hash,
+                    expected_revision=fallback.revision,
+                ):
+                    assert current is not None
+                    reconciled = GameSessionBinding(
+                        platform=current.platform,
+                        session_key_hash=current.session_key_hash,
+                        active_save=current.active_save,
+                        state=ACTIVE_GAME,
+                        active_until=current.active_until,
+                        user_id_hash=current.user_id_hash,
+                        last_message_id=current.last_message_id,
+                        last_action_message_id=current.last_action_message_id,
+                        last_confirm_message_id=current.last_confirm_message_id,
+                        pending_confirmation_session_hash="",
+                        pending_confirmation_revision=0,
+                        last_completed_confirmation_session_hash=confirmation_session_hash,
+                        clarification_id="",
+                        revision=current.revision + 1,
+                        updated_at=utc_now_compat(),
+                    )
+                    self.binding_store.upsert(reconciled)
+                    return reconciled
+                return current or fallback
+            if current is not None and confirmation_binding_context_changed(fallback, current):
+                return current
+            if current is None or not confirmation_binding_matches_session(
+                current,
+                result,
+                confirmation_session_hash=confirmation_session_hash,
+            ):
+                return current or fallback
+            activated = self.activate_from_result(
+                message,
+                result,
+                last_confirm_message_id=message.message_id,
+                reserved_binding=current,
+                completed_confirmation_session_hash=confirmation_session_hash,
+            )
+            return activated or current or fallback
 
     def expire_stale_bindings(self, *, now: datetime | None = None, audit: bool = True) -> int:
         started = time.monotonic()
         expired = 0
-        for binding in self.binding_store.list_bindings():
-            if binding.state == ACTIVE_GAME and is_expired(binding.active_until, now=now):
-                self.binding_store.upsert(
-                    GameSessionBinding(
-                        platform=binding.platform,
-                        session_key_hash=binding.session_key_hash,
-                        active_save=binding.active_save,
-                        state=INACTIVE,
-                        active_until="",
-                        user_id_hash=binding.user_id_hash,
-                        last_message_id=binding.last_message_id,
-                        last_action_message_id=binding.last_action_message_id,
-                        last_confirm_message_id=binding.last_confirm_message_id,
-                        clarification_id=binding.clarification_id,
-                        updated_at=utc_now_compat(),
+        with self._entry_lock, platform_entry_file_lock(self.root):
+            for binding in self.binding_store.list_bindings():
+                if binding.state == ACTIVE_GAME and is_expired(binding.active_until, now=now):
+                    self.binding_store.upsert(
+                        GameSessionBinding(
+                            platform=binding.platform,
+                            session_key_hash=binding.session_key_hash,
+                            active_save=binding.active_save,
+                            state=INACTIVE,
+                            active_until="",
+                            user_id_hash=binding.user_id_hash,
+                            last_message_id=binding.last_message_id,
+                            last_action_message_id=binding.last_action_message_id,
+                            last_confirm_message_id=binding.last_confirm_message_id,
+                            pending_confirmation_session_hash=binding.pending_confirmation_session_hash,
+                            pending_confirmation_revision=binding.pending_confirmation_revision,
+                            last_completed_confirmation_session_hash=binding.last_completed_confirmation_session_hash,
+                            clarification_id=binding.clarification_id,
+                            revision=binding.revision + 1,
+                            updated_at=utc_now_compat(),
+                        )
                     )
-                )
-                expired += 1
+                    expired += 1
         if audit:
             self._write_platform_audit_record(
                 "PlatformSidecar.expire_stale_bindings",
@@ -796,6 +940,9 @@ def platform_audit_result_summary(result: dict[str, Any], *, message: PlatformMe
         "ready_to_confirm",
         "session_id",
         "saved",
+        "write_status",
+        "idempotent_replay",
+        "projection_status",
         "allow_platform",
         "enqueued",
         "dropped",
@@ -995,20 +1142,6 @@ def platform_start_reservation_key(message: PlatformMessage) -> tuple[str, str, 
         hash_identity(message.session_key) if clean(message.session_key) else "",
         clean(message.message_id),
     )
-
-
-@contextmanager
-def platform_entry_file_lock(root: Path) -> Any:
-    lock_path = root / ".aigm" / "platform-sidecar-entry.lock"
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with lock_path.open("a+", encoding="utf-8") as handle:
-        if fcntl is not None:
-            fcntl.flock(handle, fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            if fcntl is not None:
-                fcntl.flock(handle, fcntl.LOCK_UN)
 
 
 def platform_start_gate(message: PlatformMessage) -> PlatformEntryGateResult:
@@ -1336,6 +1469,111 @@ def binding_to_public_dict(binding: GameSessionBinding | None) -> dict[str, Any]
         "clarification_id": binding.clarification_id,
         "updated_at": binding.updated_at,
     }
+
+
+def confirmation_binding_context_changed(
+    expected: GameSessionBinding,
+    current: GameSessionBinding,
+) -> bool:
+    return any(
+        (
+            current.revision != expected.revision,
+            current.active_save != expected.active_save,
+            current.state != expected.state,
+            current.last_action_message_id != expected.last_action_message_id,
+            current.pending_confirmation_session_hash != expected.pending_confirmation_session_hash,
+            current.pending_confirmation_revision != expected.pending_confirmation_revision,
+            current.clarification_id != expected.clarification_id,
+        )
+    )
+
+
+def completion_binding_context_changed(
+    expected: GameSessionBinding,
+    current: GameSessionBinding,
+) -> bool:
+    return any(
+        (
+            current.revision != expected.revision,
+            current.active_save != expected.active_save,
+            current.state != expected.state,
+            current.last_action_message_id != expected.last_action_message_id,
+            current.clarification_id != expected.clarification_id,
+        )
+    )
+
+
+def start_reservation_context_changed(
+    expected: GameSessionBinding,
+    current: GameSessionBinding,
+) -> bool:
+    return any(
+        (
+            current.revision != expected.revision,
+            current.active_save != expected.active_save,
+            current.state != expected.state,
+            current.last_action_message_id != expected.last_action_message_id,
+            current.pending_confirmation_session_hash != expected.pending_confirmation_session_hash,
+            current.pending_confirmation_revision != expected.pending_confirmation_revision,
+            current.clarification_id != expected.clarification_id,
+        )
+    )
+
+
+def replay_confirmation_binding_needs_reconcile(
+    root: Path,
+    binding: GameSessionBinding | None,
+    result: dict[str, Any],
+    *,
+    confirmation_session_hash: str,
+    expected_revision: int,
+) -> bool:
+    if (
+        binding is None
+        or not confirmation_session_hash
+        or result.get("ok") is not True
+        or result.get("write_status") != "already_confirmed"
+        or result.get("idempotent_replay") is not True
+        or binding.revision != expected_revision
+        or binding.state != PENDING_APPROVAL
+        or clean(result.get("confirmation_session_hash")) != confirmation_session_hash
+    ):
+        return False
+    if not confirmation_binding_generation_matches(binding, confirmation_session_hash):
+        return False
+    result_save_path = active_save_path_from_result(root, result)
+    return bool(result_save_path and result_save_path == binding.active_save)
+
+
+def confirmation_binding_matches_session(
+    binding: GameSessionBinding,
+    result: dict[str, Any],
+    *,
+    confirmation_session_hash: str,
+) -> bool:
+    if (
+        not confirmation_session_hash
+        or clean(result.get("confirmation_session_hash")) != confirmation_session_hash
+        or binding.state != PENDING_APPROVAL
+    ):
+        return False
+    return confirmation_binding_generation_matches(binding, confirmation_session_hash)
+
+
+def confirmation_binding_generation_matches(
+    binding: GameSessionBinding,
+    confirmation_session_hash: str,
+) -> bool:
+    current_generation = (
+        binding.pending_confirmation_session_hash == confirmation_session_hash
+        and binding.pending_confirmation_revision == binding.revision
+    )
+    legacy_generation = (
+        not binding.pending_confirmation_session_hash
+        and binding.pending_confirmation_revision == 0
+        and binding.revision == 0
+    )
+    return current_generation or legacy_generation
 
 
 def collect_prewarm_cache_stats(root: Path, bindings: list[GameSessionBinding]) -> dict[str, Any]:

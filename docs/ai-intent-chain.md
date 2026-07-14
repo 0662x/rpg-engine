@@ -429,6 +429,12 @@ MCP 对齐：
 - `player_confirm` 必须使用 `player_turn` 返回的 `session_id`，且只在玩家明确确认后调用。
 - pending action 会绑定 active save、confirmation session 和可选 platform/session/actor identity；
   过期或身份不匹配时必须重新从 `player_turn` 生成 preview，不能保存旧预演。
+- `player_confirm` 的 claim/replay 分类完全属于 Kernel：首个 durable write 返回 `committed`，同一
+  save/session/command/payload/identity 的重试返回 `already_confirmed` 与 `idempotent_replay=true`；CLI、
+  MCP、platform 不得自行推断或复制该分类。
+- `.aigm` claim/receipt 只保存 bounded hashes/digests；receipt digest 锚定到目标 Save SQLite meta，replay
+  同时对账该 anchor 与 SQLite turn/event evidence；
+  external/internal AI 不读取它来取得事实、确认、approval 或 commit authority。
 
 Platform sidecar 对齐：
 
@@ -436,6 +442,10 @@ Platform sidecar 对齐：
 - `platform act` 转发被动 message identity 到 `player_turn`。
 - `platform confirm` 转发到 `player_confirm`。
 - platform binding 会校验 actor identity，避免同一平台会话中的另一位 actor 确认当前玩家的 pending action。
+- platform/prewarm binding writer 共用 crash-release owner lock；advisory prewarm 不推进 authoritative revision，
+  confirmation correlation 与其创建时 revision 只允许补做同一 generation 缺失的 sidecar 状态 transition，
+  不授予或复制 Kernel commit authority；新 start/act generation 必须压过旧 confirm，confirm 的 message-only
+  reservation 则不能阻断有效 act/start completion。
 - sidecar 不接收 external candidate、internal candidate、delta、proposal 或 commit approval。
 - sidecar audit 只记录脱敏 request/result evidence、surface category、status 和 identity hash；
   audit 写入失败不能改变 gate、prewarm、pending/confirm 或事实提交结果。

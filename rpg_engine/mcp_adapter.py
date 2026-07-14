@@ -1870,6 +1870,7 @@ def summarize_result_for_audit(result: dict[str, Any], *, sensitive_terms: tuple
         "current_time_block",
         "cards_count",
         "write_status",
+        "idempotent_replay",
         "projection_status",
         "errors",
         "warnings",

@@ -8,15 +8,15 @@
 | --- | --- | --- |
 | CLI | `rpg_engine/cli.py`, `rpg_engine/__main__.py` | 命令行入口、玩家/开发者操作面 |
 | CLI V1 | `rpg_engine/cli_v1.py` | 旧版兼容入口 |
-| Runtime API | `rpg_engine/runtime.py` | `GMRuntime` 主要编程门面 |
+| Runtime API | `rpg_engine/runtime.py` | `GMRuntime` 主要编程门面；普通 low-level proposal 不能自报 provenance 获得 replay classification |
 | MCP Adapter | `rpg_engine/mcp_adapter.py` | 按 profile gate 暴露 MCP 工具、客户端配置、审计清洗 |
 
 ## 运行时与存档
 
 | 组件 | 文件 | 当前责任 |
 | --- | --- | --- |
-| Game Session | `rpg_engine/game_session.py` | `GameSessionBinding`、`PlatformMessage` 和平台预热门禁辅助类型 |
-| Save Manager | `rpg_engine/save_manager.py` | campaign/save 生命周期、玩家安全 `player_turn/player_confirm`、pending action/clarification、平台 session hash 校验 |
+| Game Session | `rpg_engine/game_session.py` | `GameSessionBinding`、`PlatformMessage`、binding/confirmation generation revision 与 hashed completion correlation |
+| Save Manager | `rpg_engine/save_manager.py` | campaign/save 生命周期、玩家安全 `player_turn/player_confirm`、同锁 pending publication、跨进程 confirmation claim、SQLite-anchored bounded replay receipt、dirty/registry repair 与平台 session hash 校验 |
 | Save Service | `rpg_engine/save_service.py` | 存档服务能力 |
 | Save Validation | `rpg_engine/save_validation.py` | 存档结构与一致性校验 |
 | Save Patch | `rpg_engine/save_patch.py` | 存档补丁 |
@@ -76,9 +76,9 @@
 | Turn Proposal | `rpg_engine/proposal.py` | pending/approved `TurnProposal`，承载确认、来源和 intent contract 边界 |
 | Delta Schema | `rpg_engine/delta_schema.py` | turn delta 结构与辅助 |
 | Validation Pipeline | `rpg_engine/validation_pipeline.py` | 多阶段校验 |
-| Commit Service | `rpg_engine/commit_service.py` | 提交 turn proposal / delta |
-| Unit of Work | `rpg_engine/unit_of_work.py` | 事务封装 |
-| Write Guard | `rpg_engine/write_guard.py` | 写入保护 |
+| Commit Service | `rpg_engine/commit_service.py` | 提交 turn proposal / delta；传播 fresh `committed` 与 durable `already_confirmed` 分类，replay 不重复 post-commit 副作用 |
+| Unit of Work | `rpg_engine/unit_of_work.py` | `BEGIN IMMEDIATE` 事务封装与 existing-turn outcome |
+| Write Guard | `rpg_engine/write_guard.py` | `command_id` / canonical command hash / expected-turn 写入与幂等保护 |
 | Validation Issues | `rpg_engine/validation_issues.py` | 校验问题模型 |
 
 ## 上下文与渲染

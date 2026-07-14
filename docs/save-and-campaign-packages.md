@@ -370,6 +370,8 @@ SaveManager 以本地 workspace root 为边界，管理玩家可见 Campaign 和
 ```text
 <workspace>/.aigm/pending-player-action.json
 <workspace>/.aigm/pending-player-clarification.json
+<workspace>/.aigm/pending-player-action.lock
+<workspace>/.aigm/last-confirmed-player-action.json
 ```
 
 registry 记录：
@@ -416,9 +418,11 @@ player turn
 
 player confirm
   -> require matching session_id
+  -> acquire crash-release workspace confirmation claim
   -> mark TurnProposal human_confirmed
-  -> GMRuntime.commit_turn
-  -> refresh save record
+  -> SaveManager classify authoritative replay / GMRuntime.commit_turn fresh write
+  -> atomically publish bounded replay receipt before pending clear
+  -> refresh save record only for a fresh commit
 ```
 
 `start_or_continue()` 可以创建或选择 Save Package，并返回 onboarding；它不能推进剧情事实。
@@ -441,6 +445,30 @@ Pending action 绑定：
 `player_confirm()` 必须匹配 pending action 的 save、session id、可选 platform/session identity 和可选
 actor identity。过期 pending action 不能提交；确认时发现过期会清理 pending action，并要求玩家重新从
 `player_turn()` 生成新的 preview / confirmation session。
+
+Confirmation lock 覆盖 read、identity/payload 校验、commit/replay classification、receipt reconcile 与
+pending clear；它使用 OS advisory lock，进程崩溃时自动释放，lock 文件本身不携带 authority。首次成功返回
+`saved=true`、`write_status=committed`、`idempotent_replay=false`；正常 clear 后或 commit 后崩溃重试返回
+`saved=false`、`write_status=already_confirmed`、`idempotent_replay=true`。Replay receipt 仅保存 save、
+confirmation/identity hashes、command id/hash、delta/proposal digests、turn/event count 和稳定结果分类；每次
+replay 都必须重新读取目标 Save 的 SQLite turn/event evidence。Receipt 不保存 raw player text、raw
+delta/proposal、raw session key/actor id 或 hidden/GM-only 内容，也不能覆盖 Save facts。
+完成 identity/session 核验后，owner result 可回传 bounded `confirmation_session_hash`，供 platform sidecar
+校验同一 completion generation；该 hash 不是确认、approval、事实或 commit authority，也不能替代 receipt
+与 SQLite evidence。
+Receipt 的完整 digest 还必须与目标 Save SQLite `meta.confirmation_replay_receipt_digest` 精确一致；因此修改
+identity、payload digest、turn evidence 或 result 后重算 workspace SHA 仍会 fail closed。该 meta 值只锚定
+entry evidence，不产生 turn/event/fact，也不允许 low-level Runtime caller 自报 confirmation provenance。
+
+`player_turn()` 发布新的 pending session 时使用同一 lock，并在 pending 文件发布失败时恢复上一条 receipt；
+这只关闭 confirm/publication TOCTOU，不定义 Story 6.5 的 supersede/cancel 产品策略。若 pending 已过期但其
+command 已在 SQLite durable，确认重试不得先删除 pending，而应完成 replay reconcile。若 commit 后的
+projection/outbox 仍 dirty，可信 replay 只处理 dirty work；若 registry cached turn 与 durable turn 不同，
+再执行一次 repair refresh。已 clean/current 的 replay 不重复这些写入。
+确认开始时选定的 save id/path 会一直冻结到 fresh commit 完成；中途 active save 切换只影响后续新入口，
+不能改变当前 pending 的写入目标。
+Pending 必须显式携带并匹配该 normalized save path。Receipt JSON 不允许 duplicate keys；registry save record
+修复使用锁内 read-merge-write，保留并发更新的 `active_save_id` 与其他 records。
 
 ## CLI Surface
 

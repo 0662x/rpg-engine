@@ -44,3 +44,8 @@
 ## Deferred from: code review of 6-2-canonical-action-taxonomy-registry-projection (2026-07-13)
 
 - CLOSED 2026-07-13：第二轮 Blind Hunter 对 baseline `keyword_expected_action()` 做逐词复现后确认，旧 guard 不包含 context-only“找/检查”；第一轮 Defer 的基线判断错误。Story 6.2 已增加 canonical `preview.mismatch` role，恢复 low-level guard 既有边界并保持 fail-closed。
+
+## Deferred from: code review of 6-4-atomic-pending-confirmation-claim-and-replay-classification (2026-07-14)
+
+- 可选 archivist 请求在通用 CommitService 的 SQLite commit 后崩溃窗口没有 durable phase/outbox。普通 `SaveManager.player_confirm()` 默认不启用 archivist；修复需要扩大持久化设计，作为独立规划项处理，不在 Story 6.4 内引入 migration 或新 authority。
+- 新行动成功发布后，上一行动的单条 bounded replay receipt 会被替换；跨后续行动的延迟重试因此不再保留稳定 replay classification。支持这类历史 receipt 集合会引入按 confirmation session 的多 entry retention、supersede/orphan 与清理策略，属于 Story 6.5 明确的 pending lifecycle 范围，不在 Story 6.4 扩张。

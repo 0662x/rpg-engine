@@ -874,6 +874,7 @@ class SaveManagerConditionCoverageTests(unittest.TestCase):
                 manager.write_pending_action(
                     {
                         "save_id": "save-ok",
+                        "save_path": save["path"],
                         "session_id": "sid",
                         "delta": {},
                         "turn_proposal": {},
@@ -889,6 +890,7 @@ class SaveManagerConditionCoverageTests(unittest.TestCase):
                 manager.write_pending_action(
                     {
                         "save_id": "save-ok",
+                        "save_path": save["path"],
                         "session_id": "sid",
                         "delta": {},
                         "turn_proposal": {},
@@ -902,6 +904,7 @@ class SaveManagerConditionCoverageTests(unittest.TestCase):
                 manager.write_pending_action(
                     {
                         "save_id": "save-ok",
+                        "save_path": save["path"],
                         "session_id": "sid",
                         "delta": {},
                         "turn_proposal": {},
@@ -912,15 +915,33 @@ class SaveManagerConditionCoverageTests(unittest.TestCase):
                 with self.assertRaisesRegex(SaveManagerError, "pending player action expired"):
                     manager.player_confirm("sid")
                 self.assertIsNone(manager.read_pending_action())
-                manager.write_pending_action({"save_id": "save-ok", "delta": {}, "turn_proposal": {}})
+                manager.write_pending_action(
+                    {"save_id": "save-ok", "save_path": save["path"], "delta": {}, "turn_proposal": {}}
+                )
                 with self.assertRaisesRegex(SaveManagerError, "missing confirmation session_id"):
                     manager.player_confirm("sid")
-                manager.write_pending_action({"save_id": "save-ok", "session_id": "sid", "delta": {}, "turn_proposal": {}})
+                manager.write_pending_action(
+                    {
+                        "save_id": "save-ok",
+                        "save_path": save["path"],
+                        "session_id": "sid",
+                        "delta": {},
+                        "turn_proposal": {},
+                    }
+                )
                 with self.assertRaisesRegex(SaveManagerError, "requires the pending action session_id"):
                     manager.player_confirm("")
                 with self.assertRaisesRegex(SaveManagerError, "does not match"):
                     manager.player_confirm("other")
-                manager.write_pending_action({"save_id": "save-ok", "session_id": "sid", "delta": [], "turn_proposal": {}})
+                manager.write_pending_action(
+                    {
+                        "save_id": "save-ok",
+                        "save_path": save["path"],
+                        "session_id": "sid",
+                        "delta": [],
+                        "turn_proposal": {},
+                    }
+                )
                 with self.assertRaisesRegex(SaveManagerError, "incomplete"):
                     manager.player_confirm("sid")
 
@@ -929,14 +950,38 @@ class SaveManagerConditionCoverageTests(unittest.TestCase):
             def commit_turn(delta: dict[str, object], *, turn_proposal: dict[str, object]) -> SimpleNamespace:
                 captured["delta"] = delta
                 captured["proposal"] = turn_proposal
-                return result_object({"ok": True, "write_status": "committed", "projection_status": "dirty", "warnings": ["w"]})
+                return result_object(
+                    {
+                        "ok": True,
+                        "write_status": "committed",
+                        "idempotent_replay": False,
+                        "projection_status": "dirty",
+                        "warnings": ["w"],
+                    }
+                )
 
-            commit_runtime = SimpleNamespace(commit_turn=commit_turn)
+            commit_runtime = SimpleNamespace(campaign=object(), commit_turn=commit_turn)
             manager.write_registry({"schema_version": "1", "active_save_id": "save-ok", "campaigns": [], "saves": [save]})
-            manager.write_pending_action({"save_id": "save-ok", "session_id": "sid", "delta": {"changed": True}, "turn_proposal": {"provenance": {"source": "test"}}})
+            manager.write_pending_action(
+                {
+                    "save_id": "save-ok",
+                    "save_path": save["path"],
+                    "session_id": "sid",
+                    "delta": {"changed": True},
+                    "turn_proposal": {"provenance": {"source": "test"}},
+                }
+            )
             with (
                 mock.patch.object(manager, "require_save", return_value=save),
                 mock.patch("rpg_engine.save_manager.GMRuntime.from_path", return_value=commit_runtime),
+                mock.patch("rpg_engine.save_manager.connect"),
+                mock.patch("rpg_engine.save_manager.find_idempotent_turn", return_value=None),
+                mock.patch.object(
+                    manager,
+                    "build_confirmation_receipt",
+                    return_value={"schema_version": "1", "receipt_digest": "test-only"},
+                ),
+                mock.patch.object(manager, "write_confirmation_receipt_anchor"),
                 mock.patch.object(manager, "refresh_save_record", side_effect=lambda record: {**record, "health": "ok"}),
             ):
                 confirmed = manager.player_confirm("sid")
@@ -1006,12 +1051,12 @@ class SaveManagerConditionCoverageTests(unittest.TestCase):
             lock_path = root / "registry.lock"
             with registry_lock(lock_path):
                 self.assertTrue(lock_path.exists())
-                lock_path.unlink()
-            self.assertFalse(lock_path.exists())
-            lock_path.write_text("locked", encoding="utf-8")
-            with self.assertRaisesRegex(SaveManagerError, "timed out"):
-                with registry_lock(lock_path, timeout=0):
-                    pass
+                with self.assertRaisesRegex(SaveManagerError, "timed out"):
+                    with registry_lock(lock_path, timeout=0):
+                        pass
+            self.assertTrue(lock_path.exists())
+            with registry_lock(lock_path, timeout=0):
+                pass
 
             self.assertIsNone(find_record("bad", "id"))
             self.assertEqual(find_record([{"id": "a"}], "a"), {"id": "a"})

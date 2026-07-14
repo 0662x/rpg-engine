@@ -225,6 +225,11 @@ admin profiles。
   `turn_proposal`。
 - Confirm：只有玩家明确确认后，客户端才调用 `player_confirm(session_id)`；pending action 过期、
   active save 不匹配、session id 不匹配或平台 session/actor identity 不匹配时必须拒绝保存。
+- Confirm result：MCP 原样透传 Kernel 的 `write_status=committed|already_confirmed`、
+  `idempotent_replay`、`saved` 与 owner-validated bounded `confirmation_session_hash`。该 hash 仅供同一
+  platform completion generation correlation，不是确认或 commit authority。合法 replay 的
+  `ok=true`、`saved=false`；client 必须避免重复叙事和
+  fresh-only 外围动作。Adapter 不读取 workspace receipt、不重算 command hash，也不拥有 claim authority。
 
 ## Low-Level 工具合同
 

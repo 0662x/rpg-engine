@@ -16,6 +16,8 @@ from rpg_engine.db import connect
 from rpg_engine.entity_access import read_entity
 from rpg_engine.runtime import GMRuntime
 from rpg_engine.save_manager import (
+    DEFAULT_CONFIRMATION_LOCK_RELATIVE,
+    DEFAULT_CONFIRMATION_RECEIPT_RELATIVE,
     DEFAULT_PENDING_ACTION_RELATIVE,
     DEFAULT_PENDING_CLARIFICATION_RELATIVE,
     DEFAULT_REGISTRY_RELATIVE,
@@ -31,7 +33,10 @@ HERMES_ROOT = ENGINE_ROOT.parent
 DEFAULT_WORKSPACE_ROOT = HERMES_ROOT / "rp"
 SAVE_REGISTRY_RELATIVE = Path(DEFAULT_REGISTRY_RELATIVE)
 ALLOWED_TEMP_ENTRY_FILES = {
+    Path(DEFAULT_CONFIRMATION_LOCK_RELATIVE),
+    Path(DEFAULT_CONFIRMATION_RECEIPT_RELATIVE),
     Path(DEFAULT_REGISTRY_RELATIVE),
+    Path(f"{DEFAULT_REGISTRY_RELATIVE}.lock"),
     Path(DEFAULT_PENDING_ACTION_RELATIVE),
     Path(DEFAULT_PENDING_CLARIFICATION_RELATIVE),
 }
@@ -493,17 +498,24 @@ class CrossCampaignContextSmokeTests(unittest.TestCase):
                             "confirmed_session_replay",
                             "SaveManager.player_confirm",
                         )
-                        replay_error = assert_stage_raises(
+                        replayed = require_mapping_keys(
                             self,
-                            SaveManagerError,
+                            call_stage(
+                                replay_report,
+                                lambda: manager.player_confirm(str(acted.get("session_id"))),
+                            ),
+                            {"ok", "saved", "write_status", "idempotent_replay", "message"},
                             replay_report,
-                            lambda: manager.player_confirm(str(acted.get("session_id"))),
                         )
+                        self.assertTrue(replayed["ok"], replay_report)
+                        self.assertFalse(replayed["saved"], replay_report)
+                        self.assertEqual(replayed["write_status"], "already_confirmed", replay_report)
+                        self.assertTrue(replayed["idempotent_replay"], replay_report)
                         assert_player_context_has_no_hidden_canary(
                             self,
                             case,
-                            str(replay_error),
-                            stage_report(case, started, "replay_error_guard", "SaveManagerError"),
+                            str(replayed),
+                            stage_report(case, started, "replay_result_guard", "SaveManager.player_confirm"),
                         )
                         self.assertTrue(authoritative_snapshot(save_path) == after_confirm, replay_report)
                         self.assertTrue(

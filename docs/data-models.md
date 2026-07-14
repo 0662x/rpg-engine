@@ -593,6 +593,9 @@ context 或 prompt。
 - `expected_turn_id`
 
 `command_id`、`command_hash` 和 `expected_turn_id` 支持 write guards 与幂等。
+同一 `command_id` + 同一 canonical payload hash 的 durable row 会分类为
+`write_status=already_confirmed`；同一 command + 不同 payload 必须 conflict。该分类来自 SQLite，不来自
+workspace receipt。
 
 ### Event
 
@@ -830,6 +833,23 @@ root escape。Registry state 只选择 Save Package，不拥有游玩事实。`c
 可以返回 registry cached summary，但结果必须用 `current_save_authority` 标明 `summary_source=registry_cache`
 且 `summary_authoritative=false`；需要 authoritative facts 时必须 refresh 或读取 Save SQLite。
 
+## Platform Session Binding State
+
+`.aigm/game-session-bindings.json` 是 workspace runtime state，不是 Save Package 或事实库。每条 binding
+保存 hashed platform/session/user identity、active Save path、状态/TTL、最近 message/action/confirm id，
+以及 monotonic state `revision`。Start/act/deactivate/expiry reservation 或 completion 推进 revision；同一
+confirmation 的 message reservation 与 advisory prewarm 只更新 message/correlation 字段并保留 state
+revision。所有 RMW 使用同一跨线程/进程、进程退出自动释放的 OS lock。
+
+Binding 可保存 `pending_confirmation_session_hash` 与
+`pending_confirmation_revision`、`last_completed_confirmation_session_hash`。Pending revision 记录该
+confirmation 所属的操作 generation；start/act 等新权威操作推进 binding revision 后，旧 confirmation
+即使稍后返回也不能完成旧 generation。它们只用于识别“SQLite 已 durable，但 fresh platform
+completion 尚未落地”的同一 confirmation：匹配 replay 只补状态 transition 并保持原 TTL。Hash 不授予事实、
+玩家确认、proposal approval 或 commit authority；Save、revision 或状态已变化时必须保留较新的 binding。
+兼容旧 schema 的回填仅限 correlation 为空、binding/pending revision 均为 0、Save/state 精确匹配，且
+SaveManager owner result 回传同一 confirmation hash；任何已存在的新权威 revision 都关闭该兼容路径。
+
 ## Pending Player State
 
 SaveManager 在 `.aigm/` 下存储临时玩家入口状态：
@@ -837,6 +857,8 @@ SaveManager 在 `.aigm/` 下存储临时玩家入口状态：
 ```text
 .aigm/pending-player-action.json
 .aigm/pending-player-clarification.json
+.aigm/pending-player-action.lock
+.aigm/last-confirmed-player-action.json
 ```
 
 Pending action 绑定：
@@ -852,6 +874,19 @@ Pending action 绑定：
 
 只有 proposal ready to confirm 时，`player_turn()` 才写 pending state。`player_confirm()` 在提交前
 必须匹配 pending session、save 和可选 platform/session identity。
+
+确认开始后，pending action 可增加 `confirmation_claim`，其中只有 schema、save id/path、confirmation 与
+platform/session/actor hashes、command id、delta/proposal digest 与自校验 digest；claim digest 还锚定到
+目标 Save SQLite meta。`last-confirmed-player-action.json` 是最多 4 KiB 的单条
+replay evidence，包含 save identity/path、hashed confirmation/platform/session/actor identity、command
+id/hash、delta/proposal digest、turn id、event count 与 result classification。二者均不属于 Save Package
+事实模型；receipt 的完整摘要锚定在目标 Save SQLite `meta`，replay 必须同时复核该 anchor 与
+turn/command/event evidence，不能靠可重算的 workspace 自摘要授权。
+
+Pending `confirmation_claim` 还用于区分“TTL 到期且从未提交”与“已 durable、等待 reconcile”：后者不得按
+expired pending 删除。Replay permission 默认拒绝；只有带 `confirmed_via=player_confirm`、非空
+confirmation session 且通过 SaveManager identity/payload 校验的 proposal，才可进入 authoritative replay
+分类。
 
 ## Archives And Schemas
 

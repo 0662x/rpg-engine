@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +13,16 @@ from .delta_schema import validate_delta_schema
 from .discovery import record_discovery_from_events
 from .time_weather import enrich_time_weather_meta
 from .unit_of_work import UnitOfWork
+
+
+@dataclass(frozen=True)
+class SaveTurnResult:
+    turn_id: str
+    write_status: str
+
+    @property
+    def idempotent_replay(self) -> bool:
+        return self.write_status == "already_confirmed"
 
 
 def load_delta(path: str | Path) -> dict[str, Any]:
@@ -42,6 +53,23 @@ def save_turn_delta(
     before_write: Callable[[], None] | None = None,
     rollback_write_artifacts: Callable[[], None] | None = None,
 ) -> str:
+    return save_turn_delta_outcome(
+        campaign,
+        conn,
+        delta,
+        before_write=before_write,
+        rollback_write_artifacts=rollback_write_artifacts,
+    ).turn_id
+
+
+def save_turn_delta_outcome(
+    campaign: Campaign,
+    conn: sqlite3.Connection,
+    delta: dict[str, Any],
+    *,
+    before_write: Callable[[], None] | None = None,
+    rollback_write_artifacts: Callable[[], None] | None = None,
+) -> SaveTurnResult:
     schema_errors = validate_delta_schema(delta, conn)
     if schema_errors:
         raise ValueError("Invalid turn delta:\n" + "\n".join(f"- {error}" for error in schema_errors))
@@ -57,7 +85,7 @@ def save_turn_delta(
     try:
         existing_turn = uow.begin()
         if existing_turn:
-            return existing_turn
+            return SaveTurnResult(turn_id=existing_turn, write_status="already_confirmed")
         if before_write:
             write_artifacts_started = True
             before_write()
@@ -179,4 +207,4 @@ def save_turn_delta(
 
     uow.finalize_artifacts()
 
-    return turn_id
+    return SaveTurnResult(turn_id=turn_id, write_status="committed")

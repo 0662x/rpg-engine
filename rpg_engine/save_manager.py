@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import errno
+import hashlib
 import json
 import os
 import re
 import shutil
 import time
 import uuid
+from copy import deepcopy
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -13,9 +16,20 @@ from typing import Any, Iterator
 
 import yaml
 
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - exercised on Windows.
+    fcntl = None
+
+try:
+    import msvcrt
+except ImportError:  # pragma: no cover - exercised on POSIX.
+    msvcrt = None
+
 from .ai.defaults import DEFAULT_AI_MODEL, DEFAULT_AI_PROVIDER, DEFAULT_INTENT_TIMEOUT_SECONDS
 from .atomic_io import write_text_atomic
 from .campaign import load_campaign
+from .commit_service import reconcile_confirmed_turn
 from .db import connect, utc_now
 from .game_session import clean, hash_identity
 from .intent_router import make_intent_ai_config, make_intent_request_meta
@@ -23,14 +37,21 @@ from .redaction import redact_hidden_entity_refs
 from .runtime import GMRuntime, intent_ai_config_kwargs, intent_request_meta_kwargs
 from .save_service import init_v1_save, inspect_v1_save, normalize_content_paths_for_save, validate_save_target_outside_source
 from .validation_issues import issues_from_messages
+from .validation_pipeline import stable_delta_digest
 from .visibility import ensure_visibility_sql_functions, is_player_hidden_visibility, normalize_visibility_label
+from .write_guard import find_idempotent_turn
 
 
 REGISTRY_SCHEMA_VERSION = "1"
 DEFAULT_REGISTRY_RELATIVE = ".aigm/save-registry.json"
 DEFAULT_PENDING_ACTION_RELATIVE = ".aigm/pending-player-action.json"
 DEFAULT_PENDING_CLARIFICATION_RELATIVE = ".aigm/pending-player-clarification.json"
+DEFAULT_CONFIRMATION_RECEIPT_RELATIVE = ".aigm/last-confirmed-player-action.json"
+DEFAULT_CONFIRMATION_LOCK_RELATIVE = ".aigm/pending-player-action.lock"
 DEFAULT_PENDING_ACTION_TTL_SECONDS = 1800
+MAX_CONFIRMATION_RECEIPT_BYTES = 4096
+CONFIRMATION_RECEIPT_META_KEY = "confirmation_replay_receipt_digest"
+CONFIRMATION_CLAIM_META_KEY = "confirmation_pending_claim_digest"
 DEFAULT_SAVES_DIR = "saves"
 INTERNAL_ONBOARDING_TERMS = ("delta", "commit", "SQLite", "save_dir", "campaign.yaml", "game.sqlite")
 
@@ -67,37 +88,33 @@ class SaveManager:
         }
 
     def list_campaigns(self, *, refresh: bool = False) -> dict[str, Any]:
-        registry = self.read_registry()
-        campaigns = [dict(item) for item in registry.get("campaigns", []) if isinstance(item, dict)]
-        if refresh:
-            path_errors = registry_record_path_errors(self.root, campaigns, "campaign")
-            if path_errors:
-                return {
-                    "ok": False,
-                    "campaigns": campaigns,
-                    "errors": path_errors,
-                    "error_details": issues_from_messages(path_errors, default_code="SAVE_MANAGER_ERROR"),
-                }
-            changed = False
-            for record in campaigns:
-                try:
-                    campaign = load_campaign(self.resolve_relative(str(record.get("path", "")), "campaign"))
-                    record.update(
-                        {
-                            "id": campaign.campaign_id,
-                            "name": campaign.name,
-                            "status": "ok",
-                            "last_validated_at": utc_now(),
-                        }
-                    )
-                except Exception as exc:
-                    record["status"] = "error"
-                    record["errors"] = [str(exc)]
-                changed = True
-            if changed:
+        with self.registry_snapshot(write=refresh) as registry:
+            campaigns = [dict(item) for item in registry.get("campaigns", []) if isinstance(item, dict)]
+            if refresh:
+                path_errors = registry_record_path_errors(self.root, campaigns, "campaign")
+                if path_errors:
+                    return {
+                        "ok": False,
+                        "campaigns": campaigns,
+                        "errors": path_errors,
+                        "error_details": issues_from_messages(path_errors, default_code="SAVE_MANAGER_ERROR"),
+                    }
+                for record in campaigns:
+                    try:
+                        campaign = load_campaign(self.resolve_relative(str(record.get("path", "")), "campaign"))
+                        record.update(
+                            {
+                                "id": campaign.campaign_id,
+                                "name": campaign.name,
+                                "status": "ok",
+                                "last_validated_at": utc_now(),
+                            }
+                        )
+                    except Exception as exc:
+                        record["status"] = "error"
+                        record["errors"] = [str(exc)]
                 registry["campaigns"] = campaigns
-                self.write_registry(registry)
-        return {"ok": True, "campaigns": campaigns, "errors": []}
+            return {"ok": True, "campaigns": campaigns, "errors": []}
 
     def register_campaign(self, campaign: str, starter_save: str | None = None) -> dict[str, Any]:
         campaign_path = normalize_required_relative(campaign, "campaign")
@@ -111,12 +128,11 @@ class SaveManager:
             "last_validated_at": utc_now(),
             "status": "ok",
         }
-        registry = self.read_registry()
-        campaigns = [dict(item) for item in registry.get("campaigns", []) if isinstance(item, dict)]
-        campaigns = [item for item in campaigns if item.get("id") != loaded.campaign_id]
-        campaigns.append(record)
-        registry["campaigns"] = sorted(campaigns, key=lambda item: str(item.get("id", "")))
-        self.write_registry(registry)
+        with self.registry_snapshot(write=True) as registry:
+            campaigns = [dict(item) for item in registry.get("campaigns", []) if isinstance(item, dict)]
+            campaigns = [item for item in campaigns if item.get("id") != loaded.campaign_id]
+            campaigns.append(record)
+            registry["campaigns"] = sorted(campaigns, key=lambda item: str(item.get("id", "")))
         return {"ok": True, "campaign": record, "errors": []}
 
     def list_saves(
@@ -126,104 +142,105 @@ class SaveManager:
         include_archived: bool = False,
         refresh: bool = False,
     ) -> dict[str, Any]:
-        registry = self.read_registry()
-        saves = [dict(item) for item in registry.get("saves", []) if isinstance(item, dict)]
-        filtered = [
-            item
-            for item in saves
-            if (include_archived or not bool(item.get("archived")))
-            and (campaign_id is None or str(item.get("campaign_id", "")) == campaign_id)
-        ]
-        if refresh:
-            path_errors = registry_record_path_errors(self.root, saves, "save")
-            if path_errors:
-                return {
-                    "ok": False,
-                    "active_save_id": registry.get("active_save_id"),
-                    "saves": [self.scrub_cached_save_record(record) for record in filtered],
-                    "errors": path_errors,
-                    "error_details": issues_from_messages(path_errors, default_code="SAVE_MANAGER_ERROR"),
-                }
-            refreshed: list[dict[str, Any]] = []
-            changed = False
-            for record in saves:
-                if any(record.get("id") == item.get("id") for item in filtered):
-                    refreshed_record = self.refresh_save_record(record)
-                    refreshed.append(refreshed_record)
-                    changed = True
-                else:
-                    refreshed.append(record)
-            if changed:
+        with self.registry_snapshot(write=refresh) as registry:
+            saves = [dict(item) for item in registry.get("saves", []) if isinstance(item, dict)]
+            filtered = [
+                item
+                for item in saves
+                if (include_archived or not bool(item.get("archived")))
+                and (campaign_id is None or str(item.get("campaign_id", "")) == campaign_id)
+            ]
+            if refresh:
+                path_errors = registry_record_path_errors(self.root, saves, "save")
+                if path_errors:
+                    return {
+                        "ok": False,
+                        "active_save_id": registry.get("active_save_id"),
+                        "saves": [self.scrub_cached_save_record(record) for record in filtered],
+                        "errors": path_errors,
+                        "error_details": issues_from_messages(path_errors, default_code="SAVE_MANAGER_ERROR"),
+                    }
+                refreshed: list[dict[str, Any]] = []
+                for record in saves:
+                    if any(record.get("id") == item.get("id") for item in filtered):
+                        refreshed.append(self.refresh_save_record(record))
+                    else:
+                        refreshed.append(record)
                 registry["saves"] = refreshed
-                self.write_registry(registry)
                 filtered_ids = {str(item.get("id")) for item in filtered}
                 filtered = [dict(item) for item in refreshed if str(item.get("id")) in filtered_ids]
-        filtered = [self.scrub_cached_save_record(record) for record in filtered]
-        return {
-            "ok": True,
-            "active_save_id": registry.get("active_save_id"),
-            "saves": filtered,
-            "errors": [],
-        }
+            filtered = [self.scrub_cached_save_record(record) for record in filtered]
+            return {
+                "ok": True,
+                "active_save_id": registry.get("active_save_id"),
+                "saves": filtered,
+                "errors": [],
+            }
 
     def current_save(self, *, refresh: bool = False) -> dict[str, Any]:
-        registry = self.read_registry()
-        active_save_id = registry.get("active_save_id")
-        if not active_save_id:
-            return {
-                "ok": False,
-                "active_save_id": None,
-                "save": None,
-                "errors": ["no active save is configured"],
-                "error_details": issues_from_messages(["no active save is configured"], default_code="SAVE_MANAGER_ERROR"),
-            }
-        record = find_record(registry.get("saves", []), str(active_save_id))
-        if record is None:
-            message = f"active save not found: {active_save_id}"
-            return {
-                "ok": False,
-                "active_save_id": active_save_id,
-                "save": None,
-                "errors": [message],
-                "error_details": issues_from_messages([message], default_code="SAVE_MANAGER_ERROR"),
-            }
-        if refresh:
-            path_errors = registry_record_path_errors(self.root, registry.get("saves", []), "save")
-            if path_errors:
+        with self.registry_snapshot(write=refresh) as registry:
+            active_save_id = registry.get("active_save_id")
+            if not active_save_id:
+                return {
+                    "ok": False,
+                    "active_save_id": None,
+                    "save": None,
+                    "errors": ["no active save is configured"],
+                    "error_details": issues_from_messages(
+                        ["no active save is configured"],
+                        default_code="SAVE_MANAGER_ERROR",
+                    ),
+                }
+            record = find_record(registry.get("saves", []), str(active_save_id))
+            if record is None:
+                message = f"active save not found: {active_save_id}"
                 return {
                     "ok": False,
                     "active_save_id": active_save_id,
                     "save": None,
-                    "errors": path_errors,
-                    "error_details": issues_from_messages(path_errors, default_code="SAVE_MANAGER_ERROR"),
+                    "errors": [message],
+                    "error_details": issues_from_messages([message], default_code="SAVE_MANAGER_ERROR"),
                 }
-            record = self.refresh_save_record(dict(record))
-            registry["saves"] = replace_record(registry.get("saves", []), record)
-            self.write_registry(registry)
-        return {
-            "ok": True,
-            "active_save_id": active_save_id,
-            "save": self.scrub_cached_save_record(dict(record)),
-            "current_save_authority": current_save_authority(refresh=refresh),
-            "errors": [],
-        }
+            if refresh:
+                path_errors = registry_record_path_errors(self.root, registry.get("saves", []), "save")
+                if path_errors:
+                    return {
+                        "ok": False,
+                        "active_save_id": active_save_id,
+                        "save": None,
+                        "errors": path_errors,
+                        "error_details": issues_from_messages(path_errors, default_code="SAVE_MANAGER_ERROR"),
+                    }
+                record = self.refresh_save_record(dict(record))
+                registry["saves"] = replace_record(registry.get("saves", []), record)
+            return {
+                "ok": True,
+                "active_save_id": active_save_id,
+                "save": self.scrub_cached_save_record(dict(record)),
+                "current_save_authority": current_save_authority(refresh=refresh),
+                "errors": [],
+            }
 
     def switch_save(self, save_id: str, *, refresh: bool = True) -> dict[str, Any]:
-        registry = self.read_registry()
-        record = find_record(registry.get("saves", []), save_id)
-        if record is None:
-            raise SaveManagerError(f"save not found: {save_id}")
-        if bool(record.get("archived")):
-            raise SaveManagerError(f"save is archived: {save_id}")
-        record = dict(record)
-        path_errors = registry_record_path_errors(self.root, registry.get("saves", []), "save")
-        if path_errors:
-            raise SaveManagerError("; ".join(path_errors))
-        if refresh:
-            record = self.refresh_save_record(record)
-            registry["saves"] = replace_record(registry.get("saves", []), record)
-        registry["active_save_id"] = save_id
-        self.write_registry(registry)
+        lock_path = self.registry_path.with_suffix(self.registry_path.suffix + ".lock")
+        with registry_lock(lock_path, root=self.root):
+            registry = self.read_registry()
+            record = find_record(registry.get("saves", []), save_id)
+            if record is None:
+                raise SaveManagerError(f"save not found: {save_id}")
+            if bool(record.get("archived")):
+                raise SaveManagerError(f"save is archived: {save_id}")
+            record = dict(record)
+            path_errors = registry_record_path_errors(self.root, registry.get("saves", []), "save")
+            if path_errors:
+                raise SaveManagerError("; ".join(path_errors))
+            if refresh:
+                record = self.refresh_save_record(record)
+                registry["saves"] = replace_record(registry.get("saves", []), record)
+            registry["active_save_id"] = save_id
+            normalized = normalize_registry(registry)
+            text = json.dumps(normalized, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+            write_text_atomic(self.registry_path, text)
         return {"ok": True, "active_save_id": save_id, "save": record, "errors": []}
 
     def create_save(
@@ -265,21 +282,21 @@ class SaveManager:
         )
         if not record.get("label"):
             record["label"] = self.default_save_label(record)
-        registry = self.read_registry()
-        registry["campaigns"] = upsert_campaign_record(
-            registry.get("campaigns", []),
-            campaign_obj,
-            campaign_path,
-            starter_path,
-        )
-        registry["saves"] = replace_record(registry.get("saves", []), record)
-        if activate:
-            registry["active_save_id"] = save_id
-        self.write_registry(registry)
+        with self.registry_snapshot(write=True) as registry:
+            registry["campaigns"] = upsert_campaign_record(
+                registry.get("campaigns", []),
+                campaign_obj,
+                campaign_path,
+                starter_path,
+            )
+            registry["saves"] = replace_record(registry.get("saves", []), record)
+            if activate:
+                registry["active_save_id"] = save_id
+            active_save_id = registry.get("active_save_id")
         return {
             "ok": not save_blocks_player_entry(record),
             "mode": "created",
-            "active_save_id": registry.get("active_save_id"),
+            "active_save_id": active_save_id,
             "save": record,
             "errors": [] if not save_blocks_player_entry(record) else list(record.get("errors", [])),
         }
@@ -303,14 +320,15 @@ class SaveManager:
             kind=str(source_record.get("kind", "normal")),
             source="duplicate",
         )
-        registry["saves"] = replace_record(registry.get("saves", []), record)
-        if activate:
-            registry["active_save_id"] = new_save_id
-        self.write_registry(registry)
+        with self.registry_snapshot(write=True) as latest_registry:
+            latest_registry["saves"] = replace_record(latest_registry.get("saves", []), record)
+            if activate:
+                latest_registry["active_save_id"] = new_save_id
+            active_save_id = latest_registry.get("active_save_id")
         return {
             "ok": not save_blocks_player_entry(record),
             "mode": "created",
-            "active_save_id": registry.get("active_save_id"),
+            "active_save_id": active_save_id,
             "save": record,
             "errors": [] if not save_blocks_player_entry(record) else list(record.get("errors", [])),
         }
@@ -452,7 +470,8 @@ class SaveManager:
     ) -> dict[str, Any]:
         save = self.require_save(refresh=True, save_path=save_path)
         pending_clarification = self.read_pending_clarification()
-        self.clear_pending_action()
+        with confirmation_claim_lock(self.confirmation_lock_path(), root=self.root):
+            self.clear_pending_action()
         if (
             pending_clarification
             and str(pending_clarification.get("save_id")) == str(save["id"])
@@ -518,22 +537,32 @@ class SaveManager:
         if ready:
             session_id = f"player_action:{uuid.uuid4().hex}"
             self.clear_pending_clarification()
-            self.write_pending_action(
-                {
-                    "schema_version": "1",
-                    "session_id": session_id,
-                    "save_id": save["id"],
-                    "save_path": save["path"],
-                    "created_at": utc_now(),
-                    "expires_at": pending_action_expires_at(),
-                    "ttl_seconds": DEFAULT_PENDING_ACTION_TTL_SECONDS,
-                    "user_text": user_text,
-                    "action": result.get("action"),
-                    "delta": result.get("delta_draft"),
-                    "turn_proposal": result.get("turn_proposal"),
-                    **platform_session_metadata(platform=platform, session_key=session_key, actor_id=actor_id),
-                }
-            )
+            pending_session = {
+                "schema_version": "1",
+                "session_id": session_id,
+                "save_id": save["id"],
+                "save_path": save["path"],
+                "created_at": utc_now(),
+                "expires_at": pending_action_expires_at(),
+                "ttl_seconds": DEFAULT_PENDING_ACTION_TTL_SECONDS,
+                "user_text": user_text,
+                "action": result.get("action"),
+                "delta": result.get("delta_draft"),
+                "turn_proposal": result.get("turn_proposal"),
+                **platform_session_metadata(platform=platform, session_key=session_key, actor_id=actor_id),
+            }
+            with confirmation_claim_lock(self.confirmation_lock_path(), root=self.root):
+                previous_receipt = self.read_confirmation_receipt()
+                self.clear_confirmation_receipt()
+                try:
+                    self.write_pending_action(pending_session)
+                except Exception as exc:
+                    if previous_receipt is not None:
+                        try:
+                            self.write_confirmation_receipt(previous_receipt)
+                        except Exception as restore_exc:
+                            exc.add_note(f"confirmation receipt restore failed: {restore_exc!r}")
+                    raise
         elif clarification:
             clarification_id = str(clarification.get("clarification_id") or f"clarification:{uuid.uuid4().hex}")
             clarification = {**clarification, "clarification_id": clarification_id}
@@ -619,15 +648,52 @@ class SaveManager:
         session_key: str = "",
         actor_id: str = "",
     ) -> dict[str, Any]:
-        save = self.require_save(refresh=True, save_path=save_path)
+        with confirmation_claim_lock(self.confirmation_lock_path(), root=self.root):
+            return self._player_confirm_locked(
+                session_id=session_id,
+                save_path=save_path,
+                platform=platform,
+                session_key=session_key,
+                actor_id=actor_id,
+            )
+
+    def _player_confirm_locked(
+        self,
+        *,
+        session_id: str | None,
+        save_path: str,
+        platform: str,
+        session_key: str,
+        actor_id: str,
+    ) -> dict[str, Any]:
         session = self.read_pending_action()
         if not session:
-            raise SaveManagerError("no pending player action to confirm")
-        if pending_action_is_expired(session):
-            self.clear_pending_action()
-            raise SaveManagerError("pending player action expired; ask the player to run player_turn again")
+            save = self.require_save(refresh=False, save_path=save_path)
+            receipt = self.read_confirmation_receipt()
+            if receipt is None:
+                raise SaveManagerError("no pending player action to confirm")
+            result = self.validate_confirmation_receipt(
+                receipt,
+                save=save,
+                session_id=session_id,
+                platform=platform,
+                session_key=session_key,
+                actor_id=actor_id,
+            )
+            return self.player_confirm_result(
+                save=save,
+                result=result,
+                refresh_registry=confirmation_registry_needs_repair(save, result),
+                confirmation_session_hash=hash_identity(clean(session_id)),
+            )
+        save = self.require_save(refresh=False, save_path=save_path)
         if str(session.get("save_id")) != str(save["id"]):
             raise SaveManagerError("pending player action belongs to a different active save")
+        pending_save_path = clean(session.get("save_path"))
+        if not pending_save_path or normalize_required_relative(pending_save_path, "pending save") != str(save["path"]):
+            raise SaveManagerError("pending player action save path does not match the selected save")
+        bound_save_id = str(save["id"])
+        bound_save_path = str(save["path"])
         validate_pending_platform_session(session, platform=platform, session_key=session_key, actor_id=actor_id)
         expected_session_id = str(session.get("session_id") or "").strip()
         provided_session_id = str(session_id or "").strip()
@@ -641,6 +707,36 @@ class SaveManager:
         proposal = session.get("turn_proposal")
         if not isinstance(delta, dict) or not isinstance(proposal, dict):
             raise SaveManagerError("pending player action is incomplete")
+        if pending_action_is_expired(session) and "confirmation_claim" not in session:
+            self.clear_pending_action()
+            raise SaveManagerError("pending player action expired; ask the player to run player_turn again")
+        original_session = deepcopy(session)
+        claim_was_existing = "confirmation_claim" in session
+        session = self.prepare_pending_confirmation_claim(session, save=save)
+        delta = deepcopy(session["delta"])
+        proposal = deepcopy(session["turn_proposal"])
+        runtime = GMRuntime.from_path(self.resolve_relative(str(save["path"]), "save"))
+        with connect(runtime.campaign) as conn:
+            durable_turn_id = find_idempotent_turn(conn, delta)
+        if pending_action_is_expired(session) and durable_turn_id is None:
+            self.clear_pending_action()
+            raise SaveManagerError("pending player action expired; ask the player to run player_turn again")
+        existing_receipt = self.read_confirmation_receipt()
+        if existing_receipt is not None:
+            self.validate_confirmation_receipt(
+                existing_receipt,
+                save=save,
+                session_id=provided_session_id,
+                platform=platform,
+                session_key=session_key,
+                actor_id=actor_id,
+                pending_session=session,
+            )
+        if durable_turn_id is None:
+            save = self.require_save(refresh=True, save_path=bound_save_path)
+            if str(save["id"]) != bound_save_id or str(save["path"]) != bound_save_path:
+                raise SaveManagerError("pending player action save binding changed during confirmation")
+            runtime = GMRuntime.from_path(self.resolve_relative(str(save["path"]), "save"))
         proposal = dict(proposal)
         provenance = proposal.get("provenance") if isinstance(proposal.get("provenance"), dict) else {}
         proposal["provenance"] = {
@@ -650,24 +746,97 @@ class SaveManager:
             "confirmed_at": utc_now(),
         }
         proposal["human_confirmed"] = True
-        runtime = GMRuntime.from_path(self.resolve_relative(str(save["path"]), "save"))
-        result = runtime.commit_turn(delta, turn_proposal=proposal).to_dict()
+        try:
+            if durable_turn_id is None:
+                result = runtime.commit_turn(delta, turn_proposal=proposal).to_dict()
+            else:
+                result = self.reconcile_durable_confirmation(
+                    save=save,
+                    delta=delta,
+                    expected_turn_id=durable_turn_id,
+                )
+        except Exception as exc:
+            durable_turn_after_error: str | None = None
+            durable_evidence_checked = False
+            try:
+                with connect(runtime.campaign) as conn:
+                    durable_turn_after_error = find_idempotent_turn(conn, delta)
+                durable_evidence_checked = True
+            except Exception as evidence_exc:
+                exc.add_note(f"durable confirmation evidence check failed: {evidence_exc!r}")
+            if not claim_was_existing and durable_evidence_checked and durable_turn_after_error is None:
+                try:
+                    self.rollback_new_confirmation_claim(
+                        save=save,
+                        original_session=original_session,
+                        claim_digest=clean(session["confirmation_claim"].get("claim_digest")),
+                    )
+                except Exception as cleanup_exc:
+                    exc.add_note(f"confirmation claim rollback failed: {cleanup_exc!r}")
+            raise
+        validate_confirmation_result_contract(result)
+        receipt = self.build_confirmation_receipt(session=session, save=save, result=result)
+        self.write_confirmation_receipt_anchor(save=save, receipt=receipt)
+        self.write_confirmation_receipt(receipt)
         self.clear_pending_action()
-        refreshed = self.refresh_save_record(dict(save))
-        registry = self.read_registry()
-        registry["saves"] = replace_record(registry.get("saves", []), refreshed)
-        self.write_registry(registry)
-        return {
-            "ok": bool(result.get("ok", True)),
+        return self.player_confirm_result(
+            save=save,
+            result=result,
+            refresh_registry=confirmation_registry_needs_repair(save, result),
+            confirmation_session_hash=hash_identity(expected_session_id),
+        )
+
+    def player_confirm_result(
+        self,
+        *,
+        save: dict[str, Any],
+        result: dict[str, Any],
+        refresh_registry: bool,
+        confirmation_session_hash: str = "",
+    ) -> dict[str, Any]:
+        validate_confirmation_result_contract(result)
+        if refresh_registry:
+            public_save = self.merge_registry_save_record(dict(save))
+        else:
+            public_save = self.scrub_cached_save_record(dict(save))
+        replay = bool(result.get("idempotent_replay"))
+        write_status = clean(result.get("write_status"))
+        ok = bool(result.get("ok"))
+        public_result = {
+            "ok": ok,
             "active_save_id": save["id"],
-            "save": refreshed,
-            "saved": True,
+            "save": public_save,
+            "saved": bool(ok and write_status == "committed" and not replay),
             "message": player_confirm_message(result),
-            "write_status": result.get("write_status"),
+            "write_status": write_status,
+            "idempotent_replay": replay,
             "projection_status": result.get("projection_status"),
             "warnings": result.get("warnings", []),
             "errors": result.get("errors", []),
         }
+        if confirmation_session_hash:
+            public_result["confirmation_session_hash"] = clean(confirmation_session_hash)
+        return public_result
+
+    def reconcile_durable_confirmation(
+        self,
+        *,
+        save: dict[str, Any],
+        delta: dict[str, Any],
+        expected_turn_id: str,
+    ) -> dict[str, Any]:
+        runtime = GMRuntime.from_path(self.resolve_relative(str(save["path"]), "save"))
+        with connect(runtime.campaign) as conn:
+            try:
+                result = reconcile_confirmed_turn(
+                    runtime.campaign,
+                    conn,
+                    delta=delta,
+                    expected_turn_id=expected_turn_id,
+                )
+            except ValueError as exc:
+                raise SaveManagerError(str(exc)) from exc
+        return result.to_dict()
 
     def require_active_save(self, *, refresh: bool) -> dict[str, Any]:
         return self.require_save(refresh=refresh)
@@ -687,9 +856,7 @@ class SaveManager:
                 if path_errors:
                     raise SaveManagerError("; ".join(path_errors))
             if refresh:
-                record = self.refresh_save_record(record)
-                registry["saves"] = replace_record(registry.get("saves", []), record)
-                self.write_registry(registry)
+                record = self.merge_registry_save_record(record)
             if save_blocks_player_entry(record):
                 raise SaveManagerError(
                     "; ".join([f"save is not healthy: {record.get('label') or record.get('id')}", *record.get("errors", [])])
@@ -708,11 +875,18 @@ class SaveManager:
     def pending_action_path(self) -> Path:
         return (self.root / DEFAULT_PENDING_ACTION_RELATIVE).resolve()
 
+    def confirmation_receipt_path(self) -> Path:
+        return (self.root / DEFAULT_CONFIRMATION_RECEIPT_RELATIVE).resolve()
+
+    def confirmation_lock_path(self) -> Path:
+        return (self.root / DEFAULT_CONFIRMATION_LOCK_RELATIVE).resolve()
+
     def pending_clarification_path(self) -> Path:
         return (self.root / DEFAULT_PENDING_CLARIFICATION_RELATIVE).resolve()
 
     def read_pending_action(self) -> dict[str, Any] | None:
         path = self.pending_action_path()
+        ensure_under_root(self.root, path, "pending action")
         if not path.exists():
             return None
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -728,10 +902,293 @@ class SaveManager:
         write_text_atomic(path, text)
 
     def clear_pending_action(self) -> None:
+        path = self.pending_action_path()
+        ensure_under_root(self.root, path, "pending action")
         try:
-            self.pending_action_path().unlink()
+            path.unlink()
         except FileNotFoundError:
             pass
+
+    def read_confirmation_receipt(self) -> dict[str, Any] | None:
+        path = self.confirmation_receipt_path()
+        ensure_under_root(self.root, path, "confirmation replay receipt")
+        if not path.exists():
+            return None
+        try:
+            with path.open("rb") as handle:
+                raw = handle.read(MAX_CONFIRMATION_RECEIPT_BYTES + 1)
+            if len(raw) > MAX_CONFIRMATION_RECEIPT_BYTES:
+                raise SaveManagerError("confirmation replay receipt exceeds the bounded size limit")
+            data = json.loads(raw.decode("utf-8"), object_pairs_hook=reject_duplicate_json_keys)
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise SaveManagerError("confirmation replay receipt is invalid") from exc
+        if not isinstance(data, dict):
+            raise SaveManagerError("confirmation replay receipt must be a JSON object")
+        return data
+
+    def write_confirmation_receipt(self, receipt: dict[str, Any]) -> None:
+        path = self.confirmation_receipt_path()
+        ensure_under_root(self.root, path, "confirmation replay receipt")
+        text = json.dumps(receipt, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+        if len(text.encode("utf-8")) > MAX_CONFIRMATION_RECEIPT_BYTES:
+            raise SaveManagerError("confirmation replay receipt exceeds the bounded size limit")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        write_text_atomic(path, text)
+
+    def clear_confirmation_receipt(self) -> None:
+        path = self.confirmation_receipt_path()
+        ensure_under_root(self.root, path, "confirmation replay receipt")
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+
+    def write_confirmation_receipt_anchor(
+        self,
+        *,
+        save: dict[str, Any],
+        receipt: dict[str, Any],
+    ) -> None:
+        receipt_digest = clean(receipt.get("receipt_digest"))
+        if not receipt_digest:
+            raise SaveManagerError("confirmation replay receipt is missing its digest")
+        runtime = GMRuntime.from_path(self.resolve_relative(str(save["path"]), "save"))
+        with connect(runtime.campaign) as conn:
+            conn.execute(
+                """
+                insert into meta(key, value) values (?, ?)
+                on conflict(key) do update set value=excluded.value
+                """,
+                (CONFIRMATION_RECEIPT_META_KEY, receipt_digest),
+            )
+            conn.commit()
+
+    def build_confirmation_receipt(
+        self,
+        *,
+        session: dict[str, Any],
+        save: dict[str, Any],
+        result: dict[str, Any],
+    ) -> dict[str, Any]:
+        delta = session.get("delta")
+        proposal = session.get("turn_proposal")
+        if not isinstance(delta, dict) or not isinstance(proposal, dict):
+            raise SaveManagerError("pending player action is incomplete")
+        claim = session.get("confirmation_claim")
+        if not isinstance(claim, dict):
+            raise SaveManagerError("pending confirmation claim is missing")
+        command_id = clean(claim.get("command_id"))
+        turn_id = clean(result.get("turn_id"))
+        if not command_id or not turn_id:
+            raise SaveManagerError("confirmation replay evidence is incomplete")
+        runtime = GMRuntime.from_path(self.resolve_relative(str(save["path"]), "save"))
+        with connect(runtime.campaign) as conn:
+            row = conn.execute(
+                """
+                select t.id, t.command_hash, count(e.id) as event_count
+                from turns t left join events e on e.turn_id = t.id
+                where t.command_id = ?
+                group by t.id, t.command_hash
+                """,
+                (command_id,),
+            ).fetchone()
+        if row is None or str(row["id"]) != turn_id or not clean(row["command_hash"]):
+            raise SaveManagerError("confirmation replay evidence does not match authoritative turn state")
+        receipt = {
+            "schema_version": "1",
+            "save_id": str(save["id"]),
+            "save_path": str(save["path"]),
+            "confirmation_session_hash": hash_identity(clean(session.get("session_id"))),
+            "command_id": command_id,
+            "command_hash": str(row["command_hash"]),
+            "delta_digest": clean(claim.get("delta_digest")),
+            "proposal_digest": clean(claim.get("proposal_digest")),
+            "platform_hash": hash_identity(clean(session.get("platform"))) if clean(session.get("platform")) else "",
+            "session_key_hash": clean(session.get("session_key_hash")),
+            "actor_id_hash": clean(session.get("actor_id_hash")),
+            "turn_id": turn_id,
+            "event_count": int(row["event_count"]),
+            "write_status": "already_confirmed",
+            "projection_status": clean(result.get("projection_status")),
+        }
+        receipt["receipt_digest"] = stable_payload_digest(receipt)
+        return receipt
+
+    def prepare_pending_confirmation_claim(
+        self,
+        session: dict[str, Any],
+        *,
+        save: dict[str, Any],
+    ) -> dict[str, Any]:
+        delta = session.get("delta")
+        proposal = session.get("turn_proposal")
+        if not isinstance(delta, dict) or not isinstance(proposal, dict):
+            raise SaveManagerError("pending player action is incomplete")
+        expected = {
+            "schema_version": "1",
+            "save_id": str(save["id"]),
+            "save_path": str(save["path"]),
+            "confirmation_session_hash": hash_identity(clean(session.get("session_id"))),
+            "command_id": clean(delta.get("command_id")),
+            "delta_digest": stable_delta_digest(delta),
+            "proposal_digest": stable_payload_digest(proposal),
+            "platform_hash": hash_identity(clean(session.get("platform"))) if clean(session.get("platform")) else "",
+            "session_key_hash": clean(session.get("session_key_hash")),
+            "actor_id_hash": clean(session.get("actor_id_hash")),
+        }
+        existing = session.get("confirmation_claim")
+        if existing is not None:
+            if not isinstance(existing, dict):
+                raise SaveManagerError("pending confirmation claim must be a JSON object")
+            supplied_digest = clean(existing.get("claim_digest"))
+            body = {key: value for key, value in existing.items() if key != "claim_digest"}
+            if set(body) != set(expected) or supplied_digest != stable_payload_digest(body):
+                raise SaveManagerError("pending confirmation claim failed integrity validation")
+            if body != expected:
+                raise SaveManagerError("pending confirmation claim conflicts with pending action payload")
+            self.validate_confirmation_claim_anchor(save=save, claim_digest=supplied_digest)
+            return session
+        claim = dict(expected)
+        claim["claim_digest"] = stable_payload_digest(expected)
+        self.write_confirmation_claim_anchor(save=save, claim_digest=claim["claim_digest"])
+        claimed = {**session, "confirmation_claim": claim}
+        self.write_pending_action(claimed)
+        return claimed
+
+    def write_confirmation_claim_anchor(self, *, save: dict[str, Any], claim_digest: str) -> None:
+        runtime = GMRuntime.from_path(self.resolve_relative(str(save["path"]), "save"))
+        with connect(runtime.campaign) as conn:
+            conn.execute(
+                """
+                insert into meta(key, value) values (?, ?)
+                on conflict(key) do update set value=excluded.value
+                """,
+                (CONFIRMATION_CLAIM_META_KEY, claim_digest),
+            )
+            conn.commit()
+
+    def validate_confirmation_claim_anchor(self, *, save: dict[str, Any], claim_digest: str) -> None:
+        runtime = GMRuntime.from_path(self.resolve_relative(str(save["path"]), "save"))
+        with connect(runtime.campaign) as conn:
+            row = conn.execute(
+                "select value from meta where key = ?",
+                (CONFIRMATION_CLAIM_META_KEY,),
+            ).fetchone()
+        if row is None or clean(row["value"]) != clean(claim_digest):
+            raise SaveManagerError("pending confirmation claim does not match its SQLite claim anchor")
+
+    def rollback_new_confirmation_claim(
+        self,
+        *,
+        save: dict[str, Any],
+        original_session: dict[str, Any],
+        claim_digest: str,
+    ) -> None:
+        self.write_pending_action(original_session)
+        runtime = GMRuntime.from_path(self.resolve_relative(str(save["path"]), "save"))
+        with connect(runtime.campaign) as conn:
+            conn.execute(
+                "delete from meta where key = ? and value = ?",
+                (CONFIRMATION_CLAIM_META_KEY, claim_digest),
+            )
+            conn.commit()
+
+    def validate_confirmation_receipt(
+        self,
+        receipt: dict[str, Any],
+        *,
+        save: dict[str, Any],
+        session_id: str | None,
+        platform: str,
+        session_key: str,
+        actor_id: str,
+        pending_session: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        required = {
+            "schema_version",
+            "save_id",
+            "save_path",
+            "confirmation_session_hash",
+            "command_id",
+            "command_hash",
+            "delta_digest",
+            "proposal_digest",
+            "platform_hash",
+            "session_key_hash",
+            "actor_id_hash",
+            "turn_id",
+            "event_count",
+            "write_status",
+            "projection_status",
+            "receipt_digest",
+        }
+        if set(receipt) != required or receipt.get("schema_version") != "1":
+            raise SaveManagerError("confirmation replay receipt has an invalid schema")
+        supplied_digest = clean(receipt.get("receipt_digest"))
+        body = {key: value for key, value in receipt.items() if key != "receipt_digest"}
+        if not supplied_digest or supplied_digest != stable_payload_digest(body):
+            raise SaveManagerError("confirmation replay receipt failed integrity validation")
+        provided_session_id = clean(session_id)
+        if not provided_session_id:
+            raise SaveManagerError("player_confirm requires the pending action session_id returned by player_turn")
+        expected_identity = {
+            "save_id": str(save["id"]),
+            "save_path": str(save["path"]),
+            "confirmation_session_hash": hash_identity(provided_session_id),
+            "platform_hash": hash_identity(clean(platform)) if clean(platform) else "",
+            "session_key_hash": hash_identity(clean(session_key)) if clean(session_key) else "",
+            "actor_id_hash": hash_identity(clean(actor_id)) if clean(actor_id) else "",
+        }
+        for key, expected in expected_identity.items():
+            if clean(receipt.get(key)) != clean(expected):
+                raise SaveManagerError(f"confirmation replay conflict: {key} does not match")
+        if pending_session is not None:
+            pending_delta = pending_session.get("delta")
+            pending_proposal = pending_session.get("turn_proposal")
+            if not isinstance(pending_delta, dict) or not isinstance(pending_proposal, dict):
+                raise SaveManagerError("pending player action is incomplete")
+            if clean(receipt.get("delta_digest")) != clean(stable_delta_digest(pending_delta)):
+                raise SaveManagerError("confirmation replay conflict: delta digest does not match")
+            if clean(receipt.get("proposal_digest")) != stable_payload_digest(pending_proposal):
+                raise SaveManagerError("confirmation replay conflict: proposal digest does not match")
+        if receipt.get("write_status") != "already_confirmed":
+            raise SaveManagerError("confirmation replay receipt has an invalid result classification")
+        expected_event_count = receipt.get("event_count")
+        if type(expected_event_count) is not int or expected_event_count < 0:
+            raise SaveManagerError("confirmation replay receipt has an invalid event count")
+        runtime = GMRuntime.from_path(self.resolve_relative(str(save["path"]), "save"))
+        with connect(runtime.campaign) as conn:
+            row = conn.execute(
+                """
+                select t.id, t.command_hash, count(e.id) as event_count
+                from turns t left join events e on e.turn_id = t.id
+                where t.command_id = ?
+                group by t.id, t.command_hash
+                """,
+                (clean(receipt.get("command_id")),),
+            ).fetchone()
+            anchor = conn.execute(
+                "select value from meta where key = ?",
+                (CONFIRMATION_RECEIPT_META_KEY,),
+            ).fetchone()
+        if (
+            row is None
+            or str(row["id"]) != clean(receipt.get("turn_id"))
+            or clean(row["command_hash"]) != clean(receipt.get("command_hash"))
+            or int(row["event_count"]) != expected_event_count
+        ):
+            raise SaveManagerError("confirmation replay receipt does not match authoritative turn evidence")
+        if anchor is None or clean(anchor["value"]) != supplied_digest:
+            raise SaveManagerError("confirmation replay receipt does not match its SQLite receipt anchor")
+        return {
+            "ok": True,
+            "turn_id": clean(receipt.get("turn_id")),
+            "write_status": "already_confirmed",
+            "idempotent_replay": True,
+            "projection_status": clean(receipt.get("projection_status")) or None,
+            "warnings": [],
+            "errors": [],
+        }
 
     def read_pending_clarification(self) -> dict[str, Any] | None:
         path = self.pending_clarification_path()
@@ -756,14 +1213,13 @@ class SaveManager:
             pass
 
     def mark_played(self, save_id: str) -> None:
-        registry = self.read_registry()
-        record = find_record(registry.get("saves", []), save_id)
-        if record is None:
-            return
-        record = dict(record)
-        record["last_played_at"] = utc_now()
-        registry["saves"] = replace_record(registry.get("saves", []), record)
-        self.write_registry(registry)
+        with self.registry_snapshot(write=True) as registry:
+            record = find_record(registry.get("saves", []), save_id)
+            if record is None:
+                return
+            record = dict(record)
+            record["last_played_at"] = utc_now()
+            registry["saves"] = replace_record(registry.get("saves", []), record)
 
     def build_save_record(
         self,
@@ -930,13 +1386,43 @@ class SaveManager:
         return data
 
     def write_registry(self, registry: dict[str, Any]) -> None:
-        registry = normalize_registry(registry)
         self.root.mkdir(parents=True, exist_ok=True)
         self.registry_path.parent.mkdir(parents=True, exist_ok=True)
         lock_path = self.registry_path.with_suffix(self.registry_path.suffix + ".lock")
-        with registry_lock(lock_path):
-            text = json.dumps(registry, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-            write_text_atomic(self.registry_path, text)
+        with registry_lock(lock_path, root=self.root):
+            self.write_registry_unlocked(registry)
+
+    @contextmanager
+    def registry_snapshot(self, *, write: bool) -> Iterator[dict[str, Any]]:
+        self.root.mkdir(parents=True, exist_ok=True)
+        self.registry_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = self.registry_path.with_suffix(self.registry_path.suffix + ".lock")
+        with registry_lock(lock_path, root=self.root):
+            registry = self.read_registry()
+            yield registry
+            if write:
+                self.write_registry_unlocked(registry)
+
+    def write_registry_unlocked(self, registry: dict[str, Any]) -> None:
+        normalized = normalize_registry(registry)
+        text = json.dumps(normalized, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+        write_text_atomic(self.registry_path, text)
+
+    def merge_registry_save_record(self, record: dict[str, Any]) -> dict[str, Any]:
+        expected_path = normalize_required_relative(record.get("path"), "save")
+        expected_id = clean(record.get("id"))
+        with self.registry_snapshot(write=True) as registry:
+            latest = find_save_record_by_path(registry.get("saves", []), expected_path)
+            if latest is None or (expected_id and clean(latest.get("id")) != expected_id):
+                raise SaveManagerError("save binding changed before registry refresh")
+            if bool(latest.get("archived")):
+                raise SaveManagerError(f"save is archived: {latest.get('id') or expected_path}")
+            path_errors = registry_record_path_errors(self.root, [latest], "save")
+            if path_errors:
+                raise SaveManagerError("; ".join(path_errors))
+            refreshed = self.refresh_save_record(dict(latest))
+            registry["saves"] = replace_record(registry.get("saves", []), refreshed)
+            return refreshed
 
 
 def empty_registry() -> dict[str, Any]:
@@ -991,24 +1477,100 @@ def validate_registry_record_relative(root: Path, value: Any, label: str, *, req
 
 
 @contextmanager
-def registry_lock(path: Path, *, timeout: float = 10.0) -> Iterator[None]:
-    deadline = time.monotonic() + timeout
-    while True:
-        try:
-            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            os.close(fd)
-            break
-        except FileExistsError:
-            if time.monotonic() >= deadline:
-                raise SaveManagerError(f"timed out waiting for registry lock: {path}")
-            time.sleep(0.05)
+def confirmation_claim_lock(
+    path: Path,
+    *,
+    root: Path | None = None,
+    timeout: float = 10.0,
+) -> Iterator[None]:
+    with process_file_lock(
+        path,
+        root=root,
+        timeout=timeout,
+        unavailable_message="pending confirmation claim is unavailable",
+        timeout_message="timed out waiting for pending confirmation claim",
+    ):
+        yield
+
+
+@contextmanager
+def process_file_lock(
+    path: Path,
+    *,
+    unavailable_message: str,
+    timeout_message: str,
+    root: Path | None = None,
+    timeout: float = 10.0,
+) -> Iterator[None]:
+    if root is not None:
+        ensure_under_root(root, path, "process lock")
     try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_BINARY", 0)
+        fd = os.open(path, flags, 0o600)
+    except OSError as exc:
+        raise SaveManagerError(unavailable_message) from exc
+    deadline = time.monotonic() + timeout
+    acquired = False
+    try:
+        while True:
+            try:
+                acquire_confirmation_file_lock(fd)
+                acquired = True
+                break
+            except (OSError, SaveManagerError) as exc:
+                if isinstance(exc, SaveManagerError):
+                    raise SaveManagerError(unavailable_message) from exc
+                if exc.errno not in {errno.EACCES, errno.EAGAIN, errno.EDEADLK}:
+                    raise SaveManagerError(unavailable_message) from exc
+                if time.monotonic() >= deadline:
+                    raise SaveManagerError(timeout_message) from exc
+                time.sleep(0.05)
         yield
     finally:
+        if acquired:
+            try:
+                release_confirmation_file_lock(fd)
+            except OSError:
+                pass
         try:
-            path.unlink()
-        except FileNotFoundError:
+            os.close(fd)
+        except OSError:
             pass
+
+
+def acquire_confirmation_file_lock(fd: int) -> None:
+    if fcntl is not None:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return
+    if msvcrt is None:  # pragma: no cover - supported platforms provide one implementation.
+        raise SaveManagerError("process-safe confirmation lock is unavailable")
+    if os.fstat(fd).st_size == 0:
+        os.write(fd, b"\0")
+    os.lseek(fd, 0, os.SEEK_SET)
+    msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+
+
+def release_confirmation_file_lock(fd: int) -> None:
+    if fcntl is not None:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        return
+    if msvcrt is None:  # pragma: no cover - supported platforms provide one implementation.
+        return
+    os.lseek(fd, 0, os.SEEK_SET)
+    msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+
+
+@contextmanager
+def registry_lock(path: Path, *, root: Path | None = None, timeout: float = 10.0) -> Iterator[None]:
+    with process_file_lock(
+        path,
+        root=root,
+        timeout=timeout,
+        unavailable_message="save registry lock is unavailable",
+        timeout_message="timed out waiting for save registry lock",
+    ):
+        yield
 
 
 def resolve_registry_path(root: Path, registry_path: str | Path | None) -> Path:
@@ -1169,7 +1731,15 @@ def validate_pending_platform_session(session: dict[str, Any], *, platform: str,
     provided_session_hash = hash_identity(session_key) if clean(session_key) else ""
     provided_actor_hash = hash_identity(actor_id) if clean(actor_id) else ""
     if not pending_platform and not pending_session_hash and not pending_actor_hash:
+        if provided_platform or provided_session_hash or provided_actor_hash:
+            raise SaveManagerError("pending player action received unexpected platform identity")
         return
+    if (
+        (not pending_platform and provided_platform)
+        or (not pending_session_hash and provided_session_hash)
+        or (not pending_actor_hash and provided_actor_hash)
+    ):
+        raise SaveManagerError("pending player action received unexpected platform identity")
     if (pending_platform or pending_session_hash) and (not provided_platform or not provided_session_hash):
         raise SaveManagerError("pending player action requires matching platform session identity")
     if pending_platform and pending_platform != provided_platform:
@@ -1367,12 +1937,17 @@ def normalize_player_text(value: Any) -> str:
 def player_confirm_message(result: dict[str, Any]) -> str:
     write_status = str(result.get("write_status") or "committed")
     projection_status = str(result.get("projection_status") or "unknown")
+    replay = write_status == "already_confirmed" and bool(result.get("idempotent_replay"))
     if write_status == "committed":
         first = "行动结果已经写进当前存档。"
+    elif replay:
+        first = "这项行动此前已经确认；本次是幂等重放，没有重复写入存档。"
     else:
         first = "行动结果没有完成保存。"
     lines = [first]
-    if projection_status and projection_status not in {"clean", "ok", "unknown", "None"}:
+    if replay and projection_status in {"unknown", "None"}:
+        lines.append("本次未重复执行可见内容刷新。")
+    elif projection_status and projection_status not in {"clean", "ok", "unknown", "None"}:
         lines.append(f"可见内容刷新状态：{projection_status}。")
     else:
         lines.append("可见内容已经刷新。")
@@ -1389,6 +1964,50 @@ def error_dict(exc: Exception) -> dict[str, Any]:
         "errors": [message],
         "error_details": issues_from_messages([message], default_code="SAVE_MANAGER_ERROR"),
     }
+
+
+def stable_payload_digest(payload: dict[str, Any]) -> str:
+    try:
+        text = json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+    except (TypeError, ValueError) as exc:
+        raise SaveManagerError("confirmation replay evidence is not canonical JSON") from exc
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise SaveManagerError("confirmation replay receipt contains duplicate JSON keys")
+        result[key] = value
+    return result
+
+
+def validate_confirmation_result_contract(result: dict[str, Any]) -> None:
+    write_status = clean(result.get("write_status"))
+    ok = result.get("ok")
+    replay = result.get("idempotent_replay")
+    if (
+        type(ok) is not bool
+        or not ok
+        or type(replay) is not bool
+        or write_status not in {"committed", "already_confirmed"}
+        or replay != (write_status == "already_confirmed")
+    ):
+        raise SaveManagerError("invalid confirmation write result")
+
+
+def confirmation_registry_needs_repair(save: dict[str, Any], result: dict[str, Any]) -> bool:
+    if clean(result.get("write_status")) == "committed":
+        return True
+    turn_id = clean(result.get("turn_id"))
+    return bool(turn_id and clean(save.get("current_turn_id")) != turn_id)
 
 
 def rewrite_save_manifests(target: Path, campaign: Any) -> None:

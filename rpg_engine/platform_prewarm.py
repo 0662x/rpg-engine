@@ -6,9 +6,10 @@ import queue
 import re
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 from .ai.defaults import (
     DEFAULT_AI_MODEL,
@@ -28,11 +29,13 @@ from .game_session import (
 )
 from .preflight_cache import PREFLIGHT_IDENTITY_MESSAGE_ONLY
 from .runtime import GMRuntime
+from .save_manager import process_file_lock
 
 
 PLATFORM_PREWARM_ENV = "AIGM_PLATFORM_PREWARM"
 PLATFORM_PREWARM_SCHEMA_VERSION = "1"
 DEFAULT_BINDINGS_RELATIVE = ".aigm/game-session-bindings.json"
+DEFAULT_BINDINGS_LOCK_RELATIVE = ".aigm/platform-sidecar-entry.lock"
 DEFAULT_PREWARM_QUEUE_SIZE = 16
 DEFAULT_PREWARM_WORKERS = 1
 DEFAULT_PREWARM_TTL_SECONDS = 300
@@ -237,9 +240,25 @@ class GameSessionBindingStore:
         last_message_id: str = "",
         last_action_message_id: str = "",
         last_confirm_message_id: str = "",
+        pending_confirmation_session_hash: str | None = None,
+        pending_confirmation_revision: int | None = None,
+        last_completed_confirmation_session_hash: str | None = None,
         clarification_id: str = "",
     ) -> GameSessionBinding:
         existing = self.get(platform=platform, session_key=session_key)
+        next_revision = (existing.revision + 1) if existing else 1
+        pending_hash = (
+            existing.pending_confirmation_session_hash
+            if pending_confirmation_session_hash is None and existing
+            else clean(pending_confirmation_session_hash)
+        )
+        if pending_confirmation_revision is None:
+            if pending_confirmation_session_hash is not None:
+                pending_revision = next_revision if pending_hash else 0
+            else:
+                pending_revision = existing.pending_confirmation_revision if existing else 0
+        else:
+            pending_revision = pending_confirmation_revision
         binding = GameSessionBinding.from_raw(
             platform=platform,
             session_key=session_key,
@@ -250,7 +269,15 @@ class GameSessionBindingStore:
             last_message_id=last_message_id or (existing.last_message_id if existing else ""),
             last_action_message_id=last_action_message_id or (existing.last_action_message_id if existing else ""),
             last_confirm_message_id=last_confirm_message_id or (existing.last_confirm_message_id if existing else ""),
+            pending_confirmation_session_hash=pending_hash,
+            pending_confirmation_revision=pending_revision,
+            last_completed_confirmation_session_hash=(
+                existing.last_completed_confirmation_session_hash
+                if last_completed_confirmation_session_hash is None and existing
+                else clean(last_completed_confirmation_session_hash)
+            ),
             clarification_id=clarification_id,
+            revision=next_revision,
             updated_at=utc_now(),
         )
         self.upsert(binding)
@@ -287,7 +314,11 @@ class GameSessionBindingStore:
                 last_message_id=clean(message_id),
                 last_action_message_id=binding.last_action_message_id,
                 last_confirm_message_id=binding.last_confirm_message_id,
+                pending_confirmation_session_hash=binding.pending_confirmation_session_hash,
+                pending_confirmation_revision=binding.pending_confirmation_revision,
+                last_completed_confirmation_session_hash=binding.last_completed_confirmation_session_hash,
                 clarification_id=binding.clarification_id,
+                revision=binding.revision,
                 updated_at=utc_now(),
             )
         )
@@ -607,28 +638,29 @@ class PlatformPrewarmService:
                 message_id=clean(message.message_id),
                 queue_depth=self.queue.qsize(),
             )
-        binding = self.binding_store.get(platform=message.platform, session_key=message.session_key)
-        decision = should_prewarm_message(binding, message)
-        if not decision.allow:
-            self.metrics.record_drop(decision.reason)
-            return PlatformPrewarmResult(
-                allow_platform=True,
-                dropped=True,
-                reason=decision.reason,
-                message_id=clean(message.message_id),
-                active_save=decision.active_save,
-                queue_depth=self.queue.qsize(),
-                decision=decision.to_dict(),
-            )
-        request = request_from_decision(self.root, message, decision)
-        result = self.queue.enqueue(request)
-        if result.enqueued:
-            self.binding_store.record_last_message(
-                platform=message.platform,
-                session_key=message.session_key,
-                message_id=message.message_id,
-            )
-        return result
+        with game_session_binding_lock(self.root):
+            binding = self.binding_store.get(platform=message.platform, session_key=message.session_key)
+            decision = should_prewarm_message(binding, message)
+            if not decision.allow:
+                self.metrics.record_drop(decision.reason)
+                return PlatformPrewarmResult(
+                    allow_platform=True,
+                    dropped=True,
+                    reason=decision.reason,
+                    message_id=clean(message.message_id),
+                    active_save=decision.active_save,
+                    queue_depth=self.queue.qsize(),
+                    decision=decision.to_dict(),
+                )
+            request = request_from_decision(self.root, message, decision)
+            result = self.queue.enqueue(request)
+            if result.enqueued:
+                self.binding_store.record_last_message(
+                    platform=message.platform,
+                    session_key=message.session_key,
+                    message_id=message.message_id,
+                )
+            return result
 
 
 def request_from_decision(root: Path, message: PlatformMessage, decision: GameSessionGateDecision) -> PlatformPrewarmRequest:
@@ -652,7 +684,11 @@ def binding_to_record(binding: GameSessionBinding) -> dict[str, Any]:
             "last_message_id": binding.last_message_id,
             "last_action_message_id": binding.last_action_message_id,
             "last_confirm_message_id": binding.last_confirm_message_id,
+            "pending_confirmation_session_hash": binding.pending_confirmation_session_hash,
+            "pending_confirmation_revision": binding.pending_confirmation_revision,
+            "last_completed_confirmation_session_hash": binding.last_completed_confirmation_session_hash,
             "clarification_id": binding.clarification_id,
+            "revision": binding.revision,
             "updated_at": binding.updated_at or utc_now(),
         }
     )
@@ -670,12 +706,22 @@ def binding_from_record(record: dict[str, Any]) -> GameSessionBinding:
         last_message_id=normalized["last_message_id"],
         last_action_message_id=normalized["last_action_message_id"],
         last_confirm_message_id=normalized["last_confirm_message_id"],
+        pending_confirmation_session_hash=normalized["pending_confirmation_session_hash"],
+        pending_confirmation_revision=normalized["pending_confirmation_revision"],
+        last_completed_confirmation_session_hash=normalized["last_completed_confirmation_session_hash"],
         clarification_id=normalized["clarification_id"],
+        revision=normalized["revision"],
         updated_at=normalized["updated_at"],
     )
 
 
 def normalize_binding_record(record: dict[str, Any]) -> dict[str, Any]:
+    revision = record.get("revision", 0)
+    if type(revision) is not int or revision < 0:
+        raise ValueError("game session binding revision must be a non-negative integer")
+    pending_confirmation_revision = record.get("pending_confirmation_revision", 0)
+    if type(pending_confirmation_revision) is not int or pending_confirmation_revision < 0:
+        raise ValueError("pending confirmation revision must be a non-negative integer")
     return {
         "platform": clean(record.get("platform")),
         "session_key_hash": clean(record.get("session_key_hash")),
@@ -686,13 +732,30 @@ def normalize_binding_record(record: dict[str, Any]) -> dict[str, Any]:
         "last_message_id": clean(record.get("last_message_id")),
         "last_action_message_id": clean(record.get("last_action_message_id")),
         "last_confirm_message_id": clean(record.get("last_confirm_message_id")),
+        "pending_confirmation_session_hash": clean(record.get("pending_confirmation_session_hash")),
+        "pending_confirmation_revision": pending_confirmation_revision,
+        "last_completed_confirmation_session_hash": clean(record.get("last_completed_confirmation_session_hash")),
         "clarification_id": clean(record.get("clarification_id")),
+        "revision": revision,
         "updated_at": clean(record.get("updated_at")),
     }
 
 
 def empty_binding_state() -> dict[str, Any]:
     return {"schema_version": PLATFORM_PREWARM_SCHEMA_VERSION, "bindings": []}
+
+
+@contextmanager
+def game_session_binding_lock(root: Path, *, timeout: float = 10.0) -> Iterator[None]:
+    lock_path = root / DEFAULT_BINDINGS_LOCK_RELATIVE
+    with process_file_lock(
+        lock_path,
+        root=root,
+        timeout=timeout,
+        unavailable_message="platform binding lock is unavailable",
+        timeout_message="timed out waiting for platform binding lock",
+    ):
+        yield
 
 
 def resolve_store_path(root: Path, path: str | Path | None) -> Path:

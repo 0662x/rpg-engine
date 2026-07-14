@@ -58,6 +58,45 @@ default exposure、normal-play status、authority gate 和 forbidden bypasses。
 8. `GMRuntime.commit_turn()` 接收 approved `TurnProposal`，再进入 validation / commit。
 9. `commit_service.py`、`unit_of_work.py`、`write_guard.py` 写入 SQLite、事件和投影材料。
 
+`player_confirm()` 在 SaveManager owner 内用可在进程退出时自动释放的 workspace file lock 串行化
+pending 的 read → identity/payload validation → commit/replay classification → receipt → clear。SQLite
+`turns.command_id` / `command_hash` 与 event rows 仍是权威证据；`.aigm` confirmation claim/receipt 只保存
+bounded hash/digest 和 turn result evidence，不是事实、确认、proposal approval 或 commit token。首个 caller
+返回 `write_status=committed`；同一身份与 payload 的并发/崩溃重试返回
+`write_status=already_confirmed`、`idempotent_replay=true`，且不重复 backup、archivist、projection/outbox
+或 registry fresh-only 工作。
+
+`player_turn()` 清理旧 pending 与发布新 pending/receipt transition 时也取得同一 confirmation lock，避免
+in-flight confirm 删除较新的 session；pending 发布失败会恢复上一条 replay receipt。Durable command 的
+pending 即使在重试前过期，也先按 SQLite evidence 进入 recovery。若进程在 SQLite commit 后、outbox 或
+projection finalize 前退出，完成 claim/identity/payload 核验的 SaveManager replay 只对 dirty
+`events_jsonl` / snapshots / cards 执行幂等 repair；
+registry 仅在 cached turn 落后于 durable turn 时修复，不把普通 replay 计作 fresh save。
+Fresh confirm 会冻结首次核验的 bound save id/path，并按该 exact path refresh；active registry 在确认中的
+并发切换不能把 pending 写入另一 Save。Platform replay 默认只保留 reservation/current binding，不重复
+activation 或延长 active TTL；唯一例外是 binding 中持久化的 pending confirmation session hash 与同一
+durable replay 精确匹配、状态仍为 `pending_approval` 且 Save 未变化时，sidecar 只补做缺失的
+`active_game` completion transition，并保持原 TTL。
+Pending 缺失 save path、receipt duplicate JSON key 与非规范 result type 均 fail closed；confirmation lock 的
+OS 失败对公开入口使用稳定脱敏错误，fd close 不因 unlock 异常被跳过。确认后的 registry refresh 在同一
+registry lock 内 read-merge-write，platform completion 也在 entry lock 内合并最新 reservation，避免较旧
+completion 覆盖并发 switch/message。Start、act 与 confirm completion 以及 deactivate/expiry writer 共用
+跨平台 crash-release entry/file lock；advisory prewarm 的 binding RMW 也使用该锁但不推进 authoritative
+revision。Completion 在 activation 前比较 revision/context，保留较新的 prewarm message id，同时不能复活
+较新的 inactive binding；fresh/replay confirm completion 都以其 reservation 捕获的 state revision 做 CAS，
+较新的 start/act/deactivate/save context 必须获胜。Pending confirmation 另存其创建时的
+`pending_confirmation_revision`：start/act 推进操作 generation，同一 confirm 的消息 reservation 不推进；
+因此 start 先取得 reservation 后，较旧 confirm 即使随后取得 Kernel replay 结果也不能激活旧 generation。
+Schema 1 旧 binding 只在 correlation 为空、binding/pending revision 都为 0、Save/state 精确匹配且
+SaveManager 已返回同一 owner-validated confirmation hash 时允许一次兼容回填。Registry 所有 production RMW 的 read → refresh/mutate →
+write 均处于同一 OS crash-release transaction lock；锁文件存在本身不表示仍有 owner。
+Bound-save refresh 本身也只通过 registry 锁内 merge 更新 record；`switch_save` 与 platform deactivate 使用
+同一各自 owner lock；merge 会在锁内按 path/id 重新取得最新 record，再从 SQLite refresh，不能用 caller 的
+旧 record 覆盖并发 metadata，也不能在 merge read/write 之间插入 stale completion。Pending claim 绑定 save 与全部
+hashed platform identity，并在首次 confirm 前写入目标 Save SQLite claim anchor；可捕获的 commit failure
+只有在重新查询 SQLite 并证明 command 尚未 durable 时才恢复原 pending并删除本次 anchor。若已 durable，
+或 evidence query 本身失败，则 fail closed 保留 claim/anchor 供 recovery；真实进程退出同样保留二者。
+
 `GMRuntime.start_turn()` 主要用于构建当前回合上下文和可见信息，不是玩家动作提交主入口。
 
 ## 低层 Runtime 链

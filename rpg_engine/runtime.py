@@ -239,6 +239,7 @@ class CommitTurnResult:
     turn_id: str
     profile: str = "player_turn_commit"
     write_status: str = "committed"
+    idempotent_replay: bool = False
     projection_status: str | None = None
     backup_id: str | None = None
     snapshot_path: Path | None = None
@@ -257,7 +258,7 @@ class CommitTurnResult:
         projection_ok = True
         if self.projection_report is not None:
             projection_ok = bool(self.projection_report.get("ok", self.projection_status == "clean"))
-        return self.write_status == "committed" and not self.check_errors and projection_ok
+        return self.write_status in {"committed", "already_confirmed"} and not self.check_errors and projection_ok
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -266,6 +267,7 @@ class CommitTurnResult:
             "profile": self.profile,
             "ok": self.ok,
             "write_status": self.write_status,
+            "idempotent_replay": self.idempotent_replay,
             "projection_status": self.projection_status,
             "backup_id": self.backup_id,
             "snapshot_path": str(self.snapshot_path) if self.snapshot_path else None,
@@ -1710,6 +1712,7 @@ class GMRuntime:
             profile=result.profile,
             turn_id=result.turn_id,
             write_status=result.write_status,
+            idempotent_replay=result.idempotent_replay,
             projection_status=result.projection_status,
             backup_id=result.backup_id,
             snapshot_path=result.snapshot_path,

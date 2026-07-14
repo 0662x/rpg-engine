@@ -573,11 +573,20 @@ class V1CliTests(unittest.TestCase):
             confirmed = load_stdout_json(
                 run_cli("player", "confirm", root, "--session-id", acted["session_id"], "--format", "json")
             )
+            replayed = load_stdout_json(
+                run_cli("player", "confirm", root, "--session-id", acted["session_id"], "--format", "json")
+            )
 
             self.assertTrue(started["ok"], started)
             self.assertTrue(acted["ready_to_confirm"], acted)
             self.assertTrue(confirmed["ok"], confirmed)
             self.assertTrue(confirmed["saved"], confirmed)
+            self.assertEqual(confirmed["write_status"], "committed")
+            self.assertFalse(confirmed["idempotent_replay"])
+            self.assertTrue(replayed["ok"], replayed)
+            self.assertFalse(replayed["saved"], replayed)
+            self.assertEqual(replayed["write_status"], "already_confirmed")
+            self.assertTrue(replayed["idempotent_replay"])
             for hidden_key in (
                 "delta",
                 "delta_draft",
@@ -588,6 +597,7 @@ class V1CliTests(unittest.TestCase):
                 "check_errors",
             ):
                 self.assertNotIn(hidden_key, confirmed)
+                self.assertNotIn(hidden_key, replayed)
 
     def test_save_init_inspect_validate_export_import(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -11,9 +11,10 @@ from .backup import create_backup
 from .campaign import Campaign
 from .projection_service import ProjectionReport, ProjectionService
 from .proposal import TurnProposal
-from .save import save_turn_delta
+from .save import save_turn_delta_outcome
 from .validation_pipeline import COMMIT_ALLOWED_PROFILES, ValidationReport, stable_delta_digest
 from .validators import run_checks
+from .write_guard import find_idempotent_turn
 
 
 @dataclass(frozen=True)
@@ -22,6 +23,7 @@ class CommitResult:
     profile: str
     turn_id: str
     write_status: str = "committed"
+    idempotent_replay: bool = False
     projection_status: str | None = None
     backup_id: str | None = None
     snapshot_path: Path | None = None
@@ -40,7 +42,7 @@ class CommitResult:
     @property
     def ok(self) -> bool:
         return (
-            self.write_status == "committed"
+            self.write_status in {"committed", "already_confirmed"}
             and not self.check_errors
             and (self.projection_report is None or self.projection_report.ok)
         )
@@ -52,6 +54,7 @@ class CommitResult:
             "turn_id": self.turn_id,
             "ok": self.ok,
             "write_status": self.write_status,
+            "idempotent_replay": self.idempotent_replay,
             "projection_status": self.projection_status,
             "backup_id": self.backup_id,
             "snapshot_path": str(self.snapshot_path) if self.snapshot_path else None,
@@ -122,13 +125,16 @@ def commit_turn_delta(
         if backup_record is not None:
             shutil.rmtree(backup_record.path)
 
-    turn_id = save_turn_delta(
+    save_result = save_turn_delta_outcome(
         campaign,
         conn,
         delta,
         before_write=create_pre_commit_backup if backup else None,
         rollback_write_artifacts=remove_pre_commit_backup if backup else None,
     )
+    turn_id = save_result.turn_id
+    if save_result.idempotent_replay:
+        raise ValueError("idempotent replay requires the human-confirmed SaveManager owner")
     if archivist_suggest:
         archivist_result = run_archivist_workflow(
             conn,
@@ -172,6 +178,7 @@ def commit_turn_delta(
         profile=validation.profile,
         turn_id=turn_id,
         write_status="committed",
+        idempotent_replay=False,
         projection_status=projection_report.status,
         backup_id=backup_record.id if backup_record else None,
         snapshot_path=snapshot_path,
@@ -210,7 +217,6 @@ def commit_turn_proposal(
         raise ValueError("validation report does not match TurnProposal")
     if proposal.delta is None:
         raise ValueError("TurnProposal has no delta to commit")
-    assert_turn_proposal_not_committed(conn, proposal)
     return commit_turn_delta(
         campaign,
         conn,
@@ -229,11 +235,29 @@ def commit_turn_proposal(
     )
 
 
-def assert_turn_proposal_not_committed(conn: sqlite3.Connection, proposal: TurnProposal) -> None:
-    delta = proposal.delta or {}
-    command_id = delta.get("command_id")
-    if not command_id:
-        return
-    row = conn.execute("select id from turns where command_id = ?", (str(command_id),)).fetchone()
-    if row:
-        raise ValueError(f"TurnProposal already committed as {row['id']}")
+def reconcile_confirmed_turn(
+    campaign: Campaign,
+    conn: sqlite3.Connection,
+    *,
+    delta: dict,
+    expected_turn_id: str,
+) -> CommitResult:
+    """Propagate an owner-verified durable replay and repair only dirty derived work."""
+    turn_id = find_idempotent_turn(conn, delta)
+    if turn_id is None or turn_id != expected_turn_id:
+        raise ValueError("durable confirmation replay evidence changed during reconciliation")
+    projection_report = ProjectionService(campaign, conn).refresh(
+        names=["events_jsonl", "snapshots", "cards"],
+        dirty_only=True,
+        profile="player_turn_commit:replay_repair",
+        commit_policy="caller_committed_required",
+    )
+    return CommitResult(
+        campaign_id=campaign.campaign_id,
+        profile="player_turn_commit",
+        turn_id=turn_id,
+        write_status="already_confirmed",
+        idempotent_replay=True,
+        projection_status=projection_report.status,
+        projection_report=projection_report,
+    )

@@ -104,7 +104,7 @@ development_status:
   6-1-strict-external-safety-vocabulary-and-version-negotiation: done
   6-2-canonical-action-taxonomy-registry-projection: done
   6-3-resolved-slot-contract-projection-and-parity: done
-  6-4-atomic-pending-confirmation-claim-and-replay-classification: backlog
+  6-4-atomic-pending-confirmation-claim-and-replay-classification: done
   6-5-explicit-pending-supersede-and-clarification-lifecycle: backlog
   6-6-explicit-preflight-consumer-purpose: backlog
   6-7-safe-intent-audit-reconstruction-summary: backlog
