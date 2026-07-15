@@ -158,6 +158,21 @@ python3 -m pytest \
   tests/test_save_manager.py
 ```
 
+Routine 结构化库存消耗的 P0 gate：
+
+```bash
+python3 -m pytest -q \
+  tests/test_routine_consumption_validation.py \
+  tests/test_routine_consumption_save_manager.py \
+  tests/test_current_native_consumption_craft_deltas.py
+```
+
+该 gate 必须覆盖合法精确扣量、after 最多 1 ULP / 实际扣量最多 2 ULP 算术、stale/insufficient/malformed/item mismatch、metadata 与
+aliases 保留、额外库存 upsert 拒绝、validator 输入不变性，以及
+`player_turn -> pending -> player_confirm -> receipt replay`。失败确认必须恢复原 pending、清除新 claim
+anchor，并保持 SQLite 逻辑事实、库存、turn/event 与 JSONL 不变；replay 必须证明不重入 validation/commit。
+所有写入只允许发生在 temporary Save，source Campaign、formal current Save 与正式 registry 必须保持不变。
+
 AI intent / platform / SaveManager 高风险 cluster：
 
 ```bash

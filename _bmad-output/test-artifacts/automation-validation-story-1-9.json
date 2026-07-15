@@ -1,0 +1,75 @@
+{
+  "schema_version": "0.1.0",
+  "evaluated_at": "2026-07-15T18:40:20Z",
+  "repo": "RPG Engine",
+  "story": "1-9-库存消耗语义提交门",
+  "base_sha": "dff6e4dd0d2e2d0712d32089efdef4bef65b2d82",
+  "status": "PASS",
+  "execution": {
+    "focused": {
+      "passed": 75,
+      "skipped": 0,
+      "duration_seconds": 99.02
+    },
+    "clean_checkout_focused": {
+      "passed": 75,
+      "skipped": 0,
+      "duration_seconds": 101.88,
+      "excluded_unrelated_conftest": true,
+      "current_native_sources": "explicit read-only environment paths; writes use temporary Save copies"
+    },
+    "adjacent": {
+      "passed": 292,
+      "subtests_passed": 160,
+      "duration_seconds": 70.38
+    },
+    "campaigns": {
+      "v1_minimal_adventure_validate": "PASS",
+      "v1_minimal_adventure_test": "PASS",
+      "small_cn_campaign_validate": "PASS",
+      "small_cn_campaign_test": "PASS"
+    },
+    "docs_static": {
+      "markdown_files_checked": 203,
+      "markdown_links": "PASS",
+      "py_compile": "PASS",
+      "full_ruff": "PASS",
+      "git_diff_check": "PASS"
+    },
+    "repository_full_pytest": {
+      "passed": 1223,
+      "subtests_passed": 10331,
+      "duration_seconds": 608.63
+    }
+  },
+  "requirements": {
+    "CON-01": "PASS",
+    "CON-02": "PASS",
+    "CON-03": "PASS",
+    "CRF-01": "PASS",
+    "STA-02": "PASS"
+  },
+  "review": {
+    "rounds": 7,
+    "final_blind_hunter": "CLEAN",
+    "final_edge_case_hunter": "CLEAN",
+    "final_acceptance_auditor": "CLEAN",
+    "patches_applied": 16,
+    "code_and_test_patches": 15,
+    "final_evidence_patch": 1,
+    "deferred": 3,
+    "decision_needed": 0
+  },
+  "boundaries": {
+    "sqlite_fact_authority": true,
+    "ai_fact_or_commit_authority": false,
+    "hidden_player_surface_leak": false,
+    "temporary_save_only_for_writes": true,
+    "formal_source_registry_unchanged": true
+  },
+  "release_gate": {
+    "status": "FAIL",
+    "execution_failures": [],
+    "reason": "Story 1.9 execution is green, but the broader rebaseline still has 21 P0 coverage sufficiency gaps and 3 P1 NONE criteria."
+  }
+}

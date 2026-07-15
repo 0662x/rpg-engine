@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 from dataclasses import dataclass
 from typing import Any
@@ -109,6 +110,33 @@ ROUTINE_TEMPLATES = (
         risk_level="low",
     ),
 )
+
+_CONSUMPTION_KEYS = ("consumed_item_id", "before_quantity", "consumed_quantity", "after_quantity")
+_CONSUMPTION_PREFIX = "routine consumption:"
+_SQLITE_INTEGER_MIN = -(2**63)
+_SQLITE_INTEGER_MAX = 2**63 - 1
+_ENTITY_METADATA_KEYS = (
+    "type",
+    "name",
+    "status",
+    "visibility",
+    "location_id",
+    "owner_id",
+    "summary",
+    "details",
+)
+_ITEM_METADATA_KEYS = (
+    "category",
+    "unit",
+    "quality",
+    "durability_current",
+    "durability_max",
+    "stackable",
+    "equipped_slot",
+    "properties",
+)
+_TARGET_ITEM_KEYS = {"quantity", *_ITEM_METADATA_KEYS}
+_TARGET_UPSERT_KEYS = {"id", "aliases", "item", *_ENTITY_METADATA_KEYS}
 
 
 def preview_routine(campaign: Campaign, conn: sqlite3.Connection, context: dict[str, Any], options: Any) -> str:
@@ -231,11 +259,290 @@ def validate_routine_delta(
         errors.append("location_after must remain at a visible current location for routine; use travel for movement")
     if not delta.get("events"):
         errors.append("routine delta must include an audit event")
+    errors.extend(_validate_routine_consumption(conn, delta))
     return ActionValidationResult(
         errors=tuple(errors),
         warnings=tuple(warnings),
         missing_required=validation.missing_required,
     )
+
+
+def _validate_routine_consumption(conn: sqlite3.Connection, delta: dict[str, Any]) -> list[str]:
+    events = delta.get("events")
+    if not isinstance(events, list):
+        return []
+
+    declarations: list[dict[str, Any]] = []
+    for event in events:
+        if type(event) is not dict:
+            continue
+        if not _mapping_has_only_string_keys(event):
+            return [_consumption_error("invalid event field type")]
+        payload = event.get("payload")
+        if type(payload) is dict and any(
+            type(key) is str and key in _CONSUMPTION_KEYS for key in payload
+        ):
+            declarations.append(payload)
+
+    if not declarations:
+        return []
+    if len(declarations) != 1:
+        return [_consumption_error("multiple declarations")]
+    if len(events) != 1 or type(events[0]) is not dict:
+        return [_consumption_error("event cardinality mismatch")]
+
+    payload = declarations[0]
+    if not _mapping_has_only_string_keys(payload):
+        return [_consumption_error("invalid payload field type")]
+    missing_payload_fields = [key for key in (*_CONSUMPTION_KEYS, "unit") if key not in payload]
+    if missing_payload_fields:
+        return [_consumption_error(f"missing field: payload.{missing_payload_fields[0]}")]
+
+    item_id = payload["consumed_item_id"]
+    payload_unit = payload["unit"]
+    if not _is_utf8_text(item_id) or not item_id:
+        return [_consumption_error("invalid consumed_item_id")]
+    if type(payload_unit) is not str or not payload_unit:
+        return [_consumption_error("unit mismatch: payload.unit must be a non-empty string")]
+
+    upserts = delta.get("upsert_entities")
+    if not isinstance(upserts, list):
+        return [_consumption_error("missing/duplicate target upsert")]
+    if any(type(record) is dict and not _mapping_has_only_string_keys(record) for record in upserts):
+        return [_consumption_error("invalid upsert field type")]
+    if any(
+        type(record) is dict
+        and type(record.get("id")) is str
+        and not _is_utf8_text(record["id"])
+        for record in upserts
+    ):
+        return [_consumption_error("invalid upsert id")]
+    matching_upserts = [
+        record
+        for record in upserts
+        if type(record) is dict
+        and type(record.get("id")) is str
+        and record["id"] == item_id
+    ]
+    if len(matching_upserts) != 1:
+        return [_consumption_error("missing/duplicate target upsert")]
+    target = matching_upserts[0]
+    item = target.get("item")
+    if type(item) is not dict:
+        return [_consumption_error("target item payload must be an exact mapping")]
+    if not _mapping_has_only_string_keys(item):
+        return [_consumption_error("metadata mismatch: unexpected item field <non-string>")]
+    for key in ("quantity", "unit"):
+        if key not in item:
+            return [_consumption_error(f"missing field: upsert item.{key}")]
+
+    for record in upserts:
+        if record is target or type(record) is not dict:
+            continue
+        record_id = record.get("id")
+        is_existing_item = (
+            type(record_id) is str
+            and conn.execute("select 1 from items where entity_id = ?", (record_id,)).fetchone() is not None
+        )
+        if "item" in record or is_existing_item:
+            return [_consumption_error("unexpected inventory upsert")]
+
+    row = conn.execute(
+        """
+        select e.id, e.type, e.name, e.status, e.visibility, e.location_id, e.owner_id,
+               e.summary, e.details_json, i.category, i.quantity, i.unit, i.quality,
+               i.durability_current, i.durability_max, i.stackable, i.equipped_slot,
+               i.properties_json
+        from entities e
+        join items i on i.entity_id = e.id
+        where e.id = ?
+        """,
+        (item_id,),
+    ).fetchone()
+    if row is None:
+        return [_consumption_error("target item not found")]
+
+    quantities: dict[str, float] = {}
+    for field, raw_value in (
+        ("live quantity", row["quantity"]),
+        ("before_quantity", payload["before_quantity"]),
+        ("consumed_quantity", payload["consumed_quantity"]),
+        ("after_quantity", payload["after_quantity"]),
+        ("upsert item.quantity", item["quantity"]),
+    ):
+        normalized, error = _normalize_consumption_quantity(raw_value, field)
+        if error:
+            return [error]
+        quantities[field] = normalized
+
+    live_quantity = quantities["live quantity"]
+    before_quantity = quantities["before_quantity"]
+    consumed_quantity = quantities["consumed_quantity"]
+    after_quantity = quantities["after_quantity"]
+    upsert_quantity = quantities["upsert item.quantity"]
+
+    if before_quantity != live_quantity:
+        return [_consumption_error("stale before_quantity")]
+    if consumed_quantity <= 0:
+        return [_consumption_error("non-positive consumed_quantity")]
+    if consumed_quantity > before_quantity or after_quantity < 0:
+        return [_consumption_error("insufficient quantity")]
+    expected_after = before_quantity - consumed_quantity
+    if (
+        expected_after >= before_quantity
+        or after_quantity >= before_quantity
+        or not _within_one_ulp(after_quantity, expected_after)
+    ):
+        return [_consumption_error("arithmetic mismatch")]
+    realized_consumption = before_quantity - after_quantity
+    if not _within_two_ulps(realized_consumption, consumed_quantity):
+        return [_consumption_error("arithmetic mismatch")]
+    if upsert_quantity != after_quantity:
+        return [_consumption_error("upsert quantity mismatch")]
+    if payload_unit != row["unit"] or type(item["unit"]) is not str or item["unit"] != row["unit"]:
+        return [_consumption_error("unit mismatch")]
+
+    metadata_error = _validate_consumption_metadata(conn, row, target, item)
+    if metadata_error:
+        return [metadata_error]
+    return []
+
+
+def _normalize_consumption_quantity(value: Any, field: str) -> tuple[float, str | None]:
+    if type(value) not in (int, float):
+        return 0.0, _consumption_error(f"invalid numeric type: {field}")
+    if type(value) is int and not (_SQLITE_INTEGER_MIN <= value <= _SQLITE_INTEGER_MAX):
+        return 0.0, _consumption_error(f"quantity out of range: {field}")
+    try:
+        normalized = float(value)
+    except OverflowError:
+        return 0.0, _consumption_error(f"quantity out of range: {field}")
+    if not math.isfinite(normalized):
+        return 0.0, _consumption_error(f"non-finite quantity: {field}")
+    if type(value) is int and int(normalized) != value:
+        return 0.0, _consumption_error(f"quantity out of range: {field}")
+    return normalized, None
+
+
+def _within_one_ulp(actual: float, expected: float) -> bool:
+    if not math.isfinite(expected):
+        return False
+    return abs(actual - expected) <= max(math.ulp(actual), math.ulp(expected))
+
+
+def _within_two_ulps(actual: float, expected: float) -> bool:
+    if not math.isfinite(expected):
+        return False
+    return abs(actual - expected) <= 2 * max(math.ulp(actual), math.ulp(expected)) and math.isclose(
+        actual,
+        expected,
+        rel_tol=2 * math.ulp(1.0),
+        abs_tol=0.0,
+    )
+
+
+def _validate_consumption_metadata(
+    conn: sqlite3.Connection,
+    row: sqlite3.Row,
+    target: dict[str, Any],
+    item: dict[str, Any],
+) -> str | None:
+    if "updated_turn_id" in target:
+        return _consumption_error("metadata mismatch: updated_turn_id is commit-owned")
+    unexpected_target_keys = _unexpected_mapping_keys(target, _TARGET_UPSERT_KEYS)
+    if unexpected_target_keys:
+        return _consumption_error(f"metadata mismatch: unexpected target field {unexpected_target_keys[0]}")
+    unexpected_item_keys = _unexpected_mapping_keys(item, _TARGET_ITEM_KEYS)
+    if unexpected_item_keys:
+        return _consumption_error(f"metadata mismatch: unexpected item field {unexpected_item_keys[0]}")
+
+    entity_live = {
+        "type": row["type"],
+        "name": row["name"],
+        "status": row["status"],
+        "visibility": row["visibility"],
+        "location_id": row["location_id"],
+        "owner_id": row["owner_id"],
+        "summary": row["summary"],
+        "details": json.loads(row["details_json"] or "{}"),
+    }
+    for key in _ENTITY_METADATA_KEYS:
+        if key not in target or not _exact_metadata_equal(target[key], entity_live[key]):
+            return _consumption_error(f"metadata mismatch: entity.{key}")
+
+    item_live = {
+        "category": row["category"],
+        "unit": row["unit"],
+        "quality": row["quality"],
+        "durability_current": row["durability_current"],
+        "durability_max": row["durability_max"],
+        "stackable": bool(row["stackable"]),
+        "equipped_slot": row["equipped_slot"],
+        "properties": json.loads(row["properties_json"] or "{}"),
+    }
+    for key in _ITEM_METADATA_KEYS:
+        if key not in item or not _exact_metadata_equal(item[key], item_live[key]):
+            return _consumption_error(f"metadata mismatch: item.{key}")
+
+    aliases = target.get("aliases")
+    if type(aliases) is not list or any(type(alias) is not str for alias in aliases):
+        return _consumption_error("metadata mismatch: aliases")
+    live_aliases = [
+        str(alias_row["alias"])
+        for alias_row in conn.execute(
+            "select alias from aliases where entity_id = ? and kind = 'name' order by alias",
+            (row["id"],),
+        ).fetchall()
+    ]
+    if len(aliases) != len(set(aliases)) or sorted(aliases) != live_aliases:
+        return _consumption_error("metadata mismatch: aliases")
+    return None
+
+
+def _exact_metadata_equal(candidate: Any, live: Any) -> bool:
+    if type(candidate) is not type(live):
+        return False
+    if type(candidate) is dict:
+        if not _mapping_has_only_string_keys(candidate):
+            return False
+        if candidate.keys() != live.keys():
+            return False
+        return all(_exact_metadata_equal(candidate[key], live[key]) for key in candidate)
+    if type(candidate) is list:
+        return len(candidate) == len(live) and all(
+            _exact_metadata_equal(candidate_item, live_item)
+            for candidate_item, live_item in zip(candidate, live, strict=True)
+        )
+    return candidate == live
+
+
+def _mapping_has_only_string_keys(mapping: dict[Any, Any]) -> bool:
+    return all(type(key) is str for key in mapping)
+
+
+def _unexpected_mapping_keys(mapping: dict[Any, Any], allowed: set[str]) -> list[str]:
+    unexpected = [
+        key if _is_utf8_text(key) else "<invalid-text>"
+        for key in mapping
+        if type(key) is str and key not in allowed
+    ]
+    if any(type(key) is not str for key in mapping):
+        unexpected.append("<non-string>")
+    return sorted(unexpected)
+
+
+def _is_utf8_text(value: Any) -> bool:
+    if type(value) is not str:
+        return False
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
+def _consumption_error(reason: str) -> str:
+    return f"{_CONSUMPTION_PREFIX} {reason}"
 
 
 def build_routine_delta(conn: sqlite3.Connection, options: Any) -> dict[str, Any]:

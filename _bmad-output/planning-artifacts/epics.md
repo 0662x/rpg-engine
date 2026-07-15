@@ -431,6 +431,40 @@ So that read models can fail without corrupting authoritative gameplay facts.
 **Then** audit records 包含 sanitized request/result summaries、surface category、identity 摘要和 status
 **And** audit 写入失败不会中断已成功的 Kernel operation，也不会提升 gameplay fact authority。
 
+### Story 1.9: 库存消耗语义提交门
+
+作为长期存档的玩家主机，
+我希望声明单物品库存消耗的结构化 delta 在提交前核验实时库存、数量算术和 payload/upsert 对齐，
+从而使库存不足、过期或畸形的消耗不能成为 SQLite 事实。
+
+**验收标准：**
+
+**Given** 一个结构化事件通过 `consumed_item_id`、`before_quantity`、`consumed_quantity` 和 `after_quantity` 声明单物品库存消耗
+**When** `player_turn_commit` validation 运行
+**Then** 当前 SQLite 数量必须等于 `before_quantity`
+**And** `consumed_quantity` 必须为有限正数，`after_quantity = before_quantity - consumed_quantity` 且结果不得小于零
+**And** payload 的物品、单位和数量必须与唯一匹配的 `upsert_entities` 物品更新一致。
+
+**Given** 消耗声明存在库存不足、过期 `before_quantity`、payload/upsert 物品不一致、缺失或重复更新、非法数量、单位不一致或算术不一致
+**When** validation 或 commit 被调用
+**Then** 提交在任何持久化之前被拒绝，并返回稳定、可断言的消耗校验错误
+**And** SQLite、库存、turn、event 与 `events.jsonl` 均保持不变。
+
+**Given** 一个合法的单物品消耗 delta
+**When** 它通过已批准的 `TurnProposal` 提交
+**Then** 只扣减声明的数量并保留物品的 unit、quality、properties、durability、owner、location、status、visibility 等 metadata
+**And** 只产生预期的 turn 与 event，不修改其他库存。
+
+**Given** 现有 craft、combat 或其他 action 使用不同的领域 payload contract
+**When** 本 Story 的校验加入既有 validation pipeline
+**Then** 其既有领域 validator 和合法提交行为不得退化
+**And** 本 Story 不新增自然语言意图识别、外部或内部 AI 权威、一等 consumption action、fuzzy quantity strategy、第三方依赖或测试专用 production API。
+
+**Given** focused 与回归测试运行
+**When** 测试需要执行写入
+**Then** 所有写入只针对独立 temporary Save
+**And** source Campaign、formal Save、正式 registry 与 `data/game.sqlite` 事实源保持不变。
+
 ## Epic 2: 通用 Campaign/Save 世界模型
 
 作者可以用 Campaign Package 定义可替换的游戏世界、实体、关系和进度；Save Package 承载运行事实，同一 Kernel 可服务不同题材。完成后，Campaign/Save 分层、Entity/Relationship/Progress access contract、Content Type / Merge Contract 和通用 extension hooks 能支撑至少两个不同 capability profile 的 Campaign Package。

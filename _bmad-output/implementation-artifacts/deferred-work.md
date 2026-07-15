@@ -49,3 +49,9 @@
 
 - 可选 archivist 请求在通用 CommitService 的 SQLite commit 后崩溃窗口没有 durable phase/outbox。普通 `SaveManager.player_confirm()` 默认不启用 archivist；修复需要扩大持久化设计，作为独立规划项处理，不在 Story 6.4 内引入 migration 或新 authority。
 - 新行动成功发布后，上一行动的单条 bounded replay receipt 会被替换；跨后续行动的延迟重试因此不再保留稳定 replay classification。支持这类历史 receipt 集合会引入按 confirmation session 的多 entry retention、supersede/orphan 与清理策略，属于 Story 6.5 明确的 pending lifecycle 范围，不在 Story 6.4 扩张。
+
+## Deferred from: code review of 1-9-库存消耗语义提交门 (2026-07-15)
+
+- 大型 routine consumption delta 的每个非目标 upsert 当前会执行一次 item-existence SQL 查询；批量化需要独立 cardinality/performance 规划，不扩大本次 P0 语义正确性范围。
+- 权威 SQLite 中既有的损坏 `details_json` / `properties_json` 会在 consumption metadata 读取时抛出原生 JSON decode error；数据库损坏诊断与稳定 corruption error contract 属于既有健康检查/恢复范围。
+- hostile `list` subclass 用作 `events` / `upsert_entities` 时，完整 pipeline 会在 routine resolver 之前的通用 `proposal -> delta_schema` 迭代中抛异常。局部 exact-list routine guard 不能修复真实路径；需要独立规划全 action 共用的 non-canonical Python container fail-closed 边界。

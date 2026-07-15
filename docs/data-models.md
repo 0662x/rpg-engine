@@ -653,6 +653,28 @@ Turn delta 是 `save_turn_delta()` 和 commit services 消费的已校验写入 
 - Entity references must already exist or be created in the same delta.
 - `command_id` and `expected_turn_id` are required for `player_turn_commit`.
 
+### Routine 单物品消耗合同
+
+当 effective action 为 `routine`，且唯一事件的顶层 `payload` 出现
+`consumed_item_id`、`before_quantity`、`consumed_quantity` 或 `after_quantity` 任一字段时，
+resolver delta contract 会在写入前启用严格的单物品消耗校验：
+
+- 四个数量/标识字段与 `unit` 必须齐全，且只能有一个声明事件；嵌套 craft `materials[]` 与 combat ammo
+  payload 不会触发该合同。
+- `before_quantity` 必须精确匹配 SQLite 当前数量；`consumed_quantity` 必须为有限正数且不超过库存；
+  `after_quantity` 必须在最多 1 ULP 误差内等于 `before_quantity - consumed_quantity`，且由
+  `before_quantity - after_quantity` 得到的实际扣量必须在最多 2 ULP 内等于声明扣量，同时满足
+  `2 × machine epsilon` 的相对误差上限（不设绝对容差），避免 subnormal 区的 ULP 容差放大为成倍实际扣量。
+- exact int 必须位于 SQLite signed 64-bit 范围，且转成 float 后能够无损 round-trip；`2**53+1`
+  一类会折叠成相邻数值的整数在比较前直接拒绝。
+- `upsert_entities` 必须且只能包含一个匹配目标的库存 upsert；其 quantity/unit 必须匹配声明，其他
+  entity/item metadata 与 aliases 必须保持 SQLite 当前值，`updated_turn_id` 仍由 commit owner 写入。
+- bool、字符串、NaN、Infinity、超出 SQLite signed 64-bit 范围的整数、stale before、额外库存 upsert
+  与 metadata 漂移都会以稳定的 `routine consumption:` 错误前缀在 commit 前拒绝。
+
+此合同只验证结构化 external candidate 之后的权威 delta，不把自然语言识别或 AI 输出当作事实、确认或
+commit authority。
+
 ## Content Type Registry
 
 Content registry 映射 campaign YAML、delta keys、runtime tables、validation rule 和 merge policy。

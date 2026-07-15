@@ -1,0 +1,167 @@
+{
+  "schema_version": "0.1.0",
+  "snapshot_at": "2026-07-15T18:40:20Z",
+  "repo": "RPG Engine",
+  "collection_mode": "agent-team",
+  "collection_status": "COLLECTED",
+  "inventory_basis": "acceptance_criteria",
+  "gate_basis": "priority_thresholds",
+  "source_sha": "dff6e4dd0d2e2d0712d32089efdef4bef65b2d82",
+  "target": {
+    "type": "release",
+    "id": "current-save-rebaseline-2026-07-15",
+    "label": "current-save 模拟用户测试重基线"
+  },
+  "decision_mode": "deterministic",
+  "evaluator": "Oliver",
+  "confidence": "high",
+  "oracle": {
+    "resolution_mode": "formal_requirements",
+    "confidence": "high",
+    "sources": [
+      "_bmad-output/test-artifacts/test-design-qa.md",
+      "_bmad-output/test-artifacts/test-design-progress.md",
+      "_bmad-output/test-artifacts/test-design-architecture.md",
+      "_bmad-output/test-artifacts/test-design/aigm-kernel-handoff.md"
+    ],
+    "external_pointer_status": "not_used",
+    "synthetic": false
+  },
+  "coverage": {
+    "inventory": {
+      "covered": 27,
+      "total": 55,
+      "pct": 49
+    },
+    "priority_breakdown": {
+      "P0": {
+        "total": 46,
+        "covered": 25,
+        "pct": 54
+      },
+      "P1": {
+        "total": 9,
+        "covered": 2,
+        "pct": 22
+      },
+      "P2": {
+        "total": 0,
+        "covered": 0,
+        "pct": 100
+      },
+      "P3": {
+        "total": 0,
+        "covered": 0,
+        "pct": 100
+      }
+    },
+    "by_level": {
+      "e2e": {
+        "tests": 3,
+        "criteria_covered": 3
+      },
+      "api": {
+        "tests": 50,
+        "criteria_covered": 36
+      },
+      "component": {
+        "tests": 0,
+        "criteria_covered": 0
+      },
+      "unit": {
+        "tests": 40,
+        "criteria_covered": 17
+      },
+      "other": {
+        "tests": 0,
+        "criteria_covered": 0
+      }
+    }
+  },
+  "tests": {
+    "files": 25,
+    "cases": 93,
+    "skipped_cases": 0,
+    "fixme_cases": 0,
+    "pending_cases": 0,
+    "active_pass_cases": 93,
+    "active_fail_cases": 0
+  },
+  "execution": {
+    "focused": "75 passed, 0 skipped",
+    "clean_checkout_focused": "75 passed, 0 skipped",
+    "adjacent": "292 passed, 160 subtests passed",
+    "repository_full_pytest": "1223 passed, 10331 subtests passed",
+    "CON-03": "PASS",
+    "STA-02": "PASS",
+    "artifact": "_bmad-output/test-artifacts/automation-validation-story-1-9.json"
+  },
+  "risk_summary": {
+    "critical_open": 0,
+    "high_open": 3,
+    "medium_open": 0,
+    "low_open": 0,
+    "p0_coverage_sufficiency_open": 21,
+    "covered_but_execution_failed": [],
+    "execution_root_cause": null
+  },
+  "heuristics": {
+    "endpoint_gaps": 0,
+    "auth_negative_path_status": "none",
+    "error_path_status": "partial",
+    "ui_journey_status": "not_applicable",
+    "ui_state_status": "not_applicable",
+    "backend_public_journeys_missing": 4
+  },
+  "blockers": [],
+  "recommendations": [
+    {
+      "priority": "HIGH",
+      "action": "补齐 3 个 P1 NONE：Skill 八领域金标、合法 intake commit、真实 Hermes 八领域 system journeys",
+      "requirements": ["SKL-02", "INT-01", "SYS-02"]
+    },
+    {
+      "priority": "HIGH",
+      "action": "补齐 authority/public-boundary 负例与真实 external/Hermes trace，不把 fake/Kernel evidence 冒充 public journey",
+      "requirements": ["BND-03", "SKL-04", "SYS-01", "SYS-03", "SYS-04"]
+    },
+    {
+      "priority": "HIGH",
+      "action": "完成 18 个 PARTIAL，优先 owner 归因、domain no-mutation、跨 Campaign 对抗绑定、actual formal fingerprints 与 dated artifact",
+      "requirements": [
+        "MIG-01", "MIG-02", "MIG-03", "BND-03", "QRY-02", "INT-02",
+        "CMB-01", "CMB-02", "CRF-02", "CRF-03", "RST-01", "RST-02",
+        "SOC-01", "SOC-02", "TRV-02", "ENV-04", "ART-01", "ART-02"
+      ]
+    },
+    {
+      "priority": "MEDIUM",
+      "action": "补 QRY-02 聚合数量与 SQLite 直接对照，并保留 RST-02 priority 复核",
+      "requirements": ["QRY-02", "RST-02"]
+    },
+    {
+      "priority": "MEDIUM",
+      "action": "Story 1.9 post-fix execution 已追加到 Test Review/Trace；后续扩展更广 fixture 或领域测试时再重跑完整 bmad-testarch-test-review",
+      "requirements": []
+    }
+  ],
+  "links": {
+    "trace_report_path": "_bmad-output/test-artifacts/traceability-matrix.md",
+    "trace_report_url": "",
+    "artifact_url": "",
+    "journey_evidence_url": ""
+  },
+  "gate_status": "FAIL",
+  "gate_criteria": {
+    "p0_coverage_required": "100%",
+    "p0_coverage_actual": "54%",
+    "p0_status": "NOT_MET",
+    "p1_coverage_target": "90%",
+    "p1_coverage_minimum": "80%",
+    "p1_coverage_actual": "22%",
+    "p1_status": "NOT_MET",
+    "overall_coverage_minimum": "80%",
+    "overall_coverage_actual": "49%",
+    "overall_status": "NOT_MET"
+  }
+}

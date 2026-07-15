@@ -1,0 +1,33 @@
+{
+  "schema_version": "0.1.0",
+  "evaluated_at": "2026-07-15T18:40:20Z",
+  "repo": "RPG Engine",
+  "target": {
+    "type": "release",
+    "id": "current-save-rebaseline-2026-07-15",
+    "label": "current-save 模拟用户测试重基线"
+  },
+  "collection_status": "COLLECTED",
+  "gate_basis": "priority_thresholds",
+  "gate_status": "FAIL",
+  "rationale": "P0 完整覆盖率为 54%（25/46，要求：100%），总体完整覆盖率为 49%，P1 为 22%；Story 1.9 已使 CON-03 与 STA-02 执行转绿，但 P0 仍有 21 项覆盖充分性缺口，P1 仍有 3 项 NONE。",
+  "p0_status": "NOT_MET",
+  "p1_status": "NOT_MET",
+  "overall_status": "NOT_MET",
+  "critical_open": 0,
+  "p0_coverage_sufficiency_open": 21,
+  "execution_failures": [],
+  "execution_root_cause": null,
+  "execution_evidence": {
+    "focused": "75 passed, 0 skipped",
+    "adjacent": "292 passed, 160 subtests passed",
+    "repository_full_pytest": "1223 passed, 10331 subtests passed",
+    "artifact": "_bmad-output/test-artifacts/automation-validation-story-1-9.json"
+  },
+  "links": {
+    "trace_report_path": "_bmad-output/test-artifacts/traceability-matrix.md",
+    "trace_report_url": "",
+    "artifact_url": "",
+    "journey_evidence_url": ""
+  }
+}
