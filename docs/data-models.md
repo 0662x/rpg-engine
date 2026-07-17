@@ -675,6 +675,32 @@ resolver delta contract 会在写入前启用严格的单物品消耗校验：
 此合同只验证结构化 external candidate 之后的权威 delta，不把自然语言识别或 AI 输出当作事实、确认或
 commit authority。
 
+### Gather Intake 语义提交合同
+
+当 effective action 为 `gather`，且唯一事件的顶层 `payload` 直接出现 `output_entity_id`、
+`output_quantity` 或 `output_unit` 任一字段时，resolver delta contract 会在写入前启用 Intake 校验。
+三个字段必须齐全；`output_quantity_required` 单独出现只是普通或 palette gather 的待补全草案标记，
+不会触发 Intake 合同，嵌套结构也不会触发。
+
+- Intake 必须只有一个声明 event 和一个匹配的 item upsert，且不得夹带第二个 entity upsert。
+- Intake 是单物品窄提交；不得夹带非空 `meta` 或 `tick_clocks` 改写其他权威状态。
+- payload 与 upsert 的 output ID、quantity、unit、`location_id`/`owner_id` 必须精确一致。未选择的
+  owner/location 按 `None` 对齐；产出物品必须恰有一个锚点。
+- quantity 只接受 exact int/float，拒绝 bool、字符串、NaN、Infinity、非正值、超出 SQLite signed
+  64-bit 范围或 float round-trip 会失真的整数。payload 与 upsert 以 finite normalized value 精确比较。
+- location 使用当前 validation connection 做 exact-ID 查询，必须引用存在、非 retired 的 location entity；
+  owner 必须引用存在、非 retired 的 entity。owner/location anchor 按统一 Entity Access contract 同时核验
+  entity、clock subtype 与 world-setting side visibility；output target visibility 必须是 canonical `known`/`hinted`。
+  hidden/GM-only 或非规范 visibility 在 player-confirmed Intake 中会被稳定拒绝。查询不使用 alias、FTS、
+  fuzzy binding 或 AI 推断。
+- 更新已有 item 时，除声明的 quantity、unit 和 ownership 外，entity metadata、item metadata、details、
+  properties 与 aliases 必须保持 SQLite 当前值；`updated_turn_id` 仍只由 commit owner 写入。新建 item
+  也必须使用完整、受限字段集合，未知字段不得被 persistence 静默丢弃。
+- 失败统一带 `gather intake:` 稳定前缀，并在 `save_turn_delta_outcome()`、turn/event/entity 写入与
+  projection 之前阻断；validation helper 本身不修改 delta、proposal、SQLite、JSONL 或 pending state。
+
+该合同不新增自然语言识别、AI authority、提交路径、数据库 migration 或测试专用 production API。
+
 ## Content Type Registry
 
 Content registry 映射 campaign YAML、delta keys、runtime tables、validation rule 和 merge policy。
@@ -768,6 +794,11 @@ bucket 的字段默认按 `conflict-only` 处理，需要 migration 或显式维
 - `validation_profile`
 
 这些模型是合同，本身不写入事实。
+直接包含 gather event `output_entity_id` 或 Intake 专属 `output_quantity`/`output_unit` 声明的
+human-confirmed `TurnProposal` 必须同时以 `gather` 作为 `intent.action` 与 `delta.intent`；proposal guard
+在 resolver 选择与任何写入之前 fail closed，防止同步或单边改写 action/intent/event type 后使用其他
+validator 绕过 Intake 领域语义门。仅含 `output_entity_id` 的合法 craft proposal 和其他合法 proposal
+保持各自既有 delta intent 语义，例如 `response_draft` 的 `accepted_response`。
 
 ## Validation Report
 

@@ -58,6 +58,7 @@ development_status:
   1-7-cli-命令薄适配边界: done
   1-8-platform-forwarding-与审计边界: done
   1-9-库存消耗语义提交门: done
+  1-10-intake-语义提交门: done
   epic-1-retrospective: optional
 
   epic-2: done

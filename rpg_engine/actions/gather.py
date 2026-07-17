@@ -1,19 +1,28 @@
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 from dataclasses import replace
 from typing import Any
 
 from ..campaign import Campaign
 from ..db import get_meta, resolve_entity
+from ..entity_access import read_entity
 from ..palette import (
     find_palette_candidate,
     palette_candidate_payload,
     palette_entry_to_entity,
 )
 from ..redaction import redact_hidden_entity_refs
-from ..visibility import can_read_hidden, normalize_visibility_view
+from ..progress_access import is_safe_visible_text
+from ..visibility import (
+    PUBLIC_ENTITY_VISIBILITY_LABELS,
+    can_read_entity_visibility,
+    can_read_hidden,
+    normalize_visibility_label,
+    normalize_visibility_view,
+)
 from ..preview import (
     build_gather_delta,
     crop_plot_for_entity,
@@ -36,6 +45,50 @@ from .base import (
     option_value,
 )
 from .taxonomy import ActionTaxonomySpec, taxonomy_terms
+
+
+_INTAKE_OUTPUT_KEYS = ("output_entity_id", "output_quantity", "output_unit")
+_INTAKE_PREFIX = "gather intake:"
+_SQLITE_INTEGER_MIN = -(2**63)
+_SQLITE_INTEGER_MAX = 2**63 - 1
+_INTAKE_MAX_JSON_DEPTH = 64
+_INTAKE_EVENT_KEYS = {"id", "type", "title", "summary", "payload", "source", "game_time"}
+_INTAKE_REQUIRED_EVENT_KEYS = ("type", "title", "summary", "payload", "source")
+_INTAKE_TARGET_KEYS = {
+    "id",
+    "type",
+    "name",
+    "status",
+    "visibility",
+    "location_id",
+    "owner_id",
+    "summary",
+    "details",
+    "aliases",
+    "item",
+}
+_INTAKE_ITEM_KEYS = {
+    "category",
+    "quantity",
+    "unit",
+    "quality",
+    "durability_current",
+    "durability_max",
+    "stackable",
+    "equipped_slot",
+    "properties",
+}
+_INTAKE_ENTITY_METADATA_KEYS = ("name", "status", "visibility", "summary", "details")
+_INTAKE_ITEM_METADATA_KEYS = (
+    "category",
+    "quality",
+    "durability_current",
+    "durability_max",
+    "stackable",
+    "equipped_slot",
+    "properties",
+)
+_INTAKE_REQUIRED_TARGET_METADATA_KEYS = (*_INTAKE_ENTITY_METADATA_KEYS, "aliases")
 
 
 def redact_repair_options(conn: sqlite3.Connection, options: tuple[RepairOption, ...]) -> tuple[RepairOption, ...]:
@@ -193,14 +246,15 @@ def validate_gather_delta(
     palette_id = option_value(options, "palette_id")
     if palette_id:
         return validate_palette_gather_delta(campaign, conn, options, delta, str(palette_id))
+    intake_errors = _validate_gather_intake(conn, delta)
     meta = get_meta(conn)
     current = current_location_row(conn, meta)
     target_query = option_value(options, "target")
     if not target_query:
-        return ActionValidationResult(missing_required=("target",))
+        return ActionValidationResult(errors=tuple(intake_errors), missing_required=("target",))
     target = resolve_entity(conn, str(target_query))
     if not target:
-        return ActionValidationResult(errors=(f"target not found: {target_query}",))
+        return ActionValidationResult(errors=(f"target not found: {target_query}", *intake_errors))
     location_query = option_value(options, "location") or option_value(options, "destination")
     location = resolve_location(conn, str(location_query)) if location_query else current
     if location and "description_short" not in location.keys():
@@ -228,7 +282,455 @@ def validate_gather_delta(
             errors.append(f"events[{index}].payload.travel_required must be false at current location")
     if "upsert_entities" not in delta:
         warnings.append("delta has no upsert_entities field for gathered output")
+    errors.extend(intake_errors)
     return ActionValidationResult(errors=tuple(errors), warnings=tuple(warnings))
+
+
+def _validate_gather_intake(conn: sqlite3.Connection, delta: dict[str, Any]) -> list[str]:
+    events = delta.get("events")
+    if not isinstance(events, list):
+        return []
+
+    declarations: list[dict[str, Any]] = []
+    for event in events:
+        if type(event) is not dict:
+            continue
+        payload = event.get("payload")
+        if type(payload) is dict and any(
+            type(key) is str and key in _INTAKE_OUTPUT_KEYS for key in payload
+        ):
+            declarations.append(payload)
+
+    if not declarations:
+        return []
+    if len(declarations) != 1:
+        return [_intake_error("multiple declarations")]
+    if len(events) != 1 or type(events[0]) is not dict:
+        return [_intake_error("event cardinality mismatch")]
+
+    event = events[0]
+    if not _intake_mapping_has_only_string_keys(event):
+        return [_intake_error("invalid event field type")]
+    unexpected_event = _intake_unexpected_mapping_keys(event, _INTAKE_EVENT_KEYS)
+    if unexpected_event:
+        return [_intake_error(f"unexpected event field {unexpected_event[0]}")]
+    for key in _INTAKE_REQUIRED_EVENT_KEYS:
+        if key not in event:
+            return [_intake_error(f"missing field: event.{key}")]
+    if event["type"] != "gather":
+        return [_intake_error("declaration event must be gather")]
+    for key in ("title", "summary", "source"):
+        if not is_safe_visible_text(event[key]):
+            return [_intake_error(f"invalid event field: {key}")]
+    if delta.get("intent") != "gather":
+        return [_intake_error("intent must be gather")]
+    if delta.get("changed") is not True:
+        return [_intake_error("state-changing intake must set changed true")]
+    if "meta" in delta and (type(delta["meta"]) is not dict or delta["meta"]):
+        return [_intake_error("unexpected meta update")]
+    if "tick_clocks" in delta and (type(delta["tick_clocks"]) is not list or delta["tick_clocks"]):
+        return [_intake_error("unexpected clock update")]
+
+    payload = declarations[0]
+    if not _intake_mapping_has_only_string_keys(payload):
+        return [_intake_error("invalid payload field type")]
+    for key in _INTAKE_OUTPUT_KEYS:
+        if key not in payload:
+            return [_intake_error(f"missing field: payload.{key}")]
+
+    output_id = payload["output_entity_id"]
+    if not _intake_identifier_text(output_id):
+        return [_intake_error("invalid output_entity_id")]
+    payload_quantity, error = _normalize_intake_quantity(
+        payload["output_quantity"],
+        "payload.output_quantity",
+    )
+    if error:
+        return [error]
+    if payload_quantity <= 0:
+        return [_intake_error("intake output quantity must be positive")]
+    payload_unit = payload["output_unit"]
+    if not _intake_unit_text(payload_unit):
+        return [_intake_error("unit must be a non-empty string")]
+    if not _intake_json_safe(payload):
+        return [_intake_error("invalid payload value")]
+
+    upserts = delta.get("upsert_entities")
+    if not isinstance(upserts, list):
+        return [_intake_error("missing/duplicate target upsert")]
+    if any(type(record) is dict and not _intake_mapping_has_only_string_keys(record) for record in upserts):
+        return [_intake_error("invalid upsert field type")]
+    matching_upserts = [
+        record
+        for record in upserts
+        if type(record) is dict
+        and type(record.get("id")) is str
+        and record["id"] == output_id
+    ]
+    if len(matching_upserts) != 1:
+        return [_intake_error("missing/duplicate target upsert")]
+    target = matching_upserts[0]
+    if len(upserts) != 1:
+        return [_intake_error("unexpected entity upsert")]
+    if target.get("type") != "item":
+        return [_intake_error("target must be an item")]
+    item = target.get("item")
+    if type(item) is not dict:
+        return [_intake_error("target item payload must be an exact mapping")]
+    if not _intake_mapping_has_only_string_keys(item):
+        return [_intake_error("invalid item field type")]
+    for key in ("quantity", "unit"):
+        if key not in item:
+            return [_intake_error(f"missing field: upsert item.{key}")]
+
+    upsert_quantity, error = _normalize_intake_quantity(item["quantity"], "upsert item.quantity")
+    if error:
+        return [error]
+    if upsert_quantity <= 0:
+        return [_intake_error("intake output quantity must be positive")]
+    if upsert_quantity != payload_quantity:
+        return [_intake_error("quantity mismatch")]
+    if not _intake_unit_text(item["unit"]):
+        return [_intake_error("unit must be a non-empty string")]
+    if item["unit"] != payload_unit:
+        return [_intake_error("unit mismatch")]
+
+    payload_location = payload.get("location_id")
+    payload_owner = payload.get("owner_id")
+    target_location = target.get("location_id")
+    target_owner = target.get("owner_id")
+    if target_location is None and target_owner is None:
+        return [_intake_error("intake output requires location_id or owner_id")]
+    if target_location is not None and target_owner is not None:
+        return [_intake_error("intake output requires exactly one location_id or owner_id")]
+    if _intake_scalar_equal(target_owner, output_id):
+        return [_intake_error("output cannot own itself")]
+    if not _intake_scalar_equal(payload_location, target_location) or not _intake_scalar_equal(
+        payload_owner,
+        target_owner,
+    ):
+        return [_intake_error("ownership mismatch")]
+
+    if target_location is not None:
+        error = _validate_intake_anchor(conn, target_location, kind="location")
+        if error:
+            return [error]
+    if target_owner is not None:
+        error = _validate_intake_anchor(conn, target_owner, kind="owner")
+        if error:
+            return [error]
+    metadata_error = _validate_intake_metadata(conn, output_id, target, item)
+    if metadata_error:
+        return [metadata_error]
+    return []
+
+
+def _normalize_intake_quantity(value: Any, field: str) -> tuple[float, str | None]:
+    if type(value) not in (int, float):
+        return 0.0, _intake_error(f"invalid numeric type: {field}")
+    if type(value) is int and not (_SQLITE_INTEGER_MIN <= value <= _SQLITE_INTEGER_MAX):
+        return 0.0, _intake_error(f"quantity out of range: {field}")
+    try:
+        normalized = float(value)
+    except OverflowError:
+        return 0.0, _intake_error(f"quantity out of range: {field}")
+    if not math.isfinite(normalized):
+        return 0.0, _intake_error(f"non-finite quantity: {field}")
+    if type(value) is int and int(normalized) != value:
+        return 0.0, _intake_error(f"quantity out of range: {field}")
+    return normalized, None
+
+
+def _validate_intake_anchor(
+    conn: sqlite3.Connection,
+    anchor_id: Any,
+    *,
+    kind: str,
+) -> str | None:
+    if not _intake_identifier_text(anchor_id):
+        return _intake_error(f"invalid {kind} anchor")
+    row = conn.execute(
+        "select type, status, visibility from entities where id = ?",
+        (anchor_id,),
+    ).fetchone()
+    if row is None:
+        return _intake_error(f"unknown {kind} anchor")
+    if normalize_visibility_label(str(row["status"])) == "retired":
+        return _intake_error(f"retired {kind} anchor")
+    if read_entity(conn, str(anchor_id), view="player", include_archived=True) is None:
+        return _intake_error(f"hidden {kind} anchor")
+    if kind == "location" and normalize_visibility_label(str(row["type"])) != "location":
+        return _intake_error("location anchor must reference a location")
+    return None
+
+
+def _validate_intake_metadata(
+    conn: sqlite3.Connection,
+    output_id: str,
+    target: dict[str, Any],
+    item: dict[str, Any],
+) -> str | None:
+    if "updated_turn_id" in target:
+        return _intake_error("updated_turn_id is commit-owned")
+    unexpected_target = _intake_unexpected_mapping_keys(target, _INTAKE_TARGET_KEYS)
+    if unexpected_target:
+        return _intake_error(f"metadata mismatch: unexpected target field {unexpected_target[0]}")
+    unexpected_item = _intake_unexpected_mapping_keys(item, _INTAKE_ITEM_KEYS)
+    if unexpected_item:
+        return _intake_error(f"metadata mismatch: unexpected item field {unexpected_item[0]}")
+
+    for key in _INTAKE_REQUIRED_TARGET_METADATA_KEYS:
+        if key not in target:
+            label = "aliases" if key == "aliases" else f"entity.{key}"
+            return _intake_error(f"metadata mismatch: {label}")
+    for key in (
+        "category",
+        "quantity",
+        "unit",
+        "quality",
+        "durability_current",
+        "durability_max",
+        "stackable",
+        "equipped_slot",
+        "properties",
+    ):
+        if key not in item:
+            return _intake_error(f"metadata mismatch: item.{key}")
+
+    aliases = target.get("aliases")
+    if type(aliases) is not list or any(not is_safe_visible_text(alias) for alias in aliases):
+        return _intake_error("metadata mismatch: aliases")
+    if len(aliases) != len(set(aliases)):
+        return _intake_error("metadata mismatch: aliases")
+    if not can_read_entity_visibility(str(target["visibility"]), "player"):
+        return _intake_error("hidden output target")
+    if type(target["details"]) is not dict or not _intake_json_safe(target["details"]):
+        return _intake_error("metadata mismatch: entity.details")
+    if type(item["properties"]) is not dict or not _intake_json_safe(item["properties"]):
+        return _intake_error("metadata mismatch: item.properties")
+
+    row = conn.execute(
+        """
+        select e.type, e.name, e.status, e.visibility, e.summary, e.details_json,
+               i.category, i.quality, i.durability_current, i.durability_max,
+               i.stackable, i.equipped_slot, i.properties_json
+        from entities e
+        join items i on i.entity_id = e.id
+        where e.id = ?
+        """,
+        (output_id,),
+    ).fetchone()
+    if row is None:
+        existing = conn.execute("select 1 from entities where id = ?", (output_id,)).fetchone()
+        if existing is not None:
+            return _intake_error("existing target must be an item")
+        return _validate_new_intake_metadata(target, item)
+    if type(row["type"]) is not str or row["type"] != "item":
+        return _intake_error("existing target must be an item")
+    if not can_read_entity_visibility(str(row["visibility"]), "player"):
+        return _intake_error("hidden output target")
+    if row["visibility"] not in PUBLIC_ENTITY_VISIBILITY_LABELS:
+        return _intake_error("invalid live metadata: entity.visibility")
+
+    details, error = _parse_intake_json_object(row["details_json"], "entity.details")
+    if error:
+        return error
+    properties, error = _parse_intake_json_object(row["properties_json"], "item.properties")
+    if error:
+        return error
+    if type(row["stackable"]) is not int or row["stackable"] not in (0, 1):
+        return _intake_error("invalid live metadata: item.stackable")
+
+    entity_live = {
+        "name": row["name"],
+        "status": row["status"],
+        "visibility": row["visibility"],
+        "summary": row["summary"],
+        "details": details,
+    }
+    for key in _INTAKE_ENTITY_METADATA_KEYS:
+        if not _intake_metadata_equal(target[key], entity_live[key]):
+            return _intake_error(f"metadata mismatch: entity.{key}")
+
+    item_live = {
+        "category": row["category"],
+        "quality": row["quality"],
+        "durability_current": row["durability_current"],
+        "durability_max": row["durability_max"],
+        "stackable": bool(row["stackable"]),
+        "equipped_slot": row["equipped_slot"],
+        "properties": properties,
+    }
+    for key in _INTAKE_ITEM_METADATA_KEYS:
+        if not _intake_metadata_equal(item[key], item_live[key]):
+            return _intake_error(f"metadata mismatch: item.{key}")
+
+    live_aliases = [
+        str(alias_row["alias"])
+        for alias_row in conn.execute(
+            "select alias from aliases where entity_id = ? and kind = 'name' order by alias",
+            (output_id,),
+        ).fetchall()
+    ]
+    if sorted(aliases) != live_aliases:
+        return _intake_error("metadata mismatch: aliases")
+    return None
+
+
+def _validate_new_intake_metadata(
+    target: dict[str, Any],
+    item: dict[str, Any],
+) -> str | None:
+    for key in ("name", "status", "visibility", "summary"):
+        if not is_safe_visible_text(target[key]):
+            return _intake_error(f"invalid new metadata: entity.{key}")
+    if target["visibility"] not in PUBLIC_ENTITY_VISIBILITY_LABELS:
+        return _intake_error("invalid new metadata: entity.visibility")
+    if type(target["details"]) is not dict or not _intake_json_safe(target["details"]):
+        return _intake_error("invalid new metadata: entity.details")
+    if not is_safe_visible_text(item["category"]):
+        return _intake_error("invalid new metadata: item.category")
+    if item["quality"] is not None and not is_safe_visible_text(item["quality"]):
+        return _intake_error("invalid new metadata: item.quality")
+    for key in ("durability_current", "durability_max"):
+        if item[key] is not None and (
+            type(item[key]) is not int or not 0 <= item[key] <= _SQLITE_INTEGER_MAX
+        ):
+            return _intake_error(f"invalid new metadata: item.{key}")
+    if (
+        item["durability_current"] is not None
+        and item["durability_max"] is not None
+        and item["durability_current"] > item["durability_max"]
+    ):
+        return _intake_error("invalid new metadata: item.durability")
+    if type(item["stackable"]) is not bool:
+        return _intake_error("invalid new metadata: item.stackable")
+    if item["equipped_slot"] is not None and not is_safe_visible_text(item["equipped_slot"]):
+        return _intake_error("invalid new metadata: item.equipped_slot")
+    if type(item["properties"]) is not dict or not _intake_json_safe(item["properties"]):
+        return _intake_error("invalid new metadata: item.properties")
+    return None
+
+
+def _parse_intake_json_object(raw: Any, label: str) -> tuple[dict[str, Any], str | None]:
+    if type(raw) is not str:
+        return {}, _intake_error(f"invalid live metadata: {label}")
+    try:
+        value = json.loads(raw, object_pairs_hook=_intake_unique_json_object)
+    except (json.JSONDecodeError, RecursionError, TypeError, ValueError):
+        return {}, _intake_error(f"invalid live metadata: {label}")
+    if type(value) is not dict or not _intake_json_safe(value):
+        return {}, _intake_error(f"invalid live metadata: {label}")
+    return value, None
+
+
+def _intake_json_safe(value: Any) -> bool:
+    stack: list[tuple[Any, int, bool]] = [(value, 0, False)]
+    active_containers: set[int] = set()
+    while stack:
+        item, depth, exiting = stack.pop()
+        if exiting:
+            active_containers.remove(id(item))
+            continue
+        if item is None or type(item) is bool:
+            continue
+        if type(item) is int:
+            try:
+                json.dumps(item)
+            except (ValueError, OverflowError):
+                return False
+            continue
+        if type(item) is float:
+            if math.isfinite(item):
+                continue
+            return False
+        if type(item) is str:
+            if _intake_utf8_text(item):
+                continue
+            return False
+        if type(item) not in (dict, list) or depth >= _INTAKE_MAX_JSON_DEPTH:
+            return False
+        identity = id(item)
+        if identity in active_containers:
+            return False
+        active_containers.add(identity)
+        stack.append((item, depth, True))
+        if type(item) is dict:
+            if not _intake_mapping_has_only_string_keys(item):
+                return False
+            stack.extend((child, depth + 1, False) for child in item.values())
+        else:
+            stack.extend((child, depth + 1, False) for child in item)
+    return True
+
+
+def _intake_unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError("duplicate JSON object key")
+        value[key] = item
+    return value
+
+
+def _intake_metadata_equal(candidate: Any, live: Any) -> bool:
+    if type(candidate) is not type(live):
+        return False
+    if type(candidate) is dict:
+        if not _intake_mapping_has_only_string_keys(candidate) or candidate.keys() != live.keys():
+            return False
+        return all(_intake_metadata_equal(candidate[key], live[key]) for key in candidate)
+    if type(candidate) is list:
+        return len(candidate) == len(live) and all(
+            _intake_metadata_equal(candidate_item, live_item)
+            for candidate_item, live_item in zip(candidate, live, strict=True)
+        )
+    if type(candidate) is float and candidate == live == 0.0:
+        return math.copysign(1.0, candidate) == math.copysign(1.0, live)
+    return candidate == live
+
+
+def _intake_scalar_equal(left: Any, right: Any) -> bool:
+    if type(left) is not type(right):
+        return False
+    return left == right
+
+
+def _intake_mapping_has_only_string_keys(mapping: dict[Any, Any]) -> bool:
+    return all(type(key) is str and _intake_utf8_text(key) for key in mapping)
+
+
+def _intake_unexpected_mapping_keys(mapping: dict[Any, Any], allowed: set[str]) -> list[str]:
+    unexpected = [
+        key if is_safe_visible_text(key) else "<invalid-text>"
+        for key in mapping
+        if type(key) is str and key not in allowed
+    ]
+    if any(type(key) is not str for key in mapping):
+        unexpected.append("<non-string>")
+    return sorted(unexpected)
+
+
+def _intake_utf8_text(value: Any) -> bool:
+    if type(value) is not str:
+        return False
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
+def _intake_identifier_text(value: Any) -> bool:
+    return _intake_utf8_text(value) and value == value.strip() and is_safe_visible_text(value)
+
+
+def _intake_unit_text(value: Any) -> bool:
+    return type(value) is str and value == value.strip() and is_safe_visible_text(value)
+
+
+def _intake_error(reason: str) -> str:
+    return f"{_INTAKE_PREFIX} {reason}"
 
 
 def render_palette_gather_preview(
@@ -444,6 +946,7 @@ def validate_palette_gather_delta(
         errors.append(f"gather delta must include events[].payload.palette_id {palette_id}")
     if candidate and candidate["status"] != "available" and delta.get("upsert_entities"):
         errors.append(f"palette candidate {palette_id} is {candidate['status']} and cannot create gathered output")
+    errors.extend(_validate_gather_intake(conn, delta))
     return ActionValidationResult(errors=tuple(errors), warnings=tuple(warnings))
 
 

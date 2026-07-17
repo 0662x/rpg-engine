@@ -901,6 +901,48 @@ class ProgressAccessContractTests(unittest.TestCase):
         )
         self.assertTrue(any("$.upsert_entities[0]" in item for item in disguised_clock_schema_errors), disguised_clock_schema_errors)
 
+    def test_progress_payload_scan_fails_closed_on_excessive_depth_or_cycle(self) -> None:
+        payload: dict[str, object] = {"progress_id": "progress:quest", "delta": 1}
+        for _ in range(66):
+            payload = {"nested": payload}
+        deep_errors = validate_delta_schema(
+            {
+                "user_text": "claim progress",
+                "intent": "clock",
+                "summary": "Progress claimed.",
+                "events": [
+                    {
+                        "type": "note",
+                        "title": "Progress",
+                        "summary": "Progress was reviewed.",
+                        "payload": payload,
+                        "source": "test",
+                    }
+                ],
+            }
+        )
+        self.assertIn("$.events[0].payload: nesting exceeds validation limit", deep_errors)
+
+        cycle: dict[str, object] = {}
+        cycle["self"] = cycle
+        cyclic_errors = validate_delta_schema(
+            {
+                "user_text": "review progress",
+                "intent": "clock",
+                "summary": "Progress reviewed.",
+                "events": [
+                    {
+                        "type": "note",
+                        "title": "Progress",
+                        "summary": "Progress was reviewed.",
+                        "payload": cycle,
+                        "source": "test",
+                    }
+                ],
+            }
+        )
+        self.assertIn("$.events[0].payload: cyclic container is not allowed", cyclic_errors)
+
     def test_recipe_tick_clocks_preserves_reason_without_bool_delta_coercion(self) -> None:
         self.assertEqual(
             recipe_tick_clocks(

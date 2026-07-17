@@ -465,6 +465,35 @@ So that read models can fail without corrupting authoritative gameplay facts.
 **Then** 所有写入只针对独立 temporary Save
 **And** source Campaign、formal Save、正式 registry 与 `data/game.sqlite` 事实源保持不变。
 
+### Story 1.10: Intake 语义提交门
+
+作为长期存档的玩家主机，
+我希望 Intake 创建或补录实体的结构化 delta 在提交前核验数量、归属和 payload/upsert 一致性，
+从而使不完整或畸形的 Intake 不能成为 SQLite 事实。
+
+**验收标准：**
+
+**Given** 一个结构化 Intake 请求创建或更新物品
+**When** `player_turn_commit` validation 运行
+**Then** 数量必须为有限正数
+**And** 物品必须恰好具有一个有效的 owner 或 location 归属锚点
+**And** payload 必须与唯一匹配的 `upsert_entities` 更新保持实体、数量、单位和归属一致。
+
+**Given** Intake 包含零数、负数、非有限数量、同时缺失 owner/location、未知或 retired 引用、payload/upsert 不一致、缺失更新或重复更新
+**When** validation 或 commit 被调用
+**Then** 提交必须在任何持久化之前被拒绝，并返回稳定、可断言的 Intake 校验错误
+**And** SQLite、实体、turn、event、`events.jsonl` 与 pending state 均保持不变。
+
+**Given** 一个合法且已经过玩家确认的 Intake delta
+**When** 它通过批准的 `TurnProposal` 提交
+**Then** 只创建或更新一个预期实体，并产生一个预期 turn 与 event
+**And** 保留未被声明修改的 metadata，不改变其他实体或库存。
+
+**Given** 本 Story 的校验加入既有 validation pipeline
+**When** focused 与相邻回归测试运行
+**Then** consumption、craft、combat 与其他合法提交行为不得退化
+**And** 不新增自然语言识别、AI 权威、第三方依赖、测试专用 production API 或正式 Save 写入。
+
 ## Epic 2: 通用 Campaign/Save 世界模型
 
 作者可以用 Campaign Package 定义可替换的游戏世界、实体、关系和进度；Save Package 承载运行事实，同一 Kernel 可服务不同题材。完成后，Campaign/Save 分层、Entity/Relationship/Progress access contract、Content Type / Merge Contract 和通用 extension hooks 能支撑至少两个不同 capability profile 的 Campaign Package。

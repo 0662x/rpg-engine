@@ -253,6 +253,7 @@ def validate_turn_proposal(
 
     validate_delta_source(proposal, errors, confirmations)
     validate_contract_matches_intent(proposal, errors)
+    validate_gather_intake_routing(proposal, errors)
     validate_context_id_matches_intent(conn, proposal, errors)
 
     action = proposal.intent.action or ""
@@ -332,6 +333,29 @@ def validate_contract_matches_intent(proposal: TurnProposal, errors: list[str]) 
         errors.append("$.turn_contract.intent.action: does not match proposal intent")
     if proposal.turn_contract.validation_profile != "player_turn_commit" and proposal.delta_source != "maintenance_delta":
         errors.append("$.turn_contract.validation_profile: player turn proposal requires player_turn_commit")
+
+
+def validate_gather_intake_routing(proposal: TurnProposal, errors: list[str]) -> None:
+    if type(proposal.delta) is not dict:
+        return
+    events = proposal.delta.get("events")
+    if type(events) is not list:
+        return
+    has_direct_intake = any(
+        type(event) is dict
+        and type(event.get("payload")) is dict
+        and (
+            event.get("type") == "gather"
+            and "output_entity_id" in event["payload"]
+            or "output_quantity" in event["payload"]
+            or "output_unit" in event["payload"]
+        )
+        for event in events
+    )
+    if has_direct_intake and (
+        proposal.intent.action != "gather" or proposal.delta.get("intent") != "gather"
+    ):
+        errors.append("gather intake: direct Intake declaration requires gather resolver")
 
 
 def proposal_caller_view(proposal: TurnProposal) -> str:

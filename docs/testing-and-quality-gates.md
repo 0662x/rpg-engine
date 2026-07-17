@@ -173,6 +173,28 @@ aliases 保留、额外库存 upsert 拒绝、validator 输入不变性，以及
 anchor，并保持 SQLite 逻辑事实、库存、turn/event 与 JSONL 不变；replay 必须证明不重入 validation/commit。
 所有写入只允许发生在 temporary Save，source Campaign、formal current Save 与正式 registry 必须保持不变。
 
+Gather Intake 语义提交的 P0 gate：
+
+```bash
+python3 -m pytest -q \
+  tests/test_gather_intake_validation.py \
+  tests/test_gather_intake_commit.py \
+  tests/test_current_native_consumption_craft_deltas.py \
+  tests/test_routine_consumption_validation.py \
+  tests/test_routine_consumption_save_manager.py \
+  tests/test_palette_governance.py \
+  tests/test_maintenance_tooling_coverage.py::ActionResolverCombinationCoverageTests::test_combat_resolver_ready_blocked_and_delta_validation_paths
+```
+
+该 gate 必须覆盖 direct output trigger、unique event/upsert、finite-positive quantity、owner/location
+exact-ID 与 retired 拒绝、payload/upsert ID/quantity/unit/ownership 对齐、existing-item metadata/aliases
+保留，以及真实 `GMRuntime.commit_turn` 和 `SaveManager.player_confirm`。非法输入必须证明 SQLite 事实、
+库存、turn/event、JSONL、pending action/clarification、claim/receipt 与 backup 最终不变；合法玩家确认只新增
+或更新一个预期 item，并精确新增一个 turn/event。相邻 positive controls 必须继续覆盖 routine consumption、
+craft、combat、普通 gather draft marker 与 palette gather validation。所有写测试只使用独立 temporary Save；
+现有 Iteration 3 rebaseline fixtures 只作为其所属 rebaseline 工作树中的额外 acceptance evidence；上述
+canonical gate 在 Story-only clean checkout 中必须完全由 tracked tests 自包含，不得依赖未提交 helper。
+
 AI intent / platform / SaveManager 高风险 cluster：
 
 ```bash

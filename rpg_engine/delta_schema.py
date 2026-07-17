@@ -334,6 +334,8 @@ def validate_progress_event_claims(
     for index, event in enumerate(events):
         claim = _event_progress_claim(event, clock_names) if isinstance(event, dict) else _empty_progress_claim()
         event_claims.append(claim)
+        if claim["scan_error"]:
+            errors.append(f"$.events[{index}].payload: {claim['scan_error']}")
         if isinstance(event, dict) and _progress_claim_needs_structured_tick(claim, ticked_clock_ids):
             errors.append(f"$.events[{index}]: progress update event requires structured tick_clocks")
     _validate_tick_evidence(errors, tick_clocks, event_claims)
@@ -355,7 +357,19 @@ def _ticked_clock_ids(tick_clocks: Any) -> set[str]:
 
 
 def _empty_progress_claim() -> dict[str, Any]:
-    return {"claims_update": False, "has_update_signal": False, "clock_ids": set(), "unbound_progress_ids": set()}
+    return {
+        "claims_update": False,
+        "has_update_signal": False,
+        "clock_ids": set(),
+        "unbound_progress_ids": set(),
+        "scan_error": None,
+    }
+
+
+def _invalid_progress_claim(reason: str) -> dict[str, Any]:
+    claim = _empty_progress_claim()
+    claim["scan_error"] = reason
+    return claim
 
 
 def _top_level_progress_claim(delta: dict[str, Any], clock_names: dict[str, str]) -> dict[str, Any]:
@@ -378,6 +392,7 @@ def _event_progress_claim(event: dict[str, Any], clock_names: dict[str, str]) ->
         ),
         "clock_ids": text_claim["clock_ids"] | payload_claim["clock_ids"],
         "unbound_progress_ids": text_claim["unbound_progress_ids"] | payload_claim["unbound_progress_ids"],
+        "scan_error": payload_claim["scan_error"],
     }
 
 
@@ -397,28 +412,67 @@ def _text_progress_claim(text: str, clock_names: dict[str, str]) -> dict[str, An
         "has_update_signal": has_update_verb,
         "clock_ids": clock_ids | clock_name_ids,
         "unbound_progress_ids": progress_ids,
+        "scan_error": None,
     }
 
 
-def _payload_progress_claim(payload: Any, clock_names: dict[str, str]) -> dict[str, Any]:
+def _payload_progress_claim(
+    payload: Any,
+    clock_names: dict[str, str],
+    *,
+    _active_ids: set[int] | None = None,
+    _depth: int = 0,
+) -> dict[str, Any]:
+    if _depth > 64:
+        return _invalid_progress_claim("nesting exceeds validation limit")
+    if isinstance(payload, (dict, list)):
+        active_ids = _active_ids if _active_ids is not None else set()
+        payload_id = id(payload)
+        if payload_id in active_ids:
+            return _invalid_progress_claim("cyclic container is not allowed")
+        active_ids.add(payload_id)
+        try:
+            return _payload_progress_claim_container(
+                payload,
+                clock_names,
+                _active_ids=active_ids,
+                _depth=_depth,
+            )
+        finally:
+            active_ids.remove(payload_id)
+    if isinstance(payload, str):
+        return _text_progress_claim(payload, clock_names)
+    return _empty_progress_claim()
+
+
+def _payload_progress_claim_container(
+    payload: dict[Any, Any] | list[Any],
+    clock_names: dict[str, str],
+    *,
+    _active_ids: set[int],
+    _depth: int,
+) -> dict[str, Any]:
     if isinstance(payload, list):
         merged = _empty_progress_claim()
         for item in payload:
-            item_claim = _payload_progress_claim(item, clock_names)
+            item_claim = _payload_progress_claim(
+                item,
+                clock_names,
+                _active_ids=_active_ids,
+                _depth=_depth + 1,
+            )
             merged["has_update_signal"] = merged["has_update_signal"] or item_claim["has_update_signal"]
             merged["clock_ids"].update(item_claim["clock_ids"])
             merged["unbound_progress_ids"].update(item_claim["unbound_progress_ids"])
             merged["claims_update"] = merged["claims_update"] or item_claim["claims_update"]
+            merged["scan_error"] = merged["scan_error"] or item_claim["scan_error"]
         merged["claims_update"] = merged["claims_update"] or bool(
             merged["has_update_signal"] and (merged["clock_ids"] or merged["unbound_progress_ids"])
         )
         return merged
-    if isinstance(payload, str):
-        return _text_progress_claim(payload, clock_names)
-    if not isinstance(payload, dict):
-        return _empty_progress_claim()
     clock_ids: set[str] = set()
     progress_ids: set[str] = set()
+    scan_error: str | None = None
     explicit_update = _payload_has_update_signal(payload)
     for key in payload:
         if isinstance(key, str) and is_valid_clock_id(key):
@@ -435,15 +489,22 @@ def _payload_progress_claim(payload: Any, clock_names: dict[str, str]) -> dict[s
     if isinstance(tick_clocks, list):
         clock_ids.update(item["id"] for item in tick_clocks if isinstance(item, dict) and isinstance(item.get("id"), str))
     for value in payload.values():
-        child_claim = _payload_progress_claim(value, clock_names)
+        child_claim = _payload_progress_claim(
+            value,
+            clock_names,
+            _active_ids=_active_ids,
+            _depth=_depth + 1,
+        )
         explicit_update = explicit_update or child_claim["has_update_signal"] or child_claim["claims_update"]
         clock_ids.update(child_claim["clock_ids"])
         progress_ids.update(child_claim["unbound_progress_ids"])
+        scan_error = scan_error or child_claim["scan_error"]
     return {
         "claims_update": bool(explicit_update),
         "has_update_signal": explicit_update,
         "clock_ids": clock_ids,
         "unbound_progress_ids": progress_ids,
+        "scan_error": scan_error,
     }
 
 
