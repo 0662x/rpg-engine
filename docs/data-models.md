@@ -323,6 +323,19 @@ Entity/Relationship/Progress access contract 过滤 hidden/archived/missing targ
 - `read_entity()` / `list_entities()` 默认排除 `status='archived'`，并按 caller view 应用
   visibility filter。player view 不能读取 player-hidden visibility label（`hidden`、`gm`、
   `gm-only`、`gm_only`、`gm only`）的 entity；GM / maintenance view 必须显式选择。
+- Entity read contract 与action intent binding contract不同：读取可以按调用者显式条件保留retired历史，
+  但 `rpg_engine.ai_intent.binder` 只允许当前Save SQLite中normalized `status='active'` 的可见row成为action
+  slot binding。Active exact优先于复用同一name/alias的non-active历史；没有active exact时，visible non-active exact
+  阻断partial/literal，visible non-active partial与active partial冲突也返回generic missing/clarification。Canonical
+  ID、name、alias嵌入hybrid composite时由binder-only SQL先做NFKC/casefold，再按token边界在active partial前判定；
+  短alias不得命中无关单词，短qualified ID也不得命中仍以`-`/`:`延续的长ID；
+  任何多codepoint非Latin letter script的name/alias在连写自然文本中可作canonical substring并覆盖supplementary Han ranges；任意不同letter script相邻时按script boundary识别，纯Latin单词内部仍不得误命中。Canonical identity先NFKD分解，再将Unicode marks与完整Default_Ignorable范围（含U+2065、U+FFF0区段、Plane 14）在两侧统一折叠；单codepoint判定使用folding前identity，因此base+mark仍作多codepoint，control-character safety仍独立生效。项目edge-whitespace集合
+  （含U+200B/U+2060）在匹配前剥离，归一化空输入不得生成空exact/partial pattern；qualified ID continuation包含`.`；
+  normalized-empty不能降级为hybrid literal；`text_or_entity` exact-only仅绑定active exact，active composite ID保留text；
+  resolver按token顺序使用首个exact winner，后续active token不能覆盖更早的non-active winner；仅在该阶段未命中时，token partial/body/FTS阶段任一visible non-active命中都必须阻断，不能被同阶段active排序winner遮蔽；含未配对UTF-16 surrogate的外部slot必须在SQLite前invalid/blocked。共享token/FTS tokenizer与binder共用NFKD后mark/完整Default_Ignorable折叠，不能从普通单词内部重新制造短alias token或FTS历史命中。Binder及shared resolver exact-token ID suffix、partial/body中的 `%`、`_`、`!` 是字面输入，
+  不是SQL pattern，且partial resolver的过滤与排序CASE使用相同ESCAPE语义。Candidate、manifest、cache或free-text fallback都不能覆盖这些次序。PLAYER_VIEW 的entity、clock或
+  world-setting subtype hidden/GM-only row必须先被visibility排除；hybrid slot将该输入与absent一样视为literal，不创建
+  entity binding或读取hidden事实。
 - Clock subtype 还必须检查 `clocks.visibility`。即使 `entities.visibility` 不是 hidden，
   `clocks.visibility` 是 player-hidden label 的 clock 也不能通过 player view access contract 读取。
 - `validate_delta_entity_references()` 校验 runtime delta 中的 entity references；引用必须已存在，

@@ -345,6 +345,35 @@ trace，不能提升 authority。Slot gate 还必须逐 action 锁定 required/g
 registry、confirmation/visibility/no-mutation，并以 `action.slot.field` 报告 parity 失败。Story 6.3 只关闭本仓
 slot ownership/parity design debt；Hermes reconnect/next-model-turn/E2E 仍不由本 gate 代替。
 
+Retired/archived entity action binding的P0 gate：
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q \
+  tests/test_retired_entity_binding.py \
+  tests/test_ai_intent.py \
+  tests/test_action_slot_contract.py \
+  tests/test_current_native_player_turn.py \
+  -p no:cacheprovider
+```
+
+该gate必须覆盖当前temporary Save SQLite中的active-only action binding、canonical ID/name/alias与partial、
+retired/archived/unknown/空status、NFKC/边缘空白归一化、active exact胜过同alias或non-active partial历史、无active exact时
+visible non-active exact优先阻断、visible non-active partial与active partial冲突时fail-closed，以及
+`entity_or_text` / `text_or_entity` visible non-active fallback和composite resolver的case/token/body/FTS二次解析阻断。
+Composite canonical reference必须在SQL前经过NFKC/casefold并先于active partial；短alias不得在无关单词内部误伤literal，
+短qualified ID不得把`-`/`:`延续的active长ID当作自身命中；任何多codepoint非Latin letter script的name/alias都必须覆盖连写自然短语，并锁定任意不同letter script与Latin name/alias相邻时的cross-script boundary而不放宽Latin单词内部；NFKD后Mn/Mc/Me与完整Default_Ignorable范围（含U+2065、U+FFF0、Plane 14）必须同时覆盖预组合/视觉等同canonical与单词内部continuation，单codepoint判定使用folding前identity且public control-character safety不得削弱，U+200B/U+2060
+等edge whitespace必须保留active正向绑定，同时锁定共享resolver token/FTS与binder共用完整Default_Ignorable folding、不会从Hangul filler等分隔处重新制造短alias或FTS历史命中；按token顺序的首个exact winner必须决定active放行或non-active阻断，未命中时token partial/body/FTS每阶段任一non-active命中不得被同阶段active winner遮蔽，且归一化空输入不生成`LIKE '%%'`。未配对UTF-16 surrogate必须有direct/public no-pending回归。Supplementary Han与`.` dotted ID
+必须有active/non-active冲突回归；normalized-empty hybrid必须missing，`text_or_entity` exact-only必须保留active composite
+ID为literal，同时继续阻断visible non-active shadow。`%`、`_`、`!` 必须同时以
+纯literal与真实entity文本锁定binder/shared resolver exact-token ID suffix及partial/body-query语义，并锁定partial过滤与排序CASE的ESCAPE一致性；active player-visible positive control保持可用。
+Foreign、stale manifest、ambiguous与missing行为必须保持原contract。Hidden DB-only canary必须使用成对的
+hidden-present/absent 同输入oracle（包含entity、clock及world-setting subtype visibility）：PLAYER_VIEW entity-only两者
+均missing，hybrid两者均只作literal，不形成
+entity binding、facts used或hidden projection。失败不得创建committable pending/claim/receipt或修改Save SQLite、turn/event、projection和
+events.jsonl。`find_entity_candidates()` 的默认query consumer必须有回归证明binder-only lifecycle gate未把
+共享query/read无条件改成active-only。测试不得依赖Iteration 3未提交rebaseline helper，所有写入只在独立
+temporary Campaign/Save/workspace。
+
 Surface / intent 基线材料：
 
 - `tests/fixtures/intent_router_gold_set.yaml`

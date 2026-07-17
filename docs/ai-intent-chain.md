@@ -65,7 +65,7 @@ flowchart TD
 | Internal AI | 可以看见 external candidate 并复核玩家原文，不能 preview、validate、confirm 或 commit。 |
 | Deterministic rules | 提供 fallback、risk、binding 线索和可审计规则候选，不是开放自然语言的唯一裁判。 |
 | Arbiter | 比较 external / internal / rules，决定 accept、fallback、clarify 或 block。 |
-| Binder | 把 slots 绑定到玩家可见实体、地点、物品或行动参数。 |
+| Binder | 从当前 Save SQLite 把 slots 绑定到 active、玩家可见的实体、地点、物品或行动参数。 |
 | Resolver / preview | 生成尚未发生的预演和 `TurnProposal`。 |
 | Validation / commit | 校验并写入事实。普通玩家路径只能由 `player_confirm()` 进入。 |
 | Platform sidecar | 只做消息归一化、session gate、prewarm enqueue 和被动身份转发。 |
@@ -315,6 +315,32 @@ Canonical slot contract 位于 `rpg_engine/actions/slot_contract.py`：九个 bu
 binding/allowed entity types、AI-fillable、confirmation 与 requirement-group rule。`random_table` 的
 `table|dice` exactly-one 和 `routine` 的 source-user-text completeness fallback 均在该 group contract 中；binder
 不再按 action 名维护特例。`rpg_engine/ai_intent/slot_contract.py` 只保留派生只读 compatibility view。
+
+Action entity binding 的 lifecycle gate 与普通 entity query/read语义分离。Binder每次只信任caller绑定的当前
+Save SQLite connection，并以NFKC/边缘空白归一化后的 `status='active'` 作为bindable条件；caller view
+中的active exact是权威赢家，即使历史non-active row复用了同一name/alias；没有active exact时，可见non-active exact
+必须先于任何partial/literal fallback阻断，visible non-active partial与active partial冲突也必须fail closed。Retired、
+archived、unknown或空status的canonical ID/name/alias即使嵌在hybrid composite文本中，也不能被resolver二次解析后
+形成ready proposal：binder-only匹配在SQL前统一做NFKC/casefold，canonical composite按token/phrase边界匹配，避免短alias
+命中普通Latin单词内部或短qualified ID命中仍在延续的`-`/`:`长ID；任何多codepoint非Latin letter script的name/alias
+都在连写自然短语中作为canonical substring识别，并覆盖supplementary Han ranges。任意不同Unicode letter script
+与Latin等分词脚本相邻时构成script boundary，因此
+`前往Old Bridge附近`仍能识别其中的canonical英文name/alias，但纯Latin单词内部继续保持token边界保护。
+Canonical identity先做NFKD canonical decomposition，再对两侧统一折叠Unicode marks及完整Default_Ignorable范围（含Cf、CGJ、Hangul filler、U+2065、U+FFF0区段与Plane 14），
+既阻断视觉等同的non-active引用，也把`ore◌̸work`保留为单一`orework` token，避免短alias误触发shadow。
+单codepoint非Latin name/alias只参与exact；该判定使用folding前canonical identity，因此`का`等base+mark仍作为多codepoint composite处理。
+共享resolver的token/FTS tokenizer与binder共用同一NFKD后mark/完整Default_Ignorable折叠（包括Hangul filler），preview不得重新把`ore◌̸work`拆成retired短alias或从FTS复活历史事实。
+NFKC后使用项目统一edge-whitespace集合
+剥离U+200B/U+2060等格式边缘字符；归一化后为空必须保持missing，不能形成空exact或`LIKE '%%'`。
+Qualified ID continuation与实际grammar一致包含`.`，composite内唯一active dotted ID可直接形成canonical binding。
+`text_or_entity` 的exact-only合同仍只允许active exact绑定；active composite ID必须保留literal，但visible non-active
+exact/partial/composite shadow继续fail closed。
+最终shadow镜像resolver阶段次序：按resolver token顺序的首个exact winner决定active放行或non-active阻断，后续active token不能覆盖更早的non-active winner；仅在exact-token阶段未命中时，token partial、body与FTS阶段的任一visible non-active命中才阻断，且同一阶段内不能让排序更高的active winner遮蔽历史row。含未配对UTF-16 surrogate的外部slot在进入SQLite前直接invalid/blocked，不进入clarification或pending。Binder与shared resolver的exact-token ID suffix、partial/body SQL都把输入中的
+`%`、`_` 与 `!` 作为字面字符，而不是caller提供的 `LIKE` pattern；partial resolver的WHERE与排序CASE必须使用同一ESCAPE语义。Entity、clock与world-setting subtype visibility
+必须组合后再做上述查找。
+PLAYER_VIEW 不得用hidden/GM-only row作lifecycle shadow：entity-only slot中hidden与absent同样missing，hybrid slot中
+hidden与absent同样只作literal text，不产生entity binding、facts used或hidden projection。默认query lookup仍沿用自己的
+non-archived read contract；manifest、candidate、cache或alias row本身都不能覆盖SQLite lifecycle。
 
 Story 6.3 关闭的是 resolver/binder/manifest/prompt 间的 slot ownership/parity design debt；没有证明迁移前已发生
 玩家可见 runtime defect，也没有提前实现 Stories 6.4–6.8。为让公开合同精确表达 exactly-one 与 source-text

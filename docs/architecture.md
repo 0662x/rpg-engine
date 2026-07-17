@@ -52,11 +52,21 @@ default exposure、normal-play status、authority gate 和 forbidden bypasses。
 4. `ai_intent/router.py` 的 `AIIntentRouter` 按 mode 编排 candidate collection、可选内部复核、
    arbitration、槽位绑定、route adoption 和 trace：enabled + external 保持双候选仲裁；
    `off` + valid external 采用 `external_primary`；`off` + no external 保持 deterministic fallback。
-5. `GMRuntime.preview_intent()` / `GMRuntime.preview_action()` 基于动作解析器生成可确认预览。
-6. ready 结果写成 pending `TurnProposal`，此时还没有提交状态变化。
-7. `SaveManager.player_confirm()` 校验 pending proposal、平台 session hash、确认状态和来源。
-8. `GMRuntime.commit_turn()` 接收 approved `TurnProposal`，再进入 validation / commit。
-9. `commit_service.py`、`unit_of_work.py`、`write_guard.py` 写入 SQLite、事件和投影材料。
+5. Canonical binder用当前Save SQLite重新核验entity lifecycle与caller visibility；只有normalized
+   `status='active'` 的可见row可进入action binding。Active exact先于同名/同alias历史row胜出；若没有active exact，
+   visible non-active exact先于partial/literal阻断，non-active partial与active partial冲突也fail closed，hybrid composite
+   的canonical phrase在active partial前按NFKC/casefold token边界阻断，qualified ID将`-`/`:`视为token continuation；
+   任何多codepoint非Latin letter script的name/alias（含supplementary Han ranges）都在连写自然短语中按canonical substring识别；任意不同letter script之间的转换也是canonical boundary，纯Latin单词内部仍受token保护。Canonical identity先NFKD分解，再将Unicode marks与完整Default_Ignorable范围（含U+2065、U+FFF0区段、Plane 14）在两侧统一折叠；单codepoint判定使用folding前identity，因此base+mark仍作多codepoint，public control-character safety gate仍独立生效。U+200B/U+2060等项目
+   edge whitespace先被剥离且归一化空输入不进入SQL；qualified ID continuation包含实际grammar允许的`.`；
+   normalized-empty在entity与hybrid slot中都返回missing，`text_or_entity` exact-only不采用active contained-ID binding；
+   resolver token/body/FTS也不能二次复活non-active引用；binder镜像resolver阶段次序，按token顺序的首个exact winner决定active放行或non-active阻断，之后的token partial/body/FTS阶段逐阶段检查任一visible non-active命中，同阶段active排序winner不能遮蔽它。未配对UTF-16 surrogate在SQLite前invalid/blocked。共享token/FTS tokenizer与binder共用NFKD后mark/完整Default_Ignorable折叠；exact-token ID suffix及partial/body LIKE转义`%`/`_`/`!`，partial排序CASE也使用相同ESCAPE语义，避免preview重新制造短alias、FTS历史命中或通配符排序退化。
+   Shared partial lookup将 `%`、`_`、`!` 解释为字面字符，entity/clock/world-setting subtype visibility一并生效。
+   PLAYER_VIEW 的hidden row不参与lifecycle shadow，因此hybrid literal fallback与真正absent保持同形，且不形成entity binding。
+6. `GMRuntime.preview_intent()` / `GMRuntime.preview_action()` 基于动作解析器生成可确认预览。
+7. ready 结果写成 pending `TurnProposal`，此时还没有提交状态变化。
+8. `SaveManager.player_confirm()` 校验 pending proposal、平台 session hash、确认状态和来源。
+9. `GMRuntime.commit_turn()` 接收 approved `TurnProposal`，再进入 validation / commit。
+10. `commit_service.py`、`unit_of_work.py`、`write_guard.py` 写入 SQLite、事件和投影材料。
 
 `player_confirm()` 在 SaveManager owner 内用可在进程退出时自动释放的 workspace file lock 串行化
 pending 的 read → identity/payload validation → commit/replay classification → receipt → clear。SQLite
@@ -268,7 +278,8 @@ create/status/allowed transitions/apply/revert/batch/report 仍完整属于 Stor
 - `ai_intent/adapters.py`：外部候选适配。
 - `ai_intent/arbiter.py`：候选裁决。
 - `ai_intent/binder.py`：只从 active registry 的 resolved slot contract 读取 accepted slots、alias、binding type、
-  required/group cardinality 与 confirmation policy，再用现有 player-view SQL 完成绑定。
+  required/group cardinality 与 confirmation policy，再用当前Save SQLite的active-only lifecycle与player-view SQL
+  完成action binding；普通query/read仍使用各自non-archived access contract。
 - `ai_intent/slot_contract.py`：旧 import path 的派生只读 adapter/re-export，不再拥有按 action 手工维护的 table。
 - `ai_intent/internal_review.py`：内部复核。
 - `ai_intent/risk.py`：风险判断。

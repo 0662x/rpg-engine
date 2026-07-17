@@ -55,3 +55,15 @@
 - 大型 routine consumption delta 的每个非目标 upsert 当前会执行一次 item-existence SQL 查询；批量化需要独立 cardinality/performance 规划，不扩大本次 P0 语义正确性范围。
 - 权威 SQLite 中既有的损坏 `details_json` / `properties_json` 会在 consumption metadata 读取时抛出原生 JSON decode error；数据库损坏诊断与稳定 corruption error contract 属于既有健康检查/恢复范围。
 - hostile `list` subclass 用作 `events` / `upsert_entities` 时，完整 pipeline 会在 routine resolver 之前的通用 `proposal -> delta_schema` 迭代中抛异常。局部 exact-list routine guard 不能修复真实路径；需要独立规划全 action 共用的 non-canonical Python container fail-closed 边界。
+
+## Deferred from: code review of 6-9-retired-entity-binding-fail-closed (2026-07-17)
+
+- Pending proposal 创建后、玩家确认前，若已绑定实体转为 retired/archived/unknown，现有 confirmation/commit 路径不重新执行 lifecycle binding。这是本 Story 修复之前已存在的 pending→commit freshness 策略缺口；批准的 Story 6.9 明确以 binder/public ingress 在 committable pending 前 fail-closed 为边界，且禁止将修复扩大到 SaveManager/confirmation owner，因此需要独立规划。
+
+## Deferred from: third code review of 6-9-retired-entity-binding-fail-closed (2026-07-18)
+
+- Binder 连接完成 active-only 绑定后，resolver/preview 重开 SQLite connection 前若有并发 lifecycle 变更，尚无跨阶段 snapshot/revalidation。该 TOCTOU 是既有 binder→preview→pending→confirm freshness 设计缺口；需要与已记录的 pending→confirm 重验统一规划，而不在本 Story 引入跨 owner 持久化或测试钩子。
+
+## Deferred from: eleventh code review of 6-9-retired-entity-binding-fail-closed (2026-07-18)
+
+- `SaveManager.player_turn()` 在解析新turn前无条件清除既有pending，并在被binder拒绝后仍更新workspace registry `last_played_at`。用户选择保持Story 6.9 binder-only边界：本Story只保证拒绝不创建新的committable pending或游戏事实；既有pending的保留、显式compare-and-supersede、身份/session冲突与活动元数据语义由Story 6.5统一实现。

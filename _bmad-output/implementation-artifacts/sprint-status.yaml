@@ -111,4 +111,5 @@ development_status:
   6-6-explicit-preflight-consumer-purpose: backlog
   6-7-safe-intent-audit-reconstruction-summary: backlog
   6-8-rpg-engine-compatibility-fixture-for-hermes-stdio-e2e: backlog
+  6-9-retired-entity-binding-fail-closed: done
   epic-6-retrospective: optional

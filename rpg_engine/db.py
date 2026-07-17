@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+import unicodedata
 from datetime import datetime, timezone
 from typing import Any
 
@@ -714,7 +715,7 @@ def world_setting_entity_join_and_clause(
 
 
 def query_tokens(text: str) -> list[str]:
-    tokens = re.findall(r"[A-Za-z0-9_:-]+|[\u4e00-\u9fff]+", str(text))
+    tokens = re.findall(r"[A-Za-z0-9_:-]+|[\u4e00-\u9fff]+", _normalize_query_token_text(text))
     tokens = [token.strip() for token in tokens if token.strip()]
     return sorted(dict.fromkeys(tokens), key=lambda item: (-len(item), item))
 
@@ -724,13 +725,47 @@ def looks_like_qualified_entity_id(text: str) -> bool:
 
 
 def sanitize_fts_query(text: str) -> str:
-    tokens = re.findall(r"[A-Za-z0-9_]+|[\u4e00-\u9fff]+", str(text).replace("-", " "))
+    normalized = _normalize_query_token_text(text).replace("-", " ")
+    tokens = re.findall(r"[A-Za-z0-9_]+|[\u4e00-\u9fff]+", normalized)
     safe_tokens = []
     for token in tokens[:8]:
         token = token.strip().replace('"', '""')
         if token:
             safe_tokens.append(f'"{token}"')
     return " OR ".join(safe_tokens)
+
+
+def _normalize_query_token_text(text: str) -> str:
+    normalized = unicodedata.normalize("NFKD", str(text))
+    return "".join(
+        char
+        for char in normalized
+        if not unicodedata.category(char).startswith("M") and not _is_default_ignorable_query_character(char)
+    )
+
+
+def _is_default_ignorable_query_character(value: str) -> bool:
+    codepoint = ord(value)
+    return (
+        unicodedata.category(value) == "Cf"
+        or value == "\u034f"
+        or codepoint in {0x115F, 0x1160, 0x3164, 0xFFA0}
+        or 0x17B4 <= codepoint <= 0x17B5
+        or 0x180B <= codepoint <= 0x180F
+        or 0x200B <= codepoint <= 0x200F
+        or 0x202A <= codepoint <= 0x202E
+        or 0x2060 <= codepoint <= 0x206F
+        or 0xFE00 <= codepoint <= 0xFE0F
+        or 0xFFF0 <= codepoint <= 0xFFFB
+        or 0x1BCA0 <= codepoint <= 0x1BCA3
+        or 0x1D173 <= codepoint <= 0x1D17A
+        or 0xE0000 <= codepoint <= 0xE0FFF
+        or 0xE0100 <= codepoint <= 0xE01EF
+    )
+
+
+def _escape_query_like_literal(value: str) -> str:
+    return value.replace("!", "!!").replace("%", "!%").replace("_", "!_")
 
 
 def should_search_body(term: str) -> bool:
@@ -770,6 +805,7 @@ def entity_type_priority_sql(alias: str = "e") -> str:
 
 def resolve_entity_exact_token(conn: sqlite3.Connection, token: str, *, view: str = PLAYER_VIEW) -> sqlite3.Row | None:
     ensure_visibility_sql_functions(conn)
+    escaped_token = _escape_query_like_literal(token)
     view = normalize_visibility_view(view)
     visibility_clause = entity_visibility_sql(view, "e")
     subtype_visibility_clause = entity_subtype_visibility_sql(view, "e", "c")
@@ -792,14 +828,14 @@ def resolve_entity_exact_token(conn: sqlite3.Connection, token: str, *, view: st
           {world_setting_visibility_clause}
           and (
             lower(e.id) = lower(?)
-            or lower(e.id) like '%:' || lower(?)
+            or lower(e.id) like '%:' || lower(?) escape '!'
             or e.name = ?
             or a.alias = ?
           )
         order by
           case
             when lower(e.id) = lower(?) then 0
-            when lower(e.id) like '%:' || lower(?) then 1
+            when lower(e.id) like '%:' || lower(?) escape '!' then 1
             when e.name = ? then 2
             when a.alias = ? then 3
             else 9
@@ -808,7 +844,7 @@ def resolve_entity_exact_token(conn: sqlite3.Connection, token: str, *, view: st
           e.id
         limit 1
         """,
-        (token, token, token, token, token, token, token, token),
+        (token, escaped_token, token, token, token, escaped_token, token, token),
     ).fetchone()
 
 
@@ -826,9 +862,10 @@ def resolve_entity_partial_token(conn: sqlite3.Connection, token: str, *, view: 
         entity_alias="e",
         setting_alias="ws",
     )
-    like = f"%{token}%"
-    suffix_like = f"%:{token}"
-    prefix_like = f"{token}%"
+    escaped_token = _escape_query_like_literal(token)
+    like = f"%{escaped_token}%"
+    suffix_like = f"%:{escaped_token}"
+    prefix_like = f"{escaped_token}%"
     rows = conn.execute(
         f"""
         select e.*
@@ -841,19 +878,19 @@ def resolve_entity_partial_token(conn: sqlite3.Connection, token: str, *, view: 
           {subtype_visibility_clause}
           {world_setting_visibility_clause}
           and (
-            lower(e.id) like lower(?)
-            or lower(e.id) like lower(?)
-            or e.name like ?
-            or a.alias like ?
+            lower(e.id) like lower(?) escape '!'
+            or lower(e.id) like lower(?) escape '!'
+            or e.name like ? escape '!'
+            or a.alias like ? escape '!'
           )
         order by
           case
-            when lower(e.id) like lower(?) then 0
-            when e.name like ? then 1
-            when a.alias like ? then 2
-            when e.name like ? then 3
-            when a.alias like ? then 4
-            when lower(e.id) like lower(?) then 5
+            when lower(e.id) like lower(?) escape '!' then 0
+            when e.name like ? escape '!' then 1
+            when a.alias like ? escape '!' then 2
+            when e.name like ? escape '!' then 3
+            when a.alias like ? escape '!' then 4
+            when lower(e.id) like lower(?) escape '!' then 5
             else 9
           end,
           {entity_type_priority_sql("e")},
@@ -884,7 +921,7 @@ def resolve_entity_body_match(conn: sqlite3.Connection, term: str, *, view: str 
         entity_alias="e",
         setting_alias="ws",
     )
-    like = f"%{term}%"
+    like = f"%{_escape_query_like_literal(term)}%"
     rows = conn.execute(
         f"""
         select e.*
@@ -895,7 +932,7 @@ def resolve_entity_body_match(conn: sqlite3.Connection, term: str, *, view: str 
           {visibility_clause}
           {subtype_visibility_clause}
           {world_setting_visibility_clause}
-          and (e.summary like ? or e.details_json like ?)
+          and (e.summary like ? escape '!' or e.details_json like ? escape '!')
         order by
           {entity_type_priority_sql("e")},
           length(e.summary),
