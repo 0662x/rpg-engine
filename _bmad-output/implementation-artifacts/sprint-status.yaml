@@ -1,5 +1,5 @@
 # generated: 2026-07-04T23:27:52+1000
-# last_updated: 2026-07-16
+# last_updated: 2026-07-18
 # project: RPG Engine
 # project_key: NOKEY
 # tracking_system: file-system
@@ -41,7 +41,7 @@
 # - Retrospective appends its action items to action_items; sprint-status surfaces open ones
 
 generated: 2026-07-04T23:27:52+1000
-last_updated: 2026-07-16
+last_updated: 2026-07-18
 project: RPG Engine
 project_key: NOKEY
 tracking_system: file-system
@@ -78,6 +78,7 @@ development_status:
   3-5-long-term-memory-summary-provenance: done
   3-6-context-budget-and-quality-diagnostics: done
   3-7-跨-campaign-的-context-与玩家安全回路集成冒烟测试: done
+  3-8-player-safe-query-聚合完整性: done
   epic-3-retrospective: optional
 
   epic-4: in-progress

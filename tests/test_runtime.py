@@ -1332,12 +1332,23 @@ class GMRuntimeTests(unittest.TestCase):
 
             scene = runtime.query("scene")
             entity = runtime.query("entity", "Traveler")
+            collection = runtime.query(
+                "entity",
+                structured={
+                    "entity_type": "character",
+                    "scope": "all",
+                    "aggregation": "count",
+                },
+            )
             context = runtime.query("context", "查看周围")
             context_json = json.loads(context.to_json_text())
 
             self.assertIn("Start", scene.text)
             self.assertNotIn("找 Traveler 谈谈", scene.text)
             self.assertIn("Traveler", entity.text)
+            self.assertEqual(collection.data["contract"]["id"], "PlayerSafeEntityCollectionResult")
+            self.assertGreaterEqual(collection.data["member_count"], 1)
+            self.assertTrue(collection.data["authority"]["read_only"])
             self.assertEqual(context_json["context"]["contract"]["id"], "ContextBuildResult")
             self.assertEqual(context_json["context"]["scope"]["mode"], "query")
             self.assertIn("Context Packet", context_json["context"]["markdown"])

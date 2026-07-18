@@ -583,6 +583,35 @@ memory material 不承载独立 hidden 权限；hidden / GM-only 事实必须通
 GM-only 自由文本，必须先新增结构化 visibility / sensitivity 字段和迁移，不能静默混入当前 player-safe
 context 或 prompt。
 
+## Player-Safe Entity Collection Query
+
+`rpg_engine.query_collection` 定义 `PlayerSafeEntityCollectionResult` v1，只承载当前 Save SQLite 的
+结构化、只读集合查询；它不是新事实表、投影、search index、自然语言 parser 或 AI authority。
+`GMRuntime.query(kind="entity", structured=request, view="player")` 是 Runtime facade，旧 `query_text`
+单实体路径保持兼容。
+
+Request 固定字段：
+
+| 字段 | 语义 |
+| --- | --- |
+| `entity_type` | 必填 NFKC/casefold type；不从自然语言推断。 |
+| `category` | 可选 typed category；当前 `item` 使用 `items.category` exact normalized match。 |
+| `scope` | `all`、`owner` 或 `location`；`all` 即 current-Save world。 |
+| `scope_id` | owner/location 必填 canonical exact ID；all 禁止。不会隐式采用当前玩家或当前地点。 |
+| `aggregation` | `none`、`count` 或 `quantity`；quantity 按 exact unit 分组。 |
+
+Result 固定输出 contract/status/view/scope/entity type/category/aggregation、完整 `members`、
+`member_count`、quantity `totals`、provenance 与 read-only authority。Member 只有 SQLite 可见事实中的
+`id`、`name`、`quantity`、`unit`；totals 只有 `unit`、finite `quantity`。`null` quantity 保留在成员中但
+不进入 total；`null` 与空字符串 unit 不合并，NaN/Infinity 不进入 JSON。Empty、hidden-only 与不可见、
+不存在或 non-active scope anchor 均返回同形 empty allowlist，不回显 scope ID 或 omission/debug evidence。
+
+Collection SQL 显式读取 `main.entities` 与 typed side tables，先按 active status、scope 和 player
+entity/subtype/world-setting visibility 过滤，再以 canonical `entities.id` 去重和聚合。Alias/FTS/fuzzy
+resolver 不决定 membership。该 helper 不写 SQLite/schema、events、pending、registry、projection、JSONL
+或 Save tree，也不取得 caller transaction ownership。Structured contract 只允许 player view；GM/maintenance
+调用固定拒绝，避免无规划的 hidden aggregation surface。
+
 ## Turn And Event Model
 
 ### Turn

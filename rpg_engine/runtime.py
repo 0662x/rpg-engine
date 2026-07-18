@@ -61,11 +61,12 @@ from .preflight_cache import (
 from .proposal import TurnProposal, intent_context_id_from_intent, preflight_id_from_intent, turn_proposal_from_dict
 from .redaction import redact_player_hidden_material
 from .render import render_entity, render_scene
+from .query_collection import PLAYER_ONLY_ERROR, collect_entity_query, render_entity_collection
 from .ux import PlanStep, RepairOption, UxStatus
 from .validation_issues import issues_from_messages
 from .validators import run_checks
 from .validation_pipeline import run_validation_pipeline
-from .visibility import can_read_hidden, normalize_visibility_view
+from .visibility import PLAYER_VIEW, can_read_hidden, normalize_visibility_label, normalize_visibility_view
 from .write_guard import add_generated_write_guards
 
 
@@ -133,7 +134,7 @@ class QueryResult:
         }
 
     def to_json_text(self) -> str:
-        return json.dumps(self.to_dict(), ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+        return json.dumps(self.to_dict(), ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False) + "\n"
 
 
 @dataclass(frozen=True)
@@ -1042,10 +1043,15 @@ class GMRuntime:
         *,
         view: str = "player",
         budget: int | None = None,
+        structured: dict[str, object] | None = None,
     ) -> QueryResult:
         self.require_capability("query")
         normalized_kind = kind.strip().lower()
+        if structured is not None and (type(view) is not str or normalize_visibility_label(view) != PLAYER_VIEW):
+            raise ValueError(PLAYER_ONLY_ERROR)
         normalized_view = normalize_visibility_view(view)
+        if structured is not None and (normalized_kind != "entity" or query_text is not None):
+            raise ValueError("structured entity query request is invalid")
         with connect(self.campaign) as conn:
             if normalized_kind == "scene":
                 text = render_scene(conn, view=normalized_view)
@@ -1056,6 +1062,15 @@ class GMRuntime:
                     data=redact_runtime_value_for_view(conn, {"view": normalized_view}, normalized_view),
                 )
             if normalized_kind == "entity":
+                if structured is not None:
+                    collection = collect_entity_query(conn, structured, view=normalized_view)
+                    data = collection.to_dict()
+                    return QueryResult(
+                        campaign_id=self.campaign.campaign_id,
+                        kind=normalized_kind,
+                        text=render_entity_collection(collection),
+                        data=data,
+                    )
                 if not query_text:
                     raise ValueError("entity query requires query_text")
                 text = render_entity(conn, query_text, view=normalized_view)

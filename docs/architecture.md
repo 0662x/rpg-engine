@@ -116,6 +116,26 @@ hashed platform identity，并在首次 confirm 前写入目标 Save SQLite clai
 profile gate 控制这些能力：默认 profile 只暴露 player-safe 工具，developer、trusted、
 maintenance、admin 才能看到低层工具。
 
+### Player-Safe 结构化集合查询
+
+`rpg_engine.query_collection` 是 `GMRuntime.query(kind="entity", structured=..., view="player")`
+背后的只读 collection/filter/aggregation owner。它与旧 `render_entity()` / `resolve_entity()` 的
+单实体 exact/alias/token/partial/FTS 路径正交：structured request 明确给出 entity type、可选 typed
+category、`all | owner | location` scope、显式 scope ID 与 `none | count | quantity` aggregation；
+Kernel 不从自然语言、单一 fuzzy hit、AI candidate 或 Campaign 专用短语推断集合成员。
+
+`all` 表示当前 Runtime 绑定 Save 的 world scope；`owner` / `location` 必须传 canonical exact ID，
+且 anchor 本身必须 active、player-visible。Collector 只读 `main` SQLite tables，先应用 type/category、
+active status、scope、entity/subtype/world-setting visibility，再按 canonical entity ID 形成稳定成员，最后
+按 exact unit 聚合 finite quantity。Alias 不参与 membership，因此多个 alias/name hit 不会重复计数。
+Hidden、GM-only、non-active、missing/hidden anchor 与其他 Save 的事实都在 aggregation 前排除；hidden-only
+与真正空集合使用相同 empty result，不返回 scope ID、omission reason 或诊断。
+
+该 structured contract 固定为 player-only；GM/maintenance structured collection 稳定拒绝，旧单实体显式
+view 行为不变。Result 只包含安全 allowlist、SQLite provenance 与 read-only authority，不创建 context audit、
+pending、turn、event、projection 或 gameplay fact，也不 commit/rollback/close caller-owned connection。
+CLI、MCP、SaveManager 与 AI intent 不新增平行实现或新权威。
+
 ## 平台 Sidecar 链
 
 `platform_sidecar.py` 负责平台入口门禁、冲突处理和指标。正式玩家动作最终仍应走
