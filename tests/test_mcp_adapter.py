@@ -11,6 +11,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from rpg_engine.game_session import hash_identity
 from rpg_engine.mcp_adapter import (
     AIGMMCPAdapter,
     DEVELOPER_PROFILE,
@@ -1599,6 +1600,25 @@ class MCPAdapterTests(unittest.TestCase):
             self.assertEqual(records[0]["result"]["ok"], False)
             self.assertIn("errors", records[0]["result"])
             self.assertNotIn("error_details", records[0]["result"])
+
+    def test_mcp_player_confirm_audit_hashes_confirmation_session_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            raw_session_id = "player_action:raw-confirmation-secret"
+            adapter = AIGMMCPAdapter(MCPAdapterConfig.from_values(tmp))
+
+            result = adapter.player_confirm(session_id=raw_session_id)
+
+            self.assertFalse(result["ok"], result)
+            audit_path = Path(tmp) / "logs" / "aigm-mcp-audit.jsonl"
+            audit_text = audit_path.read_text(encoding="utf-8")
+            record = json.loads(audit_text)
+            self.assertNotIn(raw_session_id, audit_text)
+            self.assertEqual(
+                record["request"]["session_id"],
+                f"sha256:{hash_identity(raw_session_id)}",
+            )
+            self.assertEqual(record["tool"], "player_confirm")
+            self.assertEqual(record["status"], "error")
 
     def test_mcp_adapter_rejects_absolute_and_escaping_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

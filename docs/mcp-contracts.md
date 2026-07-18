@@ -363,6 +363,66 @@ manifest digest，custom/falsey registry 不得回退 default contract。Consume
 
 普通 `player_turn` 路径还会通过 SaveManager 的 pending action / pending clarification 规则避免确认到旧预演。
 
+## Hermes stdio provider compatibility fixture
+
+RPG Engine 为跨仓 Hermes compatibility CI 提供一个 test-owned、真实 stdio 的稳定 provider 入口：
+
+- launcher/helper：`tests/compatibility/hermes_stdio_provider.py`
+- scripted-model contract：`tests/fixtures/hermes_stdio_compatibility.yaml`
+- 本仓 wire oracle：`tests/test_hermes_stdio_compatibility.py`
+
+使用方必须检出 RPG Engine 仓库并从仓库根运行。`prepare_provider_fixture(empty_temp_root)` 会复制 minimal
+Campaign、在该 temporary workspace 的 registry 中建立 active Save，并返回固定调用现有
+`python -m rpg_engine mcp serve` 的 player-profile launcher；它不新增 production API 或第二套业务规则。
+`stdio_server_parameters(fixture)` 只把该启动描述转为官方 MCP Python SDK 的
+`StdioServerParameters`。subprocess cwd固定为temporary root内不含dotenv的隔离目录，仓库通过`PYTHONPATH`加载；root
+内放置的poison `.env`不得被打开。所有 AI helper 显式为 `off`，test-owned `sitecustomize` guard会以PID-bearing ready
+sentinel证明已加载，拒绝/记录provider进程通过公开`socket`、`socket._socket`或新import/reload的`_socket`/`SocketType`
+发起的DNS、AF_INET/AF_INET6连接与connectionless I/O，并通过builtin/io/`os.open`拒绝记录`.env`读取；AF_UNIX本地
+self-pipe仍可供asyncio teardown使用。该oracle覆盖CPython socket/DNS surface与实际provider路径，不承诺OS级
+syscall/FFI sandbox。运行不需要网络、
+`.env`内容或 API key，并以`PYTHONNOUSERSITE=1`禁用宿主user-site与`usercustomize.py`。
+
+YAML contract `schema_version=1` / `fixture_id=rpg-engine-hermes-stdio-v1` 固定以下可执行顺序：
+
+```text
+manifest_initial
+-> stale_candidate_rejected
+-> manifest_refreshed
+-> player_turn_ready
+-> explicit_player_confirmation
+-> wrong_session_rejected
+-> player_confirm_committed
+-> player_confirm_replayed
+-> safe_audit
+```
+
+每个step都以typed `arguments`声明调用参数，并以bounded `expect`按JSON type和值锁定对应hook的
+scalar/enum/hash/presence值（`0/1`不能冒充boolean，空白不能冒充nonempty）；
+`{$ref: capture.path}`只能引用更早step的非null capture，缺失路径立即fail closed，
+`{$candidate: {generation, manifest, overrides}}`从引用的完整manifest生成新candidate。`stale` 与 `refreshed` 是两个
+内容和类型均由schema v1固定的完整、独立 candidate generation；refresh 必须从第二次 live manifest 的四字段identity
+整体重建 candidate，不能
+原地 patch 旧 object、以override替换canonical candidate字段或回退 legacy unversioned candidate。duplicate YAML key、
+top-level、step arguments/expectation shape、hook ID和hook fields均按`schema_version=1` fail closed；YAML `hooks` 只投影
+allowlisted scalar/enum/presence字段，timestamp、Save ID、raw pending
+session ID、candidate payload和hidden内容不进入跨仓 hook。玩家确认是单独的 `actor=player` step，其typed reference
+再传给两个confirm step；wrong-session也是独立typed step且不能消耗pending。scripted model不能生成确认authority。
+
+当前 MCP `player_confirm` 工具只接收 `session_id`。因此兼容脚本只在必定于pending前失败的stale请求放置
+platform/session-key hash canary；合法 `player_turn` 使用默认MCP player flow，再由独立玩家步骤把返回的
+`session_id`交给confirm。fixture不替Hermes实现tool registration、next-model-turn barrier、reconnect或combined
+release gate；这些生命周期及H1-H4状态全部由Hermes CI持有，不写入RPG Engine sprint。
+
+任何可写验证都必须使用新的empty temporary root。source Campaign、formal current Campaign/Save、正式workspace
+registry、其SQLite/player data按存在性做前后fingerprint；temporary root不得与它们samefile或形成父子路径别名。
+source Campaign始终并入保护集合，caller提供额外保护路径不能替换默认边界；空白formal-path环境变量按未配置处理，
+protected tree内symlink会fail closed。
+stale、wrong-session、confirm、replay及teardown都只能改变temporary workspace。确认前、失败与replay使用全表logical
+SQLite digest（含完整`sqlite_master`及authority PRAGMA）而非只看turn/event count；异常teardown用ready PID与公开SDK
+lifecycle证明child已退出、只出现预期cancellation且正式数据后置指纹仍执行。PID reuse/未来派生进程组属于Hermes
+client lifecycle defer；本fixture不依赖MCP SDK private process handle。
+
 ## Commit 合同
 
 `commit_turn` 是低层写入工具，只在 low-level profile 注册。
@@ -407,6 +467,7 @@ manifest digest，custom/falsey registry 不得回退 default contract。Consume
 安全边界：
 
 - `session_key` 会以 hash 摘要记录。
+- `player_confirm` 的 pending confirmation `session_id` 同样只记录 hash摘要；raw capability token不得进入audit。
 - 长文本和深层结构会截断。
 - denied low-level player-profile calls 的 audit request 会摘要化 raw `delta`、`turn_proposal` /
   proposal payload，并清洗 private reasoning / hidden-fact keys。

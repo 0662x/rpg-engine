@@ -67,3 +67,7 @@
 ## Deferred from: eleventh code review of 6-9-retired-entity-binding-fail-closed (2026-07-18)
 
 - `SaveManager.player_turn()` 在解析新turn前无条件清除既有pending，并在被binder拒绝后仍更新workspace registry `last_played_at`。用户选择保持Story 6.9 binder-only边界：本Story只保证拒绝不创建新的committable pending或游戏事实；既有pending的保留、显式compare-and-supersede、身份/session冲突与活动元数据语义由Story 6.5统一实现。
+
+## Deferred from: code review of 6-8-rpg-engine-compatibility-fixture-for-hermes-stdio-e2e (2026-07-19)
+
+- PID-bearing ready sentinel配合`os.kill(pid, 0)`可证明当前AI-off provider直接子进程已退出，但不能彻底排除极短窗口PID reuse，也不证明未来可能出现的派生进程组。Hermes CI独占client/reconnect lifecycle；在MCP SDK提供稳定public process identity前，本Story不回引private process handle或扩张为Hermes lifecycle gate。

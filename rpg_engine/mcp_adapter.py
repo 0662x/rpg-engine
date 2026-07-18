@@ -1729,6 +1729,7 @@ def mcp_audit_sensitive_terms(request: dict[str, Any]) -> tuple[str, ...]:
     terms = {
         str(request.get("user_text") or "").strip(),
         str(request.get("session_key") or "").strip(),
+        str(request.get("session_id") or "").strip(),
         str(request.get("actor_id") or "").strip(),
         str(request.get("user_id") or "").strip(),
         str(request.get("sender_id") or "").strip(),
@@ -1790,7 +1791,7 @@ def sanitize_for_audit(
         for key, item in value.items():
             normalized_key = str(key)
             audit_key = normalize_audit_key(normalized_key)
-            if audit_key == "session_key":
+            if audit_key in {"session_id", "session_key"}:
                 sanitized[normalized_key] = f"sha256:{hash_identity(str(item or ''))}" if str(item or "").strip() else ""
             elif audit_key in AUDIT_SUMMARIZED_PAYLOAD_KEYS:
                 sanitized[normalized_key] = summarize_sensitive_payload_for_audit(item)

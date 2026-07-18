@@ -1,5 +1,5 @@
 # generated: 2026-07-04T23:27:52+1000
-# last_updated: 2026-07-18
+# last_updated: 2026-07-19
 # project: RPG Engine
 # project_key: NOKEY
 # tracking_system: file-system
@@ -41,7 +41,7 @@
 # - Retrospective appends its action items to action_items; sprint-status surfaces open ones
 
 generated: 2026-07-04T23:27:52+1000
-last_updated: 2026-07-18
+last_updated: 2026-07-19
 project: RPG Engine
 project_key: NOKEY
 tracking_system: file-system
@@ -111,6 +111,6 @@ development_status:
   6-5-explicit-pending-supersede-and-clarification-lifecycle: backlog
   6-6-explicit-preflight-consumer-purpose: backlog
   6-7-safe-intent-audit-reconstruction-summary: backlog
-  6-8-rpg-engine-compatibility-fixture-for-hermes-stdio-e2e: backlog
+  6-8-rpg-engine-compatibility-fixture-for-hermes-stdio-e2e: done
   6-9-retired-entity-binding-fail-closed: done
   epic-6-retrospective: optional

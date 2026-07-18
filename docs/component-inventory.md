@@ -115,6 +115,7 @@
 | Platform Sidecar | `rpg_engine/platform_sidecar.py` | 平台入口门禁、冲突处理、指标、脱敏审计证据 |
 | Platform Prewarm | `rpg_engine/platform_prewarm.py` | 异步预热队列、worker、service |
 | MCP Transcript | `rpg_engine/mcp_transcript.py` | MCP 转录/审计材料 |
+| Hermes Stdio Provider Fixture | `tests/compatibility/hermes_stdio_provider.py`, `tests/fixtures/hermes_stdio_compatibility.yaml` | Test-owned真实stdio player provider、type-strict capture/reference/expectation contract、temporary Save/CPython socket+dotenv deny ready oracle、logical SQLite/protected fingerprint与bounded cross-repo hooks；OS级网络沙箱与Hermes client lifecycle不属于本组件 |
 | Capabilities | `rpg_engine/capabilities.py` | 能力声明 |
 | Plugins | `rpg_engine/plugins.py` | 插件机制 |
 

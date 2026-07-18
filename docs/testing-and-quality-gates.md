@@ -345,6 +345,45 @@ trace，不能提升 authority。Slot gate 还必须逐 action 锁定 required/g
 registry、confirmation/visibility/no-mutation，并以 `action.slot.field` 报告 parity 失败。Story 6.3 只关闭本仓
 slot ownership/parity design debt；Hermes reconnect/next-model-turn/E2E 仍不由本 gate 代替。
 
+Story 6.8 Hermes stdio provider compatibility focused gate：
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q \
+  tests/test_hermes_stdio_compatibility.py \
+  tests/test_mcp_adapter.py \
+  tests/test_intent_manifest.py \
+  tests/test_ai_intent.py \
+  -p no:cacheprovider
+```
+
+该gate必须通过官方MCP Python SDK的`stdio_client`/`ClientSession`启动真实
+`python -m rpg_engine mcp serve` subprocess；FakeFastMCP、adapter直调、in-memory transport或静态transcript
+不能替代。必须精确断言player profile工具清单和low-level缺席、manifest schema/digest与safety identity、stale
+typed rejection、第二次manifest后的whole-candidate regeneration、`player_turn` pending-only、wrong-session
+no-mutation、显式`player_confirm`精确+1 turn/+1 event及replay无第二次写入。
+
+夹具必须在独立empty temporary workspace复制Campaign、建立registry active Save，并以20秒内的bounded client
+lifecycle可靠teardown。SQLite counts/current turn、events.jsonl、pending/receipt与audit必须同时作为oracle；source
+minimal Campaign始终fingerprint，SQLite还必须使用全表logical digest捕获不改变count的meta/entity写入；环境中存在或
+显式配置的formal current Campaign/Save、正式registry/SQLite/player data也必须前后fingerprint且不得与temporary
+root形成samefile/父子/symlink别名。异常退出测试必须证明child已退出、temporary root可清理且正式指纹后置断言仍执行。
+Subprocess cwd必须隔离于poison `.env`，builtin/io/`os.open` dotenv deny/log必须证明provider未读取；socket deny guard
+必须以PID-bearing ready sentinel证明加载，并证明公开`socket`、`socket._socket`与新import/reload `_socket`/
+`SocketType`的DNS、IPv4/IPv6 connect及UDP sendto均被
+拒绝记录；正常provider transcript必须零尝试。该test-owned oracle证明CPython socket/DNS surface与实际provider路径，
+不等同于OS级syscall/FFI网络沙箱。launcher必须以`PYTHONNOUSERSITE=1`禁用宿主user-site与
+`usercustomize.py`；所有AI helper为off且不依赖`.env`内容/API key。
+
+Audit必须只保留bounded tool/status/result evidence：raw candidate slot/reason/provider body、player text、private/
+hidden canary、platform session key和pending confirmation session ID均不得出现；`session_key`/`session_id`只能是批准
+SHA-256摘要。真实normal query还必须在temporary Campaign/Save含hidden与GM-only canary时证明player response、bounded
+hook、audit和stderr均不泄露。YAML `schema_version=1`固定actor/tool/capture顺序、typed arguments、仅向后且非null的
+capture reference、wrong-session step、load-time exact candidate generation、JSON type-strict bounded expectations与
+allowlisted hooks；duplicate key、
+未知schema字段、canonical override或raw session hook必须fail closed，scripted-model步骤不能产生
+玩家确认authority。RPG Engine CI只拥有provider fixture/contract oracle；Hermes真实client、tool registration、
+next-model-turn barrier、reconnect和combined release gate仍由Hermes CI持有，本gate不得复制或替代。
+
 Retired/archived entity action binding的P0 gate：
 
 ```bash

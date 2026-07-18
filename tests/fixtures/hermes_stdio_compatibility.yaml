@@ -1,0 +1,208 @@
+schema_version: "1"
+fixture_id: rpg-engine-hermes-stdio-v1
+player_tools:
+  - workspace_inspect
+  - campaign_list
+  - save_list
+  - save_current
+  - save_create
+  - save_switch
+  - start_or_continue
+  - intent_manifest
+  - player_turn
+  - player_confirm
+  - campaign_validate
+  - save_inspect
+  - health
+
+steps:
+  - id: manifest_initial
+    actor: client
+    tool: intent_manifest
+    capture: manifest_initial
+    arguments: {}
+    hook: manifest
+    expect:
+      schema_version: "4"
+      manifest_digest: {$matches: sha256}
+      safety_vocabulary.version: "1"
+      safety_vocabulary.digest: {$matches: sha256}
+  - id: stale_candidate_rejected
+    actor: scripted_model
+    tool: player_turn
+    capture: stale_candidate_rejected
+    arguments:
+      user_text: wire-user-text-canary
+      external_intent_candidate:
+        $candidate:
+          generation: stale
+          manifest:
+            $ref: manifest_initial
+          overrides:
+            Private-Reasoning: wire-private-body-canary
+      platform: compatibility
+      session_key: wire-session-key-canary
+    hook: candidate_rejection
+    expect:
+      ok: false
+      error_details.0.code: INTENT_CONTRACT_VERSION_MISMATCH
+      error_details.0.reason: contract_version_mismatch
+      error_details.0.retriable: true
+      error_details.0.action: refresh_manifest_and_regenerate_candidate
+  - id: manifest_refreshed
+    actor: client
+    tool: intent_manifest
+    capture: manifest_refreshed
+    arguments: {}
+    hook: manifest
+    expect:
+      schema_version: "4"
+      manifest_digest: {$matches: sha256}
+      safety_vocabulary.version: "1"
+      safety_vocabulary.digest: {$matches: sha256}
+  - id: player_turn_ready
+    actor: scripted_model
+    tool: player_turn
+    capture: player_turn_ready
+    arguments:
+      user_text: 休息到早上
+      external_intent_candidate:
+        $candidate:
+          generation: refreshed
+          manifest:
+            $ref: manifest_refreshed
+          overrides: {}
+    hook: player_turn
+    expect:
+      ok: true
+      status: ready
+      action: rest
+      ready_to_confirm: true
+      session_id_present: true
+      saved: false
+  - id: explicit_player_confirmation
+    actor: player
+    tool: null
+    capture: explicit_player_confirmation
+    arguments:
+      confirmed: true
+      session_id:
+        $ref: player_turn_ready.session_id
+    hook: explicit_player_confirmation
+    expect:
+      confirmed: true
+      session_id_present: true
+  - id: wrong_session_rejected
+    actor: client
+    tool: player_confirm
+    capture: wrong_session_rejected
+    arguments:
+      session_id: player_action:wrong-wire-canary
+    hook: wrong_confirmation
+    expect:
+      ok: false
+      errors.0: player_confirm session_id does not match the pending player action
+  - id: player_confirm_committed
+    actor: client
+    tool: player_confirm
+    capture: player_confirm_committed
+    arguments:
+      session_id:
+        $ref: explicit_player_confirmation.session_id
+    hook: player_confirm
+    expect:
+      ok: true
+      saved: true
+      write_status: committed
+      idempotent_replay: false
+      turn_id_present: true
+  - id: player_confirm_replayed
+    actor: client
+    tool: player_confirm
+    capture: player_confirm_replayed
+    arguments:
+      session_id:
+        $ref: explicit_player_confirmation.session_id
+    hook: player_replay
+    expect:
+      ok: true
+      saved: false
+      write_status: already_confirmed
+      idempotent_replay: true
+      turn_id_present: true
+  - id: safe_audit
+    actor: fixture
+    tool: null
+    capture: null
+    arguments: {}
+    hook: safe_audit
+    expect:
+      tool: {$matches: nonempty}
+      status: {$in: [ok, error]}
+      identity.profile: player
+      result.ok: {$in: [true, false, null]}
+
+candidate_generations:
+  stale:
+    action: rest
+    slots:
+      until: wire-hidden-slot-canary
+    reason: wire-private-reason-canary
+    manifest_digest: stale_zero_sha256
+  refreshed:
+    action: rest
+    slots:
+      until: morning
+    reason: scripted-model generation refreshed-v1
+    manifest_digest: live
+
+hooks:
+  manifest:
+    fields:
+      - schema_version
+      - manifest_digest
+      - safety_vocabulary.version
+      - safety_vocabulary.digest
+  candidate_rejection:
+    fields:
+      - ok
+      - error_details.0.code
+      - error_details.0.reason
+      - error_details.0.retriable
+      - error_details.0.action
+  player_turn:
+    fields:
+      - ok
+      - status
+      - action
+      - ready_to_confirm
+      - session_id_present
+      - saved
+  explicit_player_confirmation:
+    fields:
+      - confirmed
+      - session_id_present
+  wrong_confirmation:
+    fields:
+      - ok
+      - errors.0
+  player_confirm:
+    fields:
+      - ok
+      - saved
+      - write_status
+      - idempotent_replay
+      - turn_id_present
+  player_replay:
+    fields:
+      - ok
+      - saved
+      - write_status
+      - idempotent_replay
+      - turn_id_present
+  safe_audit:
+    fields:
+      - tool
+      - status
+      - identity.profile
+      - result.ok
