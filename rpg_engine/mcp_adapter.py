@@ -28,7 +28,12 @@ from .intent_manifest import build_intent_manifest
 from .intent_router import make_intent_ai_config, make_intent_request_meta
 from .redaction import redact_hidden_entity_refs
 from .runtime import GMRuntime, intent_ai_config_kwargs, intent_request_meta_kwargs
-from .save_manager import SaveManager
+from .save_manager import (
+    SaveManager,
+    SaveManagerError,
+    identity_input_is_bounded_utf8,
+    validate_platform_session_pair,
+)
 from .save_service import inspect_v1_save
 from .surface_inventory import MCP_SURFACE_INVENTORY
 from .validation_issues import issues_from_messages
@@ -69,6 +74,7 @@ PLAYER_MCP_TOOL_NAMES = (
     "start_or_continue",
     "intent_manifest",
     "player_turn",
+    "player_cancel",
     "player_confirm",
     "campaign_validate",
     "save_inspect",
@@ -292,7 +298,6 @@ class AIGMMCPAdapter:
 
     def __init__(self, config: MCPAdapterConfig) -> None:
         self.config = config
-        self.pending_clarifications: dict[str, dict[str, Any]] = {}
 
     def workspace_inspect(self) -> dict[str, Any]:
         return self.call_with_audit("workspace_inspect", {}, lambda: self.save_manager().inspect_workspace())
@@ -403,6 +408,9 @@ class AIGMMCPAdapter:
         message_id: str = "",
         platform: str = "",
         session_key: str = "",
+        actor_id: str = "",
+        expected_pending_id: str = "",
+        clarification_id: str = "",
         source_user_text_hash: str = "",
         preflight_pending_wait_ms: int = 0,
     ) -> dict[str, Any]:
@@ -413,6 +421,9 @@ class AIGMMCPAdapter:
             "message_id": message_id,
             "platform": platform,
             "session_key": session_key,
+            "actor_id": actor_id,
+            "expected_pending_id": expected_pending_id,
+            "clarification_id": clarification_id,
             "source_user_text_hash": source_user_text_hash,
             "preflight_pending_wait_ms": preflight_pending_wait_ms,
             "intent_ai": self.config.intent_ai,
@@ -442,8 +453,38 @@ class AIGMMCPAdapter:
                 message_id=message_id,
                 platform=platform,
                 session_key=session_key,
+                actor_id=actor_id,
+                expected_pending_id=expected_pending_id,
+                clarification_id=clarification_id,
                 source_user_text_hash=source_user_text_hash,
                 preflight_pending_wait_ms=preflight_pending_wait_ms,
+            ),
+        )
+
+    def player_cancel(
+        self,
+        expected_pending_id: str,
+        save: str | None = None,
+        platform: str = "",
+        session_key: str = "",
+        actor_id: str = "",
+    ) -> dict[str, Any]:
+        request = {
+            "expected_pending_id": expected_pending_id,
+            "save": save,
+            "platform": platform,
+            "session_key": session_key,
+            "actor_id": actor_id,
+        }
+        return self.call_with_audit(
+            "player_cancel",
+            request,
+            lambda: self.save_manager().player_cancel(
+                expected_pending_id,
+                save_path=self.relative_save_path(save) if save else "",
+                platform=platform,
+                session_key=session_key,
+                actor_id=actor_id,
             ),
         )
 
@@ -454,6 +495,9 @@ class AIGMMCPAdapter:
         message_id: str = "",
         platform: str = "",
         session_key: str = "",
+        actor_id: str = "",
+        expected_pending_id: str = "",
+        clarification_id: str = "",
         source_user_text_hash: str = "",
         preflight_pending_wait_ms: int = 0,
     ) -> dict[str, Any]:
@@ -463,6 +507,9 @@ class AIGMMCPAdapter:
             "message_id": message_id,
             "platform": platform,
             "session_key": session_key,
+            "actor_id": actor_id,
+            "expected_pending_id": expected_pending_id,
+            "clarification_id": clarification_id,
             "source_user_text_hash": source_user_text_hash,
             "preflight_pending_wait_ms": preflight_pending_wait_ms,
             "intent_ai": self.config.intent_ai,
@@ -483,6 +530,9 @@ class AIGMMCPAdapter:
                 message_id=message_id,
                 platform=platform,
                 session_key=session_key,
+                actor_id=actor_id,
+                expected_pending_id=expected_pending_id,
+                clarification_id=clarification_id,
                 source_user_text_hash=source_user_text_hash,
                 preflight_pending_wait_ms=preflight_pending_wait_ms,
             ),
@@ -496,6 +546,9 @@ class AIGMMCPAdapter:
         message_id: str,
         platform: str,
         session_key: str,
+        actor_id: str,
+        expected_pending_id: str,
+        clarification_id: str,
         source_user_text_hash: str,
         preflight_pending_wait_ms: int,
     ) -> dict[str, Any]:
@@ -514,15 +567,37 @@ class AIGMMCPAdapter:
             message_id=message_id,
             platform=platform,
             session_key=session_key,
+            actor_id=actor_id,
+            expected_pending_id=expected_pending_id,
+            clarification_id=clarification_id,
             source_user_text_hash=source_user_text_hash,
             preflight_pending_wait_ms=preflight_pending_wait_ms,
         )
 
-    def player_confirm(self, session_id: str = "") -> dict[str, Any]:
+    def player_confirm(
+        self,
+        session_id: str = "",
+        save: str | None = None,
+        platform: str = "",
+        session_key: str = "",
+        actor_id: str = "",
+    ) -> dict[str, Any]:
         return self.call_with_audit(
             "player_confirm",
-            {"session_id": session_id},
-            lambda: self.save_manager().player_confirm(session_id=session_id),
+            {
+                "session_id": session_id,
+                "save": save,
+                "platform": platform,
+                "session_key": session_key,
+                "actor_id": actor_id,
+            },
+            lambda: self.save_manager().player_confirm(
+                session_id=session_id,
+                save_path=self.relative_save_path(save) if save else "",
+                platform=platform,
+                session_key=session_key,
+                actor_id=actor_id,
+            ),
         )
 
     def campaign_validate(self, campaign: str | None = None) -> dict[str, Any]:
@@ -597,6 +672,10 @@ class AIGMMCPAdapter:
 
         def run() -> dict[str, Any]:
             self.require_low_level_profile("intent_preflight")
+            validate_platform_session_pair(
+                platform=platform,
+                session_key=session_key,
+            )
             self.require_no_pending_clarification(save, "intent_preflight")
             runtime = self.runtime_for_save(save)
             return runtime.preflight_intent(
@@ -646,6 +725,7 @@ class AIGMMCPAdapter:
         message_id: str = "",
         platform: str = "",
         session_key: str = "",
+        actor_id: str = "",
         source_user_text_hash: str = "",
         preflight_pending_wait_ms: int = 0,
     ) -> dict[str, Any]:
@@ -703,12 +783,18 @@ class AIGMMCPAdapter:
             "message_id": message_id,
             "platform": platform,
             "session_key": session_key,
+            "actor_id": actor_id,
             "source_user_text_hash": source_user_text_hash,
             "preflight_pending_wait_ms": preflight_pending_wait_ms,
         }
 
         def run() -> dict[str, Any]:
             self.require_low_level_profile("start_turn")
+            validate_platform_session_pair(
+                platform=platform,
+                session_key=session_key,
+                actor_id=actor_id,
+            )
             self.require_view_allowed(view)
             if normalize_visibility_view(mode) == "maintenance" and self.config.mcp_profile not in HIDDEN_READ_PROFILES:
                 raise PermissionError("mode='maintenance' requires trusted_gm, maintenance, or admin MCP profile")
@@ -717,8 +803,12 @@ class AIGMMCPAdapter:
                 semantic_override=semantic_override,
                 intent_override=intent_override,
             )
-            self.require_fresh_clarification_repreview("start_turn", save, request)
-            runtime = self.runtime_for_save(save)
+            resolved_save, publication = self.require_fresh_clarification_repreview(
+                "start_turn",
+                save,
+                request,
+            )
+            runtime = self.runtime_for_save(resolved_save)
             # Validate here, but preserve Runtime/ContextBuilder request display values.
             make_intent_ai_config(
                 intent_ai=effective_intent_ai,
@@ -766,7 +856,12 @@ class AIGMMCPAdapter:
                 external_intent_candidate=external_intent_candidate,
                 **intent_request_meta_kwargs(request_meta),
             ).to_dict()
-            self.update_pending_clarification(save, request, result)
+            self.update_pending_clarification(
+                resolved_save,
+                request,
+                result,
+                expected_publication=publication,
+            )
             return result
 
         return self.call_with_audit("start_turn", request, run)
@@ -813,6 +908,7 @@ class AIGMMCPAdapter:
         message_id: str = "",
         platform: str = "",
         session_key: str = "",
+        actor_id: str = "",
         source_user_text_hash: str = "",
         preflight_pending_wait_ms: int = 0,
     ) -> dict[str, Any]:
@@ -867,20 +963,30 @@ class AIGMMCPAdapter:
             "message_id": message_id,
             "platform": platform,
             "session_key": session_key,
+            "actor_id": actor_id,
             "source_user_text_hash": source_user_text_hash,
             "preflight_pending_wait_ms": preflight_pending_wait_ms,
         }
 
         def run() -> dict[str, Any]:
             self.require_low_level_profile("preview_from_text")
+            validate_platform_session_pair(
+                platform=platform,
+                session_key=session_key,
+                actor_id=actor_id,
+            )
             self.require_view_allowed(view)
             self.require_player_safe_start(
                 mode=mode,
                 semantic_override=semantic_override,
                 intent_override=intent_override,
             )
-            self.require_fresh_clarification_repreview("preview_from_text", save, request)
-            runtime = self.runtime_for_save(save)
+            resolved_save, publication = self.require_fresh_clarification_repreview(
+                "preview_from_text",
+                save,
+                request,
+            )
+            runtime = self.runtime_for_save(resolved_save)
             intent_kwargs = {
                 "intent_ai": effective_intent_ai,
                 "intent_backend": effective_intent_backend,
@@ -924,7 +1030,12 @@ class AIGMMCPAdapter:
                 external_intent_candidate=external_intent_candidate,
                 **intent_request_meta_kwargs(request_meta),
             ).to_dict()
-            self.update_pending_clarification(save, request, result)
+            self.update_pending_clarification(
+                resolved_save,
+                request,
+                result,
+                expected_publication=publication,
+            )
             return result
 
         return self.call_with_audit("preview_from_text", request, run)
@@ -1094,41 +1205,112 @@ class AIGMMCPAdapter:
         if self.config.mcp_profile == PLAYER_PROFILE and helper_override:
             raise PermissionError("per-call commit AI overrides require developer, trusted_gm, maintenance, or admin MCP profile")
 
-    def clarification_key(self, save: str | None) -> str:
-        return str(self.resolve_save(save))
-
-    def require_fresh_clarification_repreview(self, tool: str, save: str | None, request: dict[str, Any]) -> None:
-        key = self.clarification_key(save)
-        pending = self.pending_clarifications.get(key)
-        if pending is None:
-            return
-        if not low_level_request_is_fresh(request, pending.get("request") if isinstance(pending.get("request"), dict) else {}):
-            clarification_id = str(pending.get("clarification_id") or "unknown")
-            raise PermissionError(
-                f"{tool} must answer pending clarification {clarification_id} with fresh user_text or external_intent_candidate"
+    def require_fresh_clarification_repreview(
+        self,
+        tool: str,
+        save: str | None,
+        request: dict[str, Any],
+    ) -> tuple[str, dict[str, Any]]:
+        try:
+            resolved_save = self.relative_save_path(save)
+            publication = self.save_manager().begin_low_level_clarification_publication(
+                save_path=resolved_save,
+                require_active_save_match=not bool(save) and self.config.registry_active,
+                platform=request.get("platform", ""),
+                session_key=request.get("session_key", ""),
+                actor_id=request.get("actor_id", ""),
             )
+        except SaveManagerError as exc:
+            if "clarification is pending" in str(exc):
+                raise PermissionError(
+                    f"{tool} cannot run while a clarification is pending; "
+                    "use player_turn with matching lifecycle tokens or player_cancel"
+                ) from exc
+            raise PermissionError(f"{tool} cannot verify canonical pending state") from exc
+        except ValueError as exc:
+            raise PermissionError(f"{tool} cannot verify canonical pending state") from exc
+        return resolved_save, publication
 
     def require_no_pending_clarification(self, save: str | None, tool: str) -> None:
-        key = self.clarification_key(save)
-        pending = self.pending_clarifications.get(key)
-        if pending is None:
+        try:
+            inspected = self.save_manager().inspect_pending(
+                save_path=self.relative_save_path(save),
+            )
+        except (SaveManagerError, ValueError) as exc:
+            raise PermissionError(f"{tool} cannot verify canonical pending state") from exc
+        if inspected.get("status") == "invalid_state":
+            raise PermissionError(f"{tool} cannot run while canonical pending state is invalid")
+        lifecycle = inspected.get("lifecycle")
+        if not isinstance(lifecycle, dict) or lifecycle.get("kind") != "clarification":
             return
-        clarification_id = str(pending.get("clarification_id") or "unknown")
-        raise PermissionError(f"{tool} cannot run while clarification {clarification_id} is pending")
+        if lifecycle.get("state") in {"expired", "not_found", "canceled"}:
+            return
+        raise PermissionError(
+            f"{tool} cannot run while a clarification is pending; use player_turn with matching lifecycle tokens or player_cancel"
+        )
 
-    def update_pending_clarification(self, save: str | None, request: dict[str, Any], result: dict[str, Any]) -> None:
-        key = self.clarification_key(save)
+    def update_pending_clarification(
+        self,
+        save: str | None,
+        request: dict[str, Any],
+        result: dict[str, Any],
+        *,
+        expected_publication: dict[str, Any] | None = None,
+    ) -> None:
         clarification = extract_result_clarification(result)
         if clarification is None:
-            self.pending_clarifications.pop(key, None)
             return
-        clarification_id = str(clarification.get("clarification_id") or f"clarification:{int(time.time() * 1000)}")
-        clarification["clarification_id"] = clarification_id
-        self.pending_clarifications[key] = {
-            "clarification_id": clarification_id,
-            "request": dict(request),
-            "clarification": clarification,
-        }
+        if (
+            normalize_visibility_view(request.get("view")) != "player"
+            or normalize_visibility_view(request.get("mode")) == "maintenance"
+        ):
+            return
+        try:
+            manager = self.save_manager()
+            if not manager.low_level_publication_is_canonical(expected_publication):
+                return
+            if not manager.low_level_clarification_publication_allowed(result):
+                return
+            recorded = manager.record_low_level_clarification(
+                user_text=str(request.get("user_text") or ""),
+                clarification=clarification,
+                save_path=self.relative_save_path(save),
+                external_intent_candidate=(
+                    request.get("external_intent_candidate")
+                    if isinstance(request.get("external_intent_candidate"), dict)
+                    else None
+                ),
+                result=result,
+                platform=request.get("platform", ""),
+                session_key=request.get("session_key", ""),
+                actor_id=request.get("actor_id", ""),
+                expected_publication=expected_publication,
+            )
+        except SaveManagerError as exc:
+            result.clear()
+            result.update(
+                {
+                    "ok": False,
+                    "status": "invalid_state",
+                    "saved": False,
+                    "clarification": None,
+                    "pending_clarification_id": None,
+                    "lifecycle": {"state": "invalid_state", "kind": "clarification"},
+                    "errors": [str(exc)],
+                }
+            )
+            return
+        if not recorded.get("ok"):
+            result.clear()
+            result.update(recorded)
+            return
+        result.update(
+            {
+                key: value
+                for key, value in recorded.items()
+                if key in {"clarification", "pending_clarification_id", "lifecycle"}
+            }
+        )
 
     def health(self, save: str | None = None) -> dict[str, Any]:
         def run() -> dict[str, Any]:
@@ -1162,19 +1344,19 @@ class AIGMMCPAdapter:
         path = self.config.audit_log
         if path is None:
             return
-        sensitive_terms = mcp_audit_sensitive_terms(request)
-        record = {
-            "created_at": utc_now(),
-            "server": MCP_SERVER_NAME,
-            "tool": tool,
-            "surface_category": mcp_audit_surface_category(tool),
-            "duration_ms": duration_ms,
-            "status": "error" if result_has_error(result) else "ok",
-            "identity": mcp_audit_identity(tool, request, profile=self.config.mcp_profile),
-            "request": sanitize_for_audit(request, sensitive_terms=sensitive_terms),
-            "result": summarize_result_for_audit(result, sensitive_terms=sensitive_terms),
-        }
         try:
+            sensitive_terms = mcp_audit_sensitive_terms(request)
+            record = {
+                "created_at": utc_now(),
+                "server": MCP_SERVER_NAME,
+                "tool": tool,
+                "surface_category": mcp_audit_surface_category(tool),
+                "duration_ms": duration_ms,
+                "status": "error" if result_has_error(result) else "ok",
+                "identity": mcp_audit_identity(tool, request, profile=self.config.mcp_profile),
+                "request": sanitize_for_audit(request, sensitive_terms=sensitive_terms),
+                "result": summarize_result_for_audit(result, sensitive_terms=sensitive_terms),
+            }
             path.parent.mkdir(parents=True, exist_ok=True)
             with path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
@@ -1205,6 +1387,13 @@ class AIGMMCPAdapter:
         if not self.config.default_save:
             raise ValueError("save is required because no default save is configured")
         return resolve_relative_under_root(self.config.root, self.config.default_save, label="save")
+
+    def relative_save_path(self, save: str | None = None) -> str:
+        resolved = self.resolve_save(save)
+        try:
+            return resolved.relative_to(self.config.root).as_posix()
+        except ValueError as exc:
+            raise ValueError("save escapes configured workspace root") from exc
 
 
 def serve_mcp(config: MCPAdapterConfig, *, transport: str = "stdio") -> None:
@@ -1293,6 +1482,9 @@ def serve_mcp(config: MCPAdapterConfig, *, transport: str = "stdio") -> None:
         message_id: str = "",
         platform: str = "",
         session_key: str = "",
+        actor_id: str = "",
+        expected_pending_id: str = "",
+        clarification_id: str = "",
         source_user_text_hash: str = "",
         preflight_pending_wait_ms: int = 0,
     ) -> dict[str, Any]:
@@ -1304,8 +1496,28 @@ def serve_mcp(config: MCPAdapterConfig, *, transport: str = "stdio") -> None:
             message_id=message_id,
             platform=platform,
             session_key=session_key,
+            actor_id=actor_id,
+            expected_pending_id=expected_pending_id,
+            clarification_id=clarification_id,
             source_user_text_hash=source_user_text_hash,
             preflight_pending_wait_ms=preflight_pending_wait_ms,
+        )
+
+    @server.tool()
+    def player_cancel(
+        expected_pending_id: str,
+        save: str | None = None,
+        platform: str = "",
+        session_key: str = "",
+        actor_id: str = "",
+    ) -> dict[str, Any]:
+        """Cancel the exact pending player session without changing gameplay facts."""
+        return adapter.player_cancel(
+            expected_pending_id,
+            save=save,
+            platform=platform,
+            session_key=session_key,
+            actor_id=actor_id,
         )
 
     if config.mcp_profile in LOW_LEVEL_PROFILES:
@@ -1317,6 +1529,9 @@ def serve_mcp(config: MCPAdapterConfig, *, transport: str = "stdio") -> None:
             message_id: str = "",
             platform: str = "",
             session_key: str = "",
+            actor_id: str = "",
+            expected_pending_id: str = "",
+            clarification_id: str = "",
             source_user_text_hash: str = "",
             preflight_pending_wait_ms: int = 0,
         ) -> dict[str, Any]:
@@ -1327,14 +1542,29 @@ def serve_mcp(config: MCPAdapterConfig, *, transport: str = "stdio") -> None:
                 message_id=message_id,
                 platform=platform,
                 session_key=session_key,
+                actor_id=actor_id,
+                expected_pending_id=expected_pending_id,
+                clarification_id=clarification_id,
                 source_user_text_hash=source_user_text_hash,
                 preflight_pending_wait_ms=preflight_pending_wait_ms,
             )
 
     @server.tool()
-    def player_confirm(session_id: str) -> dict[str, Any]:
+    def player_confirm(
+        session_id: str,
+        save: str | None = None,
+        platform: str = "",
+        session_key: str = "",
+        actor_id: str = "",
+    ) -> dict[str, Any]:
         """Confirm and save the pending player action using the session_id returned by player_turn."""
-        return adapter.player_confirm(session_id=session_id)
+        return adapter.player_confirm(
+            session_id=session_id,
+            save=save,
+            platform=platform,
+            session_key=session_key,
+            actor_id=actor_id,
+        )
 
     @server.tool()
     def campaign_validate(campaign: str | None = None) -> dict[str, Any]:
@@ -1412,6 +1642,7 @@ def serve_mcp(config: MCPAdapterConfig, *, transport: str = "stdio") -> None:
         message_id: str = "",
         platform: str = "",
         session_key: str = "",
+        actor_id: str = "",
         source_user_text_hash: str = "",
         preflight_pending_wait_ms: int = 0,
     ) -> dict[str, Any]:
@@ -1442,6 +1673,7 @@ def serve_mcp(config: MCPAdapterConfig, *, transport: str = "stdio") -> None:
             message_id=message_id,
             platform=platform,
             session_key=session_key,
+            actor_id=actor_id,
             source_user_text_hash=source_user_text_hash,
             preflight_pending_wait_ms=preflight_pending_wait_ms,
         )
@@ -1481,6 +1713,7 @@ def serve_mcp(config: MCPAdapterConfig, *, transport: str = "stdio") -> None:
         message_id: str = "",
         platform: str = "",
         session_key: str = "",
+        actor_id: str = "",
         source_user_text_hash: str = "",
         preflight_pending_wait_ms: int = 0,
     ) -> dict[str, Any]:
@@ -1508,6 +1741,7 @@ def serve_mcp(config: MCPAdapterConfig, *, transport: str = "stdio") -> None:
             message_id=message_id,
             platform=platform,
             session_key=session_key,
+            actor_id=actor_id,
             source_user_text_hash=source_user_text_hash,
             preflight_pending_wait_ms=preflight_pending_wait_ms,
         )
@@ -1713,16 +1947,29 @@ def mcp_audit_identity(tool: str, request: dict[str, Any], *, profile: str) -> d
         "profile": profile,
         "tool": tool,
     }
-    platform = str(request.get("platform") or "").strip()
-    session_key = str(request.get("session_key") or "").strip()
+    raw_platform = request.get("platform", "")
+    raw_session_key = request.get("session_key", "")
+    raw_actor_id = request.get("actor_id", "")
+    platform = raw_platform.strip() if identity_input_is_bounded_utf8(raw_platform) else ""
+    session_key = raw_session_key.strip() if identity_input_is_bounded_utf8(raw_session_key) else ""
     message_id = str(request.get("message_id") or "").strip()
+    actor_id = raw_actor_id.strip() if identity_input_is_bounded_utf8(raw_actor_id) else ""
     if platform:
         identity["platform"] = platform
     if session_key:
-        identity["session_key_hash"] = f"sha256:{hash_identity(session_key)}"
+        identity["session_key_hash"] = bounded_audit_hash(session_key)
     if message_id:
         identity["message_id"] = message_id
+    if actor_id:
+        identity["actor_id_hash"] = bounded_audit_hash(actor_id)
     return identity
+
+
+def bounded_audit_hash(value: Any) -> str:
+    if not identity_input_is_bounded_utf8(value):
+        return "<invalid identity>"
+    normalized = value.strip()
+    return f"sha256:{hash_identity(normalized)}" if normalized else ""
 
 
 def mcp_audit_sensitive_terms(request: dict[str, Any]) -> tuple[str, ...]:
@@ -1730,6 +1977,8 @@ def mcp_audit_sensitive_terms(request: dict[str, Any]) -> tuple[str, ...]:
         str(request.get("user_text") or "").strip(),
         str(request.get("session_key") or "").strip(),
         str(request.get("session_id") or "").strip(),
+        str(request.get("expected_pending_id") or "").strip(),
+        str(request.get("clarification_id") or "").strip(),
         str(request.get("actor_id") or "").strip(),
         str(request.get("user_id") or "").strip(),
         str(request.get("sender_id") or "").strip(),
@@ -1791,8 +2040,16 @@ def sanitize_for_audit(
         for key, item in value.items():
             normalized_key = str(key)
             audit_key = normalize_audit_key(normalized_key)
-            if audit_key in {"session_id", "session_key"}:
-                sanitized[normalized_key] = f"sha256:{hash_identity(str(item or ''))}" if str(item or "").strip() else ""
+            if audit_key in {
+                "session_id",
+                "session_key",
+                "actor_id",
+                "expected_pending_id",
+                "clarification_id",
+                "pending_id",
+                "pending_clarification_id",
+            }:
+                sanitized[normalized_key] = bounded_audit_hash(item)
             elif audit_key in AUDIT_SUMMARIZED_PAYLOAD_KEYS:
                 sanitized[normalized_key] = summarize_sensitive_payload_for_audit(item)
             elif audit_key in AUDIT_REDACTED_KEYS:
@@ -1829,6 +2086,11 @@ def sanitize_audit_text(value: str, *, max_text: int, sensitive_terms: tuple[str
         return "<redacted sensitive audit text>"
     for term in sorted((term for term in sensitive_terms if term), key=len, reverse=True):
         text = text.replace(term, "<redacted>")
+    text = re.sub(
+        r"(?:player_action|clarification):[0-9a-f]{32}",
+        lambda match: f"sha256:{hash_identity(match.group(0))}",
+        text,
+    )
     if len(text) <= max_text:
         return text
     return text[:max_text] + f"... <truncated {len(text) - max_text} chars>"

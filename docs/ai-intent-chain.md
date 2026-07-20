@@ -566,3 +566,14 @@ python3 -m pytest -q tests/test_ai_intent.py tests/test_runtime.py tests/test_mc
 [`archive/pre-bmad-docs-2026-07-03/`](archive/pre-bmad-docs-2026-07-03/)。
 归档原文只作历史证据和更细的实施记录。若它们与本文件冲突，应先对照当前代码和测试，
 再更新本文件或归档材料说明。
+
+## Clarification correction 与 pending CAS
+
+意图链产生 action 或 clarification 时只是在建议新的 entry state；它不能覆盖现有 pending。若 owner 已有
+session，同一 identity 必须提交匹配 `expected_pending_id`，不同 identity 一律 conflict。真实玩家歧义需要
+fresh 玩家回答和匹配 clarification token；仅当 persisted origin 是 `candidate_contract_mismatch` 时，调用方
+才可用完全相同的原始玩家文本、同时匹配的 `expected_pending_id` / `clarification_id` 和确实变化的 corrected
+external candidate 重新进入完整 contract、taxonomy、slot、binding、resolver 与 preview 链。Correction
+不是 confirmation，也不允许直接 commit。
+
+Wire/version/safety malformed 或 mismatch 仍走 typed external contract error；不得降级为 clarification。

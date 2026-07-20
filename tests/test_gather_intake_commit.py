@@ -648,18 +648,8 @@ def test_failed_player_confirm_restores_pending_and_all_authoritative_state(
     manager, save, campaign_source = _manager_with_temp_save(tmp_path)
     source_before = tree_digest(campaign_source)
     session_id, _delta = _replace_pending_with_intake(manager, save, invalid_case=invalid_case)
-    manager.write_pending_clarification(
-        {
-            "schema_version": "1",
-            "clarification_id": "clarification:story-1.10",
-            "save_id": manager.current_save()["save"]["id"],
-            "save_path": manager.current_save()["save"]["path"],
-            "original_user_text": "sentinel",
-            "clarification": {"question": "sentinel"},
-        }
-    )
     pending_before = manager.pending_action_path().read_bytes()
-    clarification_before = manager.pending_clarification_path().read_bytes()
+    assert not manager.pending_clarification_path().exists()
     campaign = load_campaign(save)
     before = _fact_snapshot(campaign)
     backups_before = _optional_tree_digest(save / "backups")
@@ -676,7 +666,7 @@ def test_failed_player_confirm_restores_pending_and_all_authoritative_state(
     assert after["turn_count"] == before["turn_count"]
     assert after["event_count"] == before["event_count"]
     assert manager.pending_action_path().read_bytes() == pending_before
-    assert manager.pending_clarification_path().read_bytes() == clarification_before
+    assert not manager.pending_clarification_path().exists()
     assert _confirmation_anchors(save) == {}
     assert not manager.confirmation_receipt_path().exists()
     assert _optional_tree_digest(save / "backups") == backups_before

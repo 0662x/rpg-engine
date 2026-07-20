@@ -494,6 +494,42 @@ manager.player_confirm(sys.argv[2])
             self.assertIsNotNone(pending)
             self.assertEqual(pending["session_id"], second["session_id"])
 
+    def test_supersede_loses_cleanly_to_inflight_confirmation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manager, save_path = self.make_workspace(root)
+            turns_before = authoritative_counts(save_path)[0]
+            first = manager.player_turn(user_text="休息到早上")
+            receipt_started = threading.Event()
+            release_receipt = threading.Event()
+            original_write_receipt = manager.write_confirmation_receipt
+            next_manager = SaveManager(root)
+
+            def pause_receipt(receipt: dict[str, object]) -> None:
+                receipt_started.set()
+                self.assertTrue(release_receipt.wait(timeout=20))
+                original_write_receipt(receipt)
+
+            with mock.patch.object(manager, "write_confirmation_receipt", side_effect=pause_receipt):
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    confirming = executor.submit(manager.player_confirm, str(first["session_id"]))
+                    self.assertTrue(receipt_started.wait(timeout=20))
+                    superseding = executor.submit(
+                        next_manager.player_turn,
+                        user_text="休息到早上",
+                        expected_pending_id=str(first["session_id"]),
+                    )
+                    self.assertFalse(superseding.done())
+                    release_receipt.set()
+                    confirmed = confirming.result(timeout=30)
+                    supersede = superseding.result(timeout=30)
+
+            self.assertEqual(confirmed["write_status"], "committed")
+            self.assertEqual(supersede["status"], "not_found", supersede)
+            self.assertEqual(supersede["lifecycle"]["state"], "not_found")
+            self.assertIsNone(manager.read_pending_action())
+            self.assertEqual(authoritative_counts(save_path)[0], turns_before + 1)
+
     def test_expired_pending_with_durable_turn_recovers_instead_of_deleting_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -505,7 +541,13 @@ manager.player_confirm(sys.argv[2])
             committed = authoritative_counts(save_path)
             pending = manager.read_pending_action()
             self.assertIsNotNone(pending)
-            manager.write_pending_action({**dict(pending or {}), "expires_at": "2000-01-01T00:00:00+00:00"})
+            manager.write_pending_action(
+                {
+                    **dict(pending or {}),
+                    "created_at": "1999-12-31T23:30:00+00:00",
+                    "expires_at": "2000-01-01T00:00:00+00:00",
+                }
+            )
 
             replay = manager.player_confirm(str(acted["session_id"]))
 
@@ -534,7 +576,13 @@ manager.player_confirm(sys.argv[2])
             pending = manager.read_pending_action()
             self.assertIsNotNone(pending)
             self.assertIn("confirmation_claim", pending or {})
-            manager.write_pending_action({**dict(pending or {}), "expires_at": "2000-01-01T00:00:00+00:00"})
+            manager.write_pending_action(
+                {
+                    **dict(pending or {}),
+                    "created_at": "1999-12-31T23:30:00+00:00",
+                    "expires_at": "2000-01-01T00:00:00+00:00",
+                }
+            )
 
             replay = manager.player_confirm(str(acted["session_id"]))
 
@@ -838,7 +886,7 @@ SaveManager(Path(sys.argv[1])).player_confirm(sys.argv[2])
             manager = SaveManager(root)
             (root / ".aigm").mkdir()
             (root / ".aigm" / "pending-player-action.lock").symlink_to(outside / "outside.lock")
-            with self.assertRaisesRegex(SaveManagerError, "escapes workspace root"):
+            with self.assertRaisesRegex(SaveManagerError, "pending confirmation claim is unavailable"):
                 manager.player_confirm("player_action:any")
             self.assertFalse((outside / "outside.lock").exists())
 
@@ -850,7 +898,7 @@ SaveManager(Path(sys.argv[1])).player_confirm(sys.argv[2])
             outside_pending = outside / "pending.json"
             outside_pending.write_text("{}\n", encoding="utf-8")
             (root / ".aigm" / "pending-player-action.json").symlink_to(outside_pending)
-            with self.assertRaisesRegex(SaveManagerError, "escapes workspace root"):
+            with self.assertRaisesRegex(SaveManagerError, "pending player action is invalid"):
                 manager.read_pending_action()
             self.assertTrue(outside_pending.exists())
 

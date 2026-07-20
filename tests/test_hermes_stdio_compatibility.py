@@ -219,6 +219,7 @@ class HermesStdioProviderFixtureTests(unittest.TestCase):
                 "start_or_continue",
                 "intent_manifest",
                 "player_turn",
+                "player_cancel",
                 "player_confirm",
                 "campaign_validate",
                 "save_inspect",

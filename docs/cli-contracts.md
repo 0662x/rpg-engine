@@ -147,6 +147,7 @@ player query
 player turn
 player act
 player confirm
+player cancel
 player new
 player switch
 player duplicate
@@ -232,6 +233,7 @@ platform message
 platform start
 platform act
 platform confirm
+platform cancel
 platform metrics
 platform expire
 platform deactivate
@@ -245,6 +247,8 @@ platform deactivate
 - `start` 从平台消息 start/continue game，创建或绑定 active save 时仍必须通过 SaveManager。
 - `act` 从平台消息调用 player act/turn 语义，并转发 passive preflight identity；不能绕过 pending/confirm。
 - `confirm --session-id` 从平台消息确认 pending player action；平台 gate 必须校验 active binding。
+- `cancel --expected-pending-id` 从平台消息按 exact owner token 取消 canonical action/clarification；只能转发给
+  SaveManager，且不得运行 gameplay pipeline 或写入游戏事实。
 - 平台确认必须保持同一 platform、session key 和 actor identity；同一群/会话里不同 actor 不能确认
   另一位玩家的 pending action。
 - `metrics`、`expire`、`deactivate` 管理 sidecar canary metrics 和平台 session binding，不写游戏事实。
@@ -428,3 +432,16 @@ python3 -m pytest -q tests/test_v1_cli.py tests/test_save_manager.py tests/test_
 
 如果改到 legacy package/projection/maintenance 命令，再追加对应 package、projection、migration 或 content
 tests。
+
+## Player pending lifecycle CLI
+
+- `aigm player turn` / `aigm player act` 接收 `--expected-pending-id`、`--clarification-id`、
+  `--actor-id`，并与现有 platform/session 参数一起薄转发给 `SaveManager`。
+- `aigm player cancel ROOT --expected-pending-id ID` 只取消 exact pending；可选 `--save-path`、
+  `--platform`、`--session-key`、`--actor-id` 必须全部与 owner state 匹配。
+- `aigm player confirm` 接收同一 save/platform/session/actor binding 参数；save switch 后确认旧 action
+  必须显式给原 `--save-path`。
+- `aigm platform cancel ... --expected-pending-id ID` 只镜像 platform binding 并转发 owner cancel。
+
+所有 conflict/canceled/expired/not_found/invalid_state 均为结构化 lifecycle 结果；CLI 不读取、删除或
+重建 pending 文件，也不能把 cancel/correction 当作玩家确认。

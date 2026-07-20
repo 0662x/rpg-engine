@@ -974,11 +974,14 @@ class CurrentNativeVisibilityTests(FormalCurrentSaveReadOnlyTestCase):
                 kind="normal",
                 source="test",
             )
-            manager.write_registry({
-                "active_save_id": "save:test-derived-visibility",
-                "campaigns": [],
-                "saves": [save_record],
-            })
+            manager.write_registry(
+                {
+                    "schema_version": "1",
+                    "active_save_id": "save:test-derived-visibility",
+                    "campaigns": [],
+                    "saves": [save_record],
+                }
+            )
             onboarding = manager.start_or_continue(create_if_missing=False)
             self.assertTrue(onboarding["ok"], onboarding)
             scene_query = manager.player_query(kind="scene")

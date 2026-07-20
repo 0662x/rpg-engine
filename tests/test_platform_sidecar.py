@@ -18,13 +18,18 @@ from rpg_engine.game_session import (
     hash_identity,
     hash_text,
 )
-from rpg_engine.platform_prewarm import GameSessionBindingStore, PlatformPrewarmConfig
+from rpg_engine.platform_prewarm import (
+    MAX_PLATFORM_MESSAGE_ID_LENGTH,
+    GameSessionBindingStore,
+    PlatformPrewarmConfig,
+)
 from rpg_engine.platform_sidecar import (
     PlatformSidecar,
     PlatformSidecarConfig,
+    canonical_pending_inspect_classification,
     platform_message_from_event,
 )
-from rpg_engine.save_manager import SaveManager
+from rpg_engine.save_manager import MAX_PENDING_STRING_LENGTH, SaveManager
 
 
 ENGINE_ROOT = Path(__file__).resolve().parents[1]
@@ -84,6 +89,198 @@ def sidecar_config(
 
 
 class PlatformSidecarTests(unittest.TestCase):
+    def test_canonical_pending_inspect_classifier_accepts_legacy_clarification_token(self) -> None:
+        lifecycle = {
+            "state": "migrated",
+            "kind": "clarification",
+            "pending_id": "clarify:1",
+            "save_id": "save:one",
+            "created_at": "2026-07-21T00:00:00+00:00",
+            "expires_at": "2026-07-21T00:30:00+00:00",
+            "ttl_seconds": 1800,
+            "clarification_origin": "player_input_ambiguity",
+        }
+        for status in ("migrated", "active"):
+            inspected = {
+                "ok": True,
+                "status": status,
+                "lifecycle": {**lifecycle, "state": status},
+                "errors": [],
+            }
+            with self.subTest(status=status):
+                self.assertEqual(
+                    canonical_pending_inspect_classification(inspected),
+                    "active",
+                )
+
+    def test_canonical_pending_inspect_classifier_rejects_incomplete_wire(self) -> None:
+        invalid_cases = [
+            None,
+            [],
+            {"ok": True, "status": "active", "lifecycle": {"state": "active", "kind": "action"}, "errors": []},
+            {
+                "ok": True,
+                "status": "active",
+                "lifecycle": {"state": "active", "kind": "clarification", "pending_id": 7},
+                "errors": [],
+            },
+            {
+                "ok": True,
+                "status": "not_found",
+                "lifecycle": {
+                    "state": "not_found",
+                    "kind": "action",
+                    "pending_id": "player_action:still-present",
+                },
+                "errors": [],
+            },
+            {
+                "ok": True,
+                "status": "not_found",
+                "lifecycle": {"state": "not_found", "kind": "unknown"},
+                "errors": ["contradiction"],
+            },
+            {
+                "ok": True,
+                "status": "not_found",
+                "lifecycle": {
+                    "state": "not_found",
+                    "kind": "unknown",
+                    "session_id": "player_action:0123456789abcdef0123456789abcdef",
+                },
+                "errors": [],
+            },
+            {
+                "ok": True,
+                "status": "not_found",
+                "lifecycle": {"state": "not_found", "kind": "unknown"},
+                "errors": [],
+                "pendingToken": "player_action:0123456789abcdef0123456789abcdef",
+            },
+            {
+                "ok": True,
+                "status": "not_found",
+                "lifecycle": {
+                    "state": "not_found",
+                    "kind": "unknown",
+                    "owner_session": "player_action:0123456789abcdef0123456789abcdef",
+                },
+                "errors": [],
+            },
+            {
+                "ok": True,
+                "status": "not_found",
+                "lifecycle": {
+                    "state": "not_found",
+                    "kind": "unknown",
+                    "unexpected": True,
+                },
+                "errors": [],
+            },
+            {
+                "ok": True,
+                "status": "not_found",
+                "lifecycle": {
+                    "state": "not_found",
+                    "kind": "unknown",
+                    "save_id": "player_action:0123456789abcdef0123456789abcdef",
+                },
+                "errors": [],
+            },
+            {
+                "ok": True,
+                "status": "active",
+                "lifecycle": {
+                    "state": "active",
+                    "kind": "action",
+                    "pending_id": "player_action:0123456789abcdef0123456789abcdef",
+                    "save_id": "save:one",
+                    "created_at": "2026-07-21T00:00:00+00:00",
+                    "expires_at": "2026-07-21T00:30:00+00:00",
+                    "ttl_seconds": 1800,
+                    "clarification_origin": "not-a-real-origin",
+                },
+                "errors": [],
+            },
+            {
+                "ok": True,
+                "status": "expired",
+                "lifecycle": {
+                    "state": "expired",
+                    "kind": "action",
+                    "save_id": "save:one",
+                    "created_at": "2026-07-21T00:00:00+00:00",
+                    "expires_at": "2026-07-21T00:30:00+00:00",
+                    "ttl_seconds": "owner-token",
+                },
+                "errors": [],
+            },
+            {
+                "ok": True,
+                "status": "active",
+                "lifecycle": {
+                    "state": "active",
+                    "kind": "action",
+                    "pending_id": "not-a-player-action-token",
+                    "save_id": "save:one",
+                    "created_at": "2026-07-21T00:00:00+00:00",
+                    "expires_at": "2026-07-21T00:30:00+00:00",
+                    "ttl_seconds": 1800,
+                },
+                "errors": [],
+            },
+            {
+                "ok": True,
+                "status": "active",
+                "lifecycle": {
+                    "state": "active",
+                    "kind": "clarification",
+                    "pending_id": "clarify:" + ("x" * MAX_PENDING_STRING_LENGTH),
+                    "save_id": "save:one",
+                    "created_at": "2026-07-21T00:00:00+00:00",
+                    "expires_at": "2026-07-21T00:30:00+00:00",
+                    "ttl_seconds": 1800,
+                    "clarification_origin": "player_input_ambiguity",
+                },
+                "errors": [],
+            },
+            {
+                "ok": True,
+                "status": "active",
+                "lifecycle": {
+                    "state": "active",
+                    "kind": "clarification",
+                    "pending_id": "\ud800",
+                    "save_id": "save:one",
+                    "created_at": "2026-07-21T00:00:00+00:00",
+                    "expires_at": "2026-07-21T00:30:00+00:00",
+                    "ttl_seconds": 1800,
+                    "clarification_origin": "player_input_ambiguity",
+                },
+                "errors": [],
+            },
+            {
+                "ok": True,
+                "status": "active",
+                "lifecycle": {
+                    "state": "active",
+                    "kind": "action",
+                    "pending_id": "player_action:0123456789abcdef0123456789abcdef",
+                    "save_id": "\ud800",
+                    "created_at": "2026-07-21T00:00:00+00:00",
+                    "expires_at": "2026-07-21T00:30:00+00:00",
+                    "ttl_seconds": 1800,
+                },
+                "errors": [],
+            },
+        ]
+        for inspected in invalid_cases:
+            with self.subTest(inspected=inspected):
+                self.assertEqual(
+                    canonical_pending_inspect_classification(inspected),
+                    "invalid",
+                )
+
     def test_raw_event_normalization_derives_supported_session_key(self) -> None:
         message = platform_message_from_event(
             {
@@ -397,7 +594,10 @@ class PlatformSidecarTests(unittest.TestCase):
                         "session_id": "player_action:audit",
                         "turn_proposal": {"privateReasonings": ["do not audit"]},
                         "delta": {"HiddenFacts": ["do not audit"]},
-                        "warnings": [{"gmNotes": "do not audit"}],
+                        "warnings": [
+                            "failed player_action:0123456789abcdef0123456789abcdef",
+                            {"gmNotes": "do not audit"},
+                        ],
                         "save": {"id": "save:bound", "path": kwargs["save_path"]},
                     }
 
@@ -444,6 +644,243 @@ class PlatformSidecarTests(unittest.TestCase):
             self.assertNotIn("privateReasonings", audit_text)
             self.assertNotIn("gmNotes", audit_text)
             self.assertNotIn("turn_proposal", audit_text)
+            self.assertNotIn("player_action:audit", audit_text)
+            self.assertNotIn(
+                "player_action:0123456789abcdef0123456789abcdef",
+                audit_text,
+            )
+            self.assertIn(
+                f"sha256:{hash_identity('player_action:0123456789abcdef0123456789abcdef')}",
+                audit_text,
+            )
+            self.assertEqual(
+                records[1]["result"]["session_id"],
+                f"sha256:{hash_identity('player_action:audit')}",
+            )
+
+    def test_platform_entry_invalid_identity_inputs_fail_closed_without_binding_write(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            audit_log = root / "logs" / "platform-audit.jsonl"
+            sidecar = PlatformSidecar(
+                root,
+                config=sidecar_config(enabled=False, audit_log=audit_log),
+            )
+            invalid_identities = {
+                "invalid_utf8_session": ("qq", "\ud800", ""),
+                "non_string_session": ("qq", 7, ""),
+                "oversized_actor": (
+                    "qq",
+                    "room:one",
+                    "x" * (MAX_PENDING_STRING_LENGTH + 1),
+                ),
+            }
+
+            results = []
+            for case, (platform, session_key, actor_id) in invalid_identities.items():
+                message = PlatformMessage(
+                    platform=platform,
+                    session_key=session_key,
+                    message_id=f"message:{case}",
+                    text="休息到早上",
+                    actor_id=actor_id,
+                )
+                with self.subTest(case=case, operation="start"):
+                    results.append(sidecar.start_or_continue_from_message(message).to_dict())
+                with self.subTest(case=case, operation="act"):
+                    results.append(sidecar.player_act_from_message(message).to_dict())
+                with self.subTest(case=case, operation="confirm"):
+                    results.append(
+                        sidecar.player_confirm_from_message(
+                            message,
+                            session_id="player_action:0123456789abcdef0123456789abcdef",
+                        ).to_dict()
+                    )
+                with self.subTest(case=case, operation="cancel"):
+                    results.append(
+                        sidecar.player_cancel_from_message(
+                            message,
+                            expected_pending_id="player_action:0123456789abcdef0123456789abcdef",
+                        ).to_dict()
+                    )
+
+            raw_invalid_events = {
+                "numeric_session_actor": {
+                    "platform": "qq",
+                    "session_key": 7,
+                    "actor_id": 9,
+                },
+                "list_platform": {
+                    "platform": ["qq"],
+                    "session_key": "room:one",
+                    "actor_id": "player:one",
+                },
+                "numeric_derived_conversation": {
+                    "platform": "qq",
+                    "conversation_id": 7,
+                    "actor_id": "player:one",
+                },
+            }
+            for case, event in raw_invalid_events.items():
+                with self.subTest(case=case, operation="raw_start"):
+                    results.append(
+                        sidecar.start_or_continue_from_message(
+                            {
+                                **event,
+                                "message_id": f"message:{case}",
+                                "text": "开始游戏",
+                            }
+                        ).to_dict()
+                    )
+
+            for result in results:
+                self.assertFalse(result["ok"], result)
+                self.assertEqual(result["status"], "platform_rejected", result)
+                self.assertEqual(result["platform_gate"]["reason"], "invalid_identity", result)
+            self.assertEqual(GameSessionBindingStore(root).list_bindings(), [])
+            records = [json.loads(line) for line in audit_log.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(len(records), len(results))
+            self.assertTrue(all(record["status"] == "rejected" for record in records))
+
+    def test_invalid_identity_precedes_expiry_and_private_metrics(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store = GameSessionBindingStore(root)
+            store.upsert_raw(
+                platform="qq",
+                session_key="secret:session",
+                user_id="secret:actor",
+                active_save="saves/secret",
+                state=ACTIVE_GAME,
+                active_until=(datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat(),
+            )
+            sidecar = PlatformSidecar(
+                root,
+                config=sidecar_config(enabled=False),
+                binding_store=store,
+            )
+            before = store.path.read_bytes()
+            message = PlatformMessage(
+                platform="qq",
+                session_key="\ud800",
+                message_id="message:invalid-expiry",
+                text="休息到早上",
+            )
+
+            started = sidecar.start_or_continue_from_message(message).to_dict()
+            acted = sidecar.player_act_from_message(message).to_dict()
+            confirmed = sidecar.player_confirm_from_message(
+                message,
+                session_id="player_action:0123456789abcdef0123456789abcdef",
+            ).to_dict()
+            canceled = sidecar.player_cancel_from_message(
+                message,
+                expected_pending_id="player_action:0123456789abcdef0123456789abcdef",
+            ).to_dict()
+            deactivated = sidecar.deactivate_from_message(message)
+
+            for result in (started, acted, confirmed, canceled):
+                self.assertEqual(result["platform_gate"]["reason"], "invalid_identity", result)
+                self.assertIsNone(result["platform_metrics"], result)
+            self.assertIsNone(deactivated)
+            self.assertEqual(store.path.read_bytes(), before)
+
+    def test_enabled_prewarm_rejects_invalid_identity_without_hashing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sidecar = PlatformSidecar(root, config=sidecar_config(enabled=True))
+            message = PlatformMessage(
+                platform="qq",
+                session_key="\ud800",
+                message_id="message:invalid-prewarm",
+                text="查看周围",
+            )
+
+            result = sidecar.handle_message_event(message)
+
+            self.assertTrue(result.dropped, result)
+            self.assertEqual(result.reason, "invalid_identity")
+            self.assertEqual(GameSessionBindingStore(root).list_bindings(), [])
+
+    def test_platform_entry_rejects_invalid_message_id_before_binding_write(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            audit_log = root / "logs" / "platform-audit.jsonl"
+            store = GameSessionBindingStore(root)
+            store.upsert_raw(
+                platform="qq",
+                session_key="room:one",
+                user_id="player:one",
+                active_save="saves/run",
+                state=ACTIVE_GAME,
+                active_until=(datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat(),
+            )
+            sidecar = PlatformSidecar(
+                root,
+                config=sidecar_config(enabled=True, audit_log=audit_log),
+                binding_store=store,
+            )
+            before = store.path.read_bytes()
+            invalid_message_ids = {
+                "invalid_utf8": "\ud800",
+                "oversized": "m" * (MAX_PLATFORM_MESSAGE_ID_LENGTH + 1),
+                "non_string": ["message"],
+            }
+
+            for case, message_id in invalid_message_ids.items():
+                message = PlatformMessage(
+                    platform="qq",
+                    session_key="room:one",
+                    message_id=message_id,
+                    text="休息到早上",
+                    actor_id="player:one",
+                )
+                with self.subTest(case=case, operation="act"):
+                    acted = sidecar.player_act_from_message(message).to_dict()
+                    self.assertEqual(
+                        acted["platform_gate"]["reason"],
+                        "invalid_message_id",
+                        acted,
+                    )
+                    self.assertIsNone(acted["platform_metrics"], acted)
+                with self.subTest(case=case, operation="prewarm"):
+                    prewarmed = sidecar.handle_message_event(message)
+                    self.assertTrue(prewarmed.dropped, prewarmed)
+                    self.assertEqual(prewarmed.reason, "invalid_message_id")
+                    self.assertEqual(prewarmed.message_id, "")
+
+            disabled = PlatformSidecar(root, config=sidecar_config(enabled=False))
+            disabled_invalid = disabled.handle_message_event(
+                PlatformMessage(
+                    platform="qq",
+                    session_key="room:one",
+                    message_id="secret:" + "m" * (MAX_PLATFORM_MESSAGE_ID_LENGTH + 1),
+                    text="休息到早上",
+                    actor_id="player:one",
+                )
+            )
+            self.assertEqual(disabled_invalid.reason, "feature_disabled")
+            self.assertEqual(disabled_invalid.message_id, "")
+
+            extreme_numeric = sidecar.player_act_from_message(
+                {
+                    "platform": "qq",
+                    "session_key": "room:one",
+                    "actor_id": "player:one",
+                    "message_id": 10**5000,
+                    "text": "休息到早上",
+                }
+            ).to_dict()
+            self.assertEqual(
+                extreme_numeric["platform_gate"]["reason"],
+                "invalid_message_id",
+                extreme_numeric,
+            )
+
+            self.assertEqual(store.path.read_bytes(), before)
+            audit_text = audit_log.read_text(encoding="utf-8")
+            self.assertNotIn("m" * (MAX_PLATFORM_MESSAGE_ID_LENGTH + 1), audit_text)
+            self.assertLess(len(audit_text), 30000)
 
     def test_platform_audit_write_failure_does_not_change_operation_result(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -551,6 +988,14 @@ class PlatformSidecarTests(unittest.TestCase):
                 def read_pending_clarification(self) -> None:
                     return None
 
+                def inspect_pending(self, **_kwargs: object) -> dict[str, object]:
+                    return {
+                        "ok": True,
+                        "status": "not_found",
+                        "lifecycle": {"state": "not_found", "kind": "unknown"},
+                        "errors": [],
+                    }
+
                 def player_turn(self, **kwargs: object) -> dict[str, object]:
                     sidecar.deactivate_from_message(
                         {
@@ -606,6 +1051,22 @@ class PlatformSidecarTests(unittest.TestCase):
 
                 def read_pending_clarification(self) -> None:
                     return None
+
+                def inspect_pending(self, **_kwargs: object) -> dict[str, object]:
+                    return {
+                        "ok": True,
+                        "status": "active",
+                        "lifecycle": {
+                            "state": "active",
+                            "kind": "action",
+                            "pending_id": "player_action:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                            "save_id": "save:bound",
+                            "created_at": "2026-07-21T00:00:00+00:00",
+                            "expires_at": "2026-07-21T00:30:00+00:00",
+                            "ttl_seconds": 1800,
+                        },
+                        "errors": [],
+                    }
 
                 def player_turn(self, **kwargs: object) -> dict[str, object]:
                     prewarm = sidecar.handle_message_event(
@@ -1338,7 +1799,7 @@ class PlatformSidecarTests(unittest.TestCase):
             )
             sidecar = PlatformSidecar(root, config=sidecar_config(enabled=False))
             old_confirmation_id = "player_action:already-completed"
-            new_confirmation_id = "player_action:new-action"
+            new_confirmation_id = "player_action:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 
             class FakeSaveManager:
                 def __init__(self, manager_root: Path) -> None:
@@ -1349,6 +1810,22 @@ class PlatformSidecarTests(unittest.TestCase):
 
                 def read_pending_clarification(self) -> None:
                     return None
+
+                def inspect_pending(self, **_kwargs: object) -> dict[str, object]:
+                    return {
+                        "ok": True,
+                        "status": "active",
+                        "lifecycle": {
+                            "state": "active",
+                            "kind": "action",
+                            "pending_id": new_confirmation_id,
+                            "save_id": "save:bound",
+                            "created_at": "2026-07-21T00:00:00+00:00",
+                            "expires_at": "2026-07-21T00:30:00+00:00",
+                            "ttl_seconds": 1800,
+                        },
+                        "errors": [],
+                    }
 
                 def player_confirm(self, **_kwargs: object) -> dict[str, object]:
                     return {

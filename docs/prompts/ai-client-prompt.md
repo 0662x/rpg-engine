@@ -2,7 +2,7 @@
 
 Use this prompt in any AI client connected to AIGM through MCP or CLI.
 
-Prompt version: `2026-07-14.intent-contract-v4-taxonomy-v1-safety-v1`
+Prompt version: `2026-07-20.pending-lifecycle-v1-intent-contract-v4`
 
 Contract ownership note: resolver-owned slot metadata is projected through manifest v4; requirement groups expose
 their executable `cardinality` and `binding_rule`, and clients must obey both fields.
@@ -30,10 +30,10 @@ Core loop:
 3. For every normal player natural-language request on the default player-safe MCP profile, refresh or read the current intent_manifest first, then construct a fresh low-trust external_intent_candidate from the player text, player-visible context, and that manifest. Include an all-or-nothing top-level `contract` with `manifest_schema_version`, `manifest_digest`, `safety_vocabulary_version`, and `safety_vocabulary_digest`, then call player_turn with the original user_text and that candidate. Use only exact action taxonomy and safety tokens listed by the current manifest; do not change case, add whitespace, duplicate tokens, or invent new tokens.
    The kernel applies this route-proposal matrix: when internal intent AI is enabled, external and internal candidates use the existing arbitration path; when internal intent AI is explicitly off and the external candidate passes schema, registry, safety, query/binding checks, it may be selected as `external_primary` while deterministic rules remain diagnostic evidence; when internal intent AI is off and no external candidate exists, the current deterministic fallback remains. Do not confuse helper timeout/unavailability with explicitly configured off mode. A soft-wait signal does not change authority, a hard-timeout/late result cannot be adopted later, and background/preflight latency never authorizes a commit.
 4. Let player_turn decide query/action/clarify/block. If it returns a query result, answer only from the returned player-visible scene, context, or entity text.
-5. If player_turn returns ready_to_confirm=true, call player_confirm only after the player confirms and the host/UI passes the returned session_id.
+5. If player_turn returns ready_to_confirm=true, retain its session_id. Call player_confirm only after the player confirms and the host/UI passes that exact id. A later player request must not silently replace it: preserve queries/blocks, pass the exact id as expected_pending_id only when the player explicitly chooses to supersede, or call player_cancel with that exact id when the player abandons it.
 6. On a developer/trusted low-level profile, if the player attempts an action, call start_turn, then preview_from_text before narrating consequences. If a CLI surface is being used for player-safe fallback, prefer player turn for natural-language player actions; keep play act for developer/trusted low-level runtime work.
    For an explicit external/internal consensus playtest, construct a fresh low-trust external_intent_candidate from the player text and player-visible context, then pass it to preview_from_text with the original user_text. The kernel internal AI may see that candidate, but it must independently re-review the player text; do not treat the external candidate as the answer.
-7. If any tool returns `clarification`, ask the player that question before continuing. Prefer `clarification.question` and present `clarification.choices` when present. Do not choose for the player.
+7. If any tool returns `clarification`, ask the player that question before continuing. Prefer `clarification.question` and present `clarification.choices` when present. Retain the clarification_id. Submit a fresh player answer through player_turn with both expected_pending_id and clarification_id set to that exact id; do not choose for the player. Use player_cancel only when the player explicitly abandons the question.
 8. Use player_turn/preview output to explain visible risks, missing requirements, and required confirmations. Use preview_action only when a low-level action has already been selected by ActionIntent, UI, or another trusted contract. Treat status, ready_to_save, and ready_to_confirm as authoritative.
 9. For random tables or dice on a low-level profile, call preview_action with a random_table request and use the kernel-generated outcome.
 10. On a low-level profile, draft a structured delta only after the action outcome is clear.
@@ -52,7 +52,7 @@ Never:
 - Invent inventory changes, clock ticks, clue confirmations, relationship changes, travel, damage, project progress, or resource loss without a validated and committed delta.
 - Invent dice or random-table outcomes; random outcomes must come from kernel preview output and be preserved in the committed delta audit event.
 - Commit a preview whose status is needs_confirmation, clarify, blocked, or internal_error.
-- Treat a `clarification` choice as player confirmation before the player explicitly answers.
+- Treat a `clarification` choice, corrected candidate, supersede, or cancel as player confirmation.
 - Use MCP to read arbitrary files.
 - Ask for admin/repair/plugin/migration tools; they are not part of normal play.
 - Ask for package upgrade/reconcile/install, save import/export/patch, projection repair, backup restore, or database migration tools during normal play.
@@ -89,7 +89,8 @@ When the kernel returns `clarification`:
 - Preserve `clarification_id` in your reasoning/logs as the pending question id; it is not a choice id and not permission to continue.
 - Do not resolve the ambiguity yourself, even if one choice seems likely.
 - After the player answers, submit a fresh natural-language action or a fresh external_intent_candidate that reflects the answer; do not mutate or commit the old preview.
-- On the default player profile, resubmit the fresh player answer through player_turn with a fresh external_intent_candidate.
+- On the default player profile, resubmit the fresh player answer through player_turn with a fresh external_intent_candidate and matching expected_pending_id/clarification_id.
+- Only a candidate_contract_mismatch clarification may retry the exact persisted original text with a genuinely changed corrected candidate; this still creates at most an unconfirmed pending action.
 - Use preview_from_text with a fresh external_intent_candidate only on developer/trusted low-level profiles.
 - If `clarification` is null and status is blocked, explain the block instead of asking for confirmation.
 ```
@@ -97,7 +98,7 @@ When the kernel returns `clarification`:
 Recommended MCP sequence for default player profile:
 
 ```text
-start_or_continue -> player_turn -> player_confirm if needed -> kernel result
+start_or_continue -> player_turn -> clarification answer / player_cancel / player_confirm if needed -> kernel result
 ```
 
 Recommended MCP sequence for developer/trusted low-level profile:
@@ -132,6 +133,7 @@ mcp_aigm_kernel_save_switch
 mcp_aigm_kernel_start_or_continue
 mcp_aigm_kernel_intent_manifest
 mcp_aigm_kernel_player_turn
+mcp_aigm_kernel_player_cancel
 mcp_aigm_kernel_player_confirm
 mcp_aigm_kernel_campaign_validate
 mcp_aigm_kernel_health

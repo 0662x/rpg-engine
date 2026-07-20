@@ -796,7 +796,15 @@ class SaveManagerTests(unittest.TestCase):
         cases = [
             ("incomplete_delta", {"delta": []}, "incomplete", True),
             ("incomplete_proposal", {"turn_proposal": []}, "incomplete", True),
-            ("expired", {"expires_at": "2000-01-01T00:00:00+00:00"}, "expired", False),
+            (
+                "expired",
+                {
+                    "created_at": "1999-12-31T23:30:00+00:00",
+                    "expires_at": "2000-01-01T00:00:00+00:00",
+                },
+                "expired",
+                False,
+            ),
         ]
         for case_id, payload_updates, expected_error, expect_pending in cases:
             with self.subTest(case=case_id), tempfile.TemporaryDirectory() as tmp:
@@ -882,7 +890,7 @@ class SaveManagerTests(unittest.TestCase):
             self.assertIsNotNone(still_pending)
             self.assertEqual(still_pending["session_id"], acted["session_id"])
 
-    def test_player_turn_non_ready_outcomes_clear_stale_pending_and_cannot_be_confirmed(self) -> None:
+    def test_player_turn_non_ready_outcomes_preserve_or_explicitly_supersede_pending(self) -> None:
         cases = [
             ("query", "查看周围", "ready", "query"),
             ("needs_confirmation", "去 Old Bridge 找 Scout Ren 问情况", "needs_confirmation", "act"),
@@ -905,7 +913,10 @@ class SaveManagerTests(unittest.TestCase):
                     save_path = root / manager.current_save(refresh=False)["save"]["path"]
                     before_non_ready = authoritative_save_snapshot(save_path)
 
-                    result = manager.player_turn(user_text=user_text)
+                    result = manager.player_turn(
+                        user_text=user_text,
+                        expected_pending_id=str(stale["session_id"]),
+                    )
                     after_non_ready = authoritative_save_snapshot(save_path)
 
                     self.assertEqual(result["status"], expected_status, result)
@@ -916,14 +927,19 @@ class SaveManagerTests(unittest.TestCase):
                     self.assertNotIn("delta_draft", result)
                     self.assertNotIn("turn_proposal", result)
                     self.assertEqual(after_non_ready, before_non_ready)
-                    self.assertFalse(manager.pending_action_path().exists())
-                    if manager.pending_clarification_path().exists():
-                        self.assertIsNotNone(manager.read_pending_clarification())
-                    with self.assertRaises(SaveManagerError):
-                        manager.player_confirm(stale["session_id"])
-                    manager.clear_pending_clarification()
+                    pending_action = manager.read_pending_action()
+                    pending_clarification = manager.read_pending_clarification()
+                    self.assertNotEqual(pending_action is None, pending_clarification is None)
+                    if pending_clarification is not None:
+                        self.assertFalse(manager.pending_action_path().exists())
+                        pending_id = str(pending_clarification["clarification_id"])
+                    else:
+                        self.assertEqual(pending_action["session_id"], stale["session_id"])
+                        pending_id = str(stale["session_id"])
+                    canceled = manager.player_cancel(pending_id)
+                    self.assertTrue(canceled["ok"], canceled)
 
-    def test_player_turn_unsupported_capability_clears_stale_pending_without_mutating_save(self) -> None:
+    def test_player_turn_unsupported_capability_preserves_stale_pending_without_mutating_save(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             campaign_dir = root / "campaigns" / "minimal"
@@ -948,9 +964,9 @@ class SaveManagerTests(unittest.TestCase):
             self.assertFalse(result["saved"], result)
             self.assertIn("unsupported capability", " ".join(result.get("errors", [])))
             self.assertEqual(after_blocked, before_blocked)
-            self.assertFalse(manager.pending_action_path().exists())
-            with self.assertRaises(SaveManagerError):
-                manager.player_confirm(stale["session_id"])
+            self.assertTrue(manager.pending_action_path().exists())
+            self.assertEqual(manager.read_pending_action()["session_id"], stale["session_id"])
+            self.assertTrue(manager.player_cancel(str(stale["session_id"]))["ok"])
 
     def test_player_confirm_commits_only_to_save_package_without_mutating_source_campaign(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -981,7 +997,7 @@ class SaveManagerTests(unittest.TestCase):
             for runtime_dir in ("snapshots", "cards", "memory", "backups", "reports"):
                 self.assertFalse((campaign_dir / runtime_dir).exists())
 
-    def test_player_turn_pending_clarification_clears_stale_pending_without_mutating_save(self) -> None:
+    def test_player_turn_pending_clarification_explicitly_supersedes_stale_pending_without_mutating_save(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             campaign_dir = root / "campaigns" / "official"
@@ -1007,7 +1023,10 @@ class SaveManagerTests(unittest.TestCase):
             )
 
             with mock.patch("rpg_engine.save_manager.GMRuntime.from_path", return_value=clarification_runtime):
-                result = manager.player_turn(user_text="使用它")
+                result = manager.player_turn(
+                    user_text="使用它",
+                    expected_pending_id=str(stale["session_id"]),
+                )
             after_clarification = authoritative_save_snapshot(save_path)
             pending_clarification_path = root / ".aigm" / "pending-player-clarification.json"
             legacy_clarification_path = root / ".aigm" / "pending-clarification.json"
@@ -1059,8 +1078,12 @@ class SaveManagerTests(unittest.TestCase):
                         self.assertIn("确认后", result["message"])
                     else:
                         self.assertFalse(result["session_id"], result)
-                        self.assertFalse((root / ".aigm" / "pending-player-action.json").exists())
-                    self.assertFalse((root / ".aigm" / "pending-player-clarification.json").exists())
+                    pending = manager.inspect_pending()
+                    lifecycle = pending.get("lifecycle", {})
+                    if lifecycle.get("state") not in {"not_found", "expired"}:
+                        pending_id = lifecycle.get("pending_id")
+                        self.assertTrue(pending_id, pending)
+                        self.assertTrue(manager.player_cancel(str(pending_id))["ok"])
 
     def test_player_act_confirm_supports_random_dice_without_exposing_delta(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1431,6 +1454,12 @@ class SaveManagerTests(unittest.TestCase):
                         else:
                             self.assertFalse(result["session_id"], result)
                             self.assertTrue(result["message"], result)
+                        pending = manager.inspect_pending()
+                        lifecycle = pending.get("lifecycle", {})
+                        if lifecycle.get("state") not in {"not_found", "expired"}:
+                            pending_id = lifecycle.get("pending_id")
+                            self.assertTrue(pending_id, pending)
+                            self.assertTrue(manager.player_cancel(str(pending_id))["ok"])
             finally:
                 if old_fake is None:
                     os.environ.pop("AIGM_AI_FAKE_RESPONSE", None)

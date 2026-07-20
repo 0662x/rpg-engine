@@ -447,3 +447,18 @@ Memory schema/migration 只操作 `main`，拒绝 TEMP shadow、大小写 trigge
 - AI 意图链、平台预热链、旧规则路由之间存在兼容逻辑，需要保持分层清晰。
 - `.aigm/`、`saves/`、Save Package、玩家 SQLite、platform session 和 preflight cache 属于敏感运行数据。
 - 后续增加真正协调层时，不能让 `GMRuntime` 继续膨胀为所有职责的集合。
+
+## Pending 生命周期权威
+
+`SaveManager` 是 workspace 中普通玩家 pending action / clarification 的唯一持久化 owner。两种
+session 共享同一个不变量和 OS owner lock；adapter 只能 inspect、gate、mirror 和转发。发布新 pending
+必须用当前 `session_id` 或 `clarification_id` 作为 `expected_pending_id` 做两阶段 CAS，Runtime/AI 在锁外
+运行，发布前重新比较 generation。Query 与 blocked 结果保留旧 pending；不同 save 或 identity 的 caller
+得到脱敏 conflict。只有 `player_confirm` 能把匹配 action 写入事实，`player_cancel` 只删除匹配 entry state。
+
+Clarification 与 action 默认 TTL 均为 1800 秒。Save switch 保留原 save binding；confirmation receipt 使用
+有界历史并逐条对账目标 Save 的 SQLite anchor、turn 和 event evidence。`.aigm` lifecycle 文件不是事实、
+确认或 commit authority。Clarification CAS id 只能由 `SaveManager` 为本次 publication 新生成，不能复用
+Runtime/AI 的语义 id；receipt history 淘汰同时精确清理对应 historical SQLite anchor。历史顺序摘要由
+最后一条 retained receipt 所属 Save 的 SQLite meta 锚定；重排 workspace receipts 或仅重算 JSON 摘要必须
+fail closed，归档 latest receipt 前也必须重新核验其 SQLite turn/command/event 与 receipt anchor。

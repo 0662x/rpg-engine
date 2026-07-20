@@ -26,6 +26,7 @@ from rpg_engine.mcp_adapter import (
 )
 from rpg_engine.db import connect, upsert_entity
 from rpg_engine.runtime import GMRuntime
+from rpg_engine.save_manager import MAX_PENDING_STRING_LENGTH, SaveManager
 from rpg_engine.save_service import init_v1_save
 
 
@@ -69,6 +70,7 @@ class MCPAdapterTests(unittest.TestCase):
                 "start_or_continue",
                 "intent_manifest",
                 "player_turn",
+                "player_cancel",
                 "player_confirm",
                 "campaign_validate",
                 "save_inspect",
@@ -234,6 +236,177 @@ class MCPAdapterTests(unittest.TestCase):
             self.assertEqual(commit["turn_id"], "turn:000001")
             self.assertEqual(commit["state_audit"]["risk"], "low")
             self.assertTrue(health["ok"], health)
+
+    def test_standalone_low_level_clarification_remains_preview_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            campaign_dir = root / "campaigns" / "minimal"
+            save_dir = root / "saves" / "run"
+            shutil.copytree(MINIMAL_FIXTURE, campaign_dir)
+            init_v1_save(campaign_dir, save_dir)
+            adapter = AIGMMCPAdapter(
+                MCPAdapterConfig.from_values(
+                    root,
+                    default_campaign="campaigns/minimal",
+                    default_save="saves/run",
+                    mcp_profile="developer",
+                )
+            )
+            clarification = {
+                "ok": False,
+                "status": "needs_clarification",
+                "action": "act",
+                "interpretation": {
+                    "intent": {
+                        "clarification": {
+                            "question": "你指哪一个？",
+                            "options": ["第一个", "第二个"],
+                        }
+                    }
+                },
+                "warnings": [],
+                "errors": [],
+            }
+            runtime = types.SimpleNamespace(
+                start_turn=lambda *_args, **_kwargs: types.SimpleNamespace(
+                    to_dict=lambda: dict(clarification)
+                ),
+                preview_from_text=lambda *_args, **_kwargs: types.SimpleNamespace(
+                    to_dict=lambda: dict(clarification)
+                ),
+            )
+
+            with mock.patch.object(adapter, "runtime_for_save", return_value=runtime):
+                started = adapter.start_turn("使用那个物品")
+                previewed = adapter.preview_from_text("使用那个物品")
+
+            self.assertEqual(started["status"], "needs_clarification", started)
+            self.assertEqual(previewed["status"], "needs_clarification", previewed)
+            self.assertEqual(
+                started["interpretation"]["intent"]["clarification"]["question"],
+                "你指哪一个？",
+            )
+            self.assertEqual(
+                previewed["interpretation"]["intent"]["clarification"]["question"],
+                "你指哪一个？",
+            )
+            self.assertFalse((root / ".aigm" / "pending-player-action.json").exists())
+            self.assertFalse((root / ".aigm" / "pending-player-clarification.json").exists())
+
+    def test_standalone_preview_ignores_malformed_canonical_revision(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            campaign_dir = root / "campaigns" / "minimal"
+            save_dir = root / "saves" / "run"
+            shutil.copytree(MINIMAL_FIXTURE, campaign_dir)
+            init_v1_save(campaign_dir, save_dir)
+            revision_path = root / ".aigm" / "pending-player-lifecycle-revision.json"
+            revision_path.parent.mkdir(parents=True, exist_ok=True)
+            revision_path.write_bytes(b"{malformed")
+            before = revision_path.read_bytes()
+            adapter = AIGMMCPAdapter(
+                MCPAdapterConfig.from_values(
+                    root,
+                    default_campaign="campaigns/minimal",
+                    default_save="saves/run",
+                    mcp_profile="developer",
+                )
+            )
+            clarification = {
+                "ok": False,
+                "status": "needs_clarification",
+                "action": "act",
+                "interpretation": {
+                    "intent": {"clarification": {"question": "你指哪一个？"}}
+                },
+                "warnings": [],
+                "errors": [],
+            }
+            runtime = types.SimpleNamespace(
+                start_turn=lambda *_args, **_kwargs: types.SimpleNamespace(
+                    to_dict=lambda: dict(clarification)
+                )
+            )
+
+            with mock.patch.object(adapter, "runtime_for_save", return_value=runtime):
+                result = adapter.start_turn("使用那个物品")
+
+            self.assertEqual(result["status"], "needs_clarification", result)
+            self.assertEqual(revision_path.read_bytes(), before)
+            self.assertFalse((root / ".aigm" / "pending-player-action.json").exists())
+            self.assertFalse((root / ".aigm" / "pending-player-clarification.json").exists())
+
+    def test_standalone_preview_only_ignores_unrelated_canonical_pending(self) -> None:
+        for pending_kind in ("action", "clarification"):
+            with self.subTest(pending_kind=pending_kind), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                campaign_dir = root / "campaigns" / "minimal"
+                standalone_dir = root / "saves" / "run"
+                shutil.copytree(MINIMAL_FIXTURE, campaign_dir)
+                init_v1_save(campaign_dir, standalone_dir)
+                manager = SaveManager(root, default_campaign="campaigns/minimal")
+                started = manager.start_or_continue(campaign="campaigns/minimal")
+                if pending_kind == "action":
+                    manager.player_turn(user_text="休息到早上")
+                    canonical_path = manager.pending_action_path()
+                else:
+                    clarification_result = types.SimpleNamespace(
+                        to_dict=lambda: {
+                            "ok": False,
+                            "status": "needs_clarification",
+                            "action": "act",
+                            "interpretation": {
+                                "intent": {"clarification": {"question": "你指哪一个？"}}
+                            },
+                            "warnings": [],
+                            "errors": [],
+                        }
+                    )
+                    with mock.patch(
+                        "rpg_engine.save_manager.GMRuntime.from_path",
+                        return_value=types.SimpleNamespace(
+                            act=lambda *_args, **_kwargs: clarification_result
+                        ),
+                    ):
+                        manager.player_turn(user_text="使用那个物品")
+                    canonical_path = manager.pending_clarification_path()
+                canonical_before = canonical_path.read_bytes()
+                adapter = AIGMMCPAdapter(
+                    MCPAdapterConfig.from_values(
+                        root,
+                        default_campaign="campaigns/minimal",
+                        default_save="saves/run",
+                        mcp_profile="developer",
+                    )
+                )
+                preview_result = {
+                    "ok": False,
+                    "status": "needs_clarification",
+                    "action": "act",
+                    "interpretation": {
+                        "intent": {"clarification": {"question": "standalone 哪一个？"}}
+                    },
+                    "warnings": [],
+                    "errors": [],
+                }
+                runtime = types.SimpleNamespace(
+                    start_turn=lambda *_args, **_kwargs: types.SimpleNamespace(
+                        to_dict=lambda: dict(preview_result)
+                    ),
+                    preview_from_text=lambda *_args, **_kwargs: types.SimpleNamespace(
+                        to_dict=lambda: dict(preview_result)
+                    ),
+                )
+
+                with mock.patch.object(adapter, "runtime_for_save", return_value=runtime):
+                    if pending_kind == "action":
+                        previewed = adapter.start_turn("standalone 使用那个物品")
+                    else:
+                        previewed = adapter.preview_from_text("standalone 使用那个物品")
+
+                self.assertEqual(previewed["status"], "needs_clarification", previewed)
+                self.assertEqual(canonical_path.read_bytes(), canonical_before)
+                self.assertEqual(manager.read_registry()["active_save_id"], started["save"]["id"])
 
     def test_mcp_preview_returns_structured_error_for_malformed_external_candidate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -741,7 +914,7 @@ class MCPAdapterTests(unittest.TestCase):
             self.assertTrue(confirmed["saved"], confirmed)
             self.assertEqual(current["save"]["current_turn_id"], "turn:000001")
 
-    def test_mcp_developer_player_act_clears_stale_pending_action_when_new_action_needs_clarification(self) -> None:
+    def test_mcp_developer_player_act_preserves_stale_pending_action_when_new_action_needs_clarification(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             campaign_dir = root / "campaigns" / "minimal"
@@ -762,8 +935,8 @@ class MCPAdapterTests(unittest.TestCase):
 
             self.assertTrue(ready["ready_to_confirm"], ready)
             self.assertFalse(needs_clarification["ready_to_confirm"], needs_clarification)
-            self.assertFalse(confirmed["ok"], confirmed)
-            self.assertIn("no pending player action", confirmed["errors"][0])
+            self.assertTrue(confirmed["ok"], confirmed)
+            self.assertTrue(confirmed["saved"], confirmed)
 
     def test_mcp_developer_start_and_preview_ignore_empty_intent_override_defaults(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1262,9 +1435,7 @@ class MCPAdapterTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             campaign_dir = root / "campaigns" / "minimal"
-            save_dir = root / "saves" / "run"
             shutil.copytree(MINIMAL_FIXTURE, campaign_dir)
-            init_v1_save(campaign_dir, save_dir)
             old_path = install_fake_hermes(
                 root,
                 '{"kind":"single","mode":"action","action":"routine","slots":{"task":"守夜到天亮"},"plan":[],"confidence":"high","missing_slots":[],"needs_confirmation":[],"safety_flags":[],"reason":"内部复核认为这是 routine","agreement_with_external":"disagree","disagreements":["action mismatch"],"external_candidate_quality":"wrong_action"}',
@@ -1273,7 +1444,7 @@ class MCPAdapterTests(unittest.TestCase):
                 MCPAdapterConfig.from_values(
                     root,
                     default_campaign="campaigns/minimal",
-                    default_save="saves/run",
+                    registry_active=True,
                     mcp_profile="developer",
                 )
             )
@@ -1290,6 +1461,7 @@ class MCPAdapterTests(unittest.TestCase):
                 "reason": "外部 AI 判断这是休息行动。",
             }
             try:
+                adapter.start_or_continue(campaign="campaigns/minimal")
                 start = adapter.start_turn(
                     "守夜到天亮",
                     intent_ai="consensus",
@@ -1316,12 +1488,13 @@ class MCPAdapterTests(unittest.TestCase):
             self.assertFalse(start["can_proceed"], start)
             self.assertIn("clarification_id", start["clarification"])
             self.assertFalse(stale_preview["ok"], stale_preview)
-            self.assertIn("pending clarification", stale_preview["errors"][0])
+            self.assertIn("clarification is pending", stale_preview["errors"][0])
             self.assertFalse(low_level_preview["ok"], low_level_preview)
-            self.assertIn("cannot run while clarification", low_level_preview["errors"][0])
+            self.assertIn("clarification is pending", low_level_preview["errors"][0])
             self.assertFalse(preflight_blocked["ok"], preflight_blocked)
-            self.assertIn("cannot run while clarification", preflight_blocked["errors"][0])
-            self.assertNotIn("must answer pending clarification", " ".join(fresh_preview.get("errors", [])))
+            self.assertIn("clarification is pending", preflight_blocked["errors"][0])
+            self.assertFalse(fresh_preview["ok"], fresh_preview)
+            self.assertIn("clarification is pending", fresh_preview["errors"][0])
 
     def test_mcp_commit_runs_default_state_audit_guard(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1394,6 +1567,101 @@ class MCPAdapterTests(unittest.TestCase):
             self.assertNotIn("text", records[0]["result"])
             self.assertIn("must not contain", records[1]["result"]["errors"][0])
 
+    def test_mcp_audit_invalid_identity_inputs_fail_closed_without_pending_write(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            adapter = AIGMMCPAdapter(MCPAdapterConfig.from_values(root))
+            invalid_identities = {
+                "invalid_utf8_session": {
+                    "platform": "qq",
+                    "session_key": "\ud800",
+                    "actor_id": "",
+                },
+                "non_string_session": {
+                    "platform": "qq",
+                    "session_key": 7,
+                    "actor_id": "",
+                },
+                "oversized_actor": {
+                    "platform": "qq",
+                    "session_key": "room:one",
+                    "actor_id": "x" * (MAX_PENDING_STRING_LENGTH + 1),
+                },
+            }
+
+            for case, identity in invalid_identities.items():
+                with self.subTest(case=case):
+                    result = adapter.player_turn("休息到早上", **identity)
+                    self.assertEqual(result["status"], "invalid_state", result)
+                    self.assertEqual(
+                        result["lifecycle"],
+                        {"state": "invalid_state", "kind": "unknown"},
+                    )
+
+            manager = SaveManager(root)
+            self.assertFalse(manager.pending_action_path().exists())
+            self.assertFalse(manager.pending_clarification_path().exists())
+            records = [
+                json.loads(line)
+                for line in (root / "logs" / "aigm-mcp-audit.jsonl").read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertEqual(len(records), len(invalid_identities))
+            self.assertTrue(all(record["status"] == "error" for record in records))
+            self.assertTrue(
+                all("<invalid identity>" in record["request"].values() for record in records)
+            )
+
+    def test_mcp_low_level_identity_inputs_fail_closed_before_runtime_or_preflight_write(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            campaign_dir = root / "campaigns" / "minimal"
+            save_dir = root / "saves" / "run"
+            shutil.copytree(MINIMAL_FIXTURE, campaign_dir)
+            init_v1_save(campaign_dir, save_dir)
+            adapter = AIGMMCPAdapter(
+                MCPAdapterConfig.from_values(
+                    root,
+                    default_campaign="campaigns/minimal",
+                    default_save="saves/run",
+                    mcp_profile="developer",
+                )
+            )
+            before_counts = sqlite_counts(save_dir)
+            invalid_identities = {
+                "non_string": {"platform": "qq", "session_key": 7, "actor_id": True},
+                "invalid_utf8": {"platform": "qq", "session_key": "\ud800", "actor_id": ""},
+                "oversized_actor": {
+                    "platform": "qq",
+                    "session_key": "room:one",
+                    "actor_id": "x" * (MAX_PENDING_STRING_LENGTH + 1),
+                },
+            }
+
+            for case, identity in invalid_identities.items():
+                with self.subTest(case=case, tool="start_turn"):
+                    self.assertFalse(adapter.start_turn("查看周围", **identity)["ok"])
+                with self.subTest(case=case, tool="preview_from_text"):
+                    self.assertFalse(adapter.preview_from_text("查看周围", **identity)["ok"])
+
+            invalid_sessions = {
+                "non_string": 7,
+                "invalid_utf8": "\ud800",
+                "oversized": "x" * (MAX_PENDING_STRING_LENGTH + 1),
+            }
+            for case, session_key in invalid_sessions.items():
+                with self.subTest(case=case, tool="intent_preflight"):
+                    result = adapter.intent_preflight(
+                        "查看周围",
+                        platform="qq",
+                        session_key=session_key,
+                    )
+                    self.assertFalse(result["ok"], result)
+
+            manager = SaveManager(root)
+            self.assertFalse(manager.pending_action_path().exists())
+            self.assertFalse(manager.pending_clarification_path().exists())
+            self.assertEqual(sqlite_counts(save_dir), before_counts)
+
     def test_mcp_audit_scrubs_sensitive_free_text_errors_and_warnings(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1403,6 +1671,7 @@ class MCPAdapterTests(unittest.TestCase):
                     mcp_profile="developer",
                 )
             )
+            owner_token = "player_action:0123456789abcdef0123456789abcdef"
 
             adapter.write_audit_record(
                 "player_turn",
@@ -1414,7 +1683,7 @@ class MCPAdapterTests(unittest.TestCase):
                 },
                 {
                     "ok": False,
-                    "errors": ["failed qq:raw-session for actor:raw"],
+                    "errors": [f"failed qq:raw-session for actor:raw ({owner_token})"],
                     "warnings": ["Private-Reasoning: do not audit"],
                     "text": "HiddenFacts: do not audit either",
                 },
@@ -1425,7 +1694,10 @@ class MCPAdapterTests(unittest.TestCase):
             records = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines()]
             audit_text = json.dumps(records, ensure_ascii=False)
 
-            self.assertEqual(records[0]["result"]["errors"], ["failed <redacted> for <redacted>"])
+            self.assertEqual(
+                records[0]["result"]["errors"],
+                [f"failed <redacted> for <redacted> (sha256:{hash_identity(owner_token)})"],
+            )
             self.assertEqual(records[0]["result"]["warnings"], ["<redacted sensitive audit text>"])
             self.assertEqual(records[0]["result"]["text_preview"], "<redacted sensitive audit text>")
             self.assertNotIn("qq:raw-session", audit_text)
@@ -1433,6 +1705,7 @@ class MCPAdapterTests(unittest.TestCase):
             self.assertNotIn("Private-Reasoning", audit_text)
             self.assertNotIn("HiddenFacts", audit_text)
             self.assertNotIn("do not audit", audit_text)
+            self.assertNotIn(owner_token, audit_text)
 
     def test_mcp_audit_write_failure_does_not_change_tool_result(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1509,7 +1782,7 @@ class MCPAdapterTests(unittest.TestCase):
             self.assertEqual(sqlite_counts(save_dir), before_counts)
             self.assertFalse((root / ".aigm" / "pending-player-action.json").exists())
             self.assertFalse((root / ".aigm" / "pending-player-clarification.json").exists())
-            self.assertEqual(adapter.pending_clarifications, {})
+            self.assertFalse(hasattr(adapter, "pending_clarifications"))
 
     def test_mcp_developer_profile_keeps_hidden_read_gate_separate_from_low_level_gate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

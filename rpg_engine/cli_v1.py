@@ -542,6 +542,9 @@ def add_v1_parsers(subparsers: argparse._SubParsersAction, registered_actions: l
     add_player_internal_intent_options(player_turn_parser)
     player_turn_parser.add_argument("--external-intent-candidate", help="JSON object or file path for the external AI intent candidate")
     add_preflight_consume_options(player_turn_parser)
+    player_turn_parser.add_argument("--actor-id", default="")
+    player_turn_parser.add_argument("--expected-pending-id", default="")
+    player_turn_parser.add_argument("--clarification-id", default="")
     add_format_option(player_turn_parser)
 
     player_act_parser = player_sub.add_parser("act", help="compatibility wrapper for natural-language player turns")
@@ -550,11 +553,27 @@ def add_v1_parsers(subparsers: argparse._SubParsersAction, registered_actions: l
     add_user_text_external_source_args(player_act_parser)
     add_player_internal_intent_options(player_act_parser)
     add_preflight_consume_options(player_act_parser)
+    player_act_parser.add_argument("--actor-id", default="")
+    player_act_parser.add_argument("--expected-pending-id", default="")
+    player_act_parser.add_argument("--clarification-id", default="")
     add_format_option(player_act_parser)
+
+    player_cancel_parser = player_sub.add_parser("cancel", help="cancel the exact pending player session")
+    player_cancel_parser.add_argument("root")
+    player_cancel_parser.add_argument("--expected-pending-id", required=True)
+    player_cancel_parser.add_argument("--save-path", default="")
+    player_cancel_parser.add_argument("--platform", default="")
+    player_cancel_parser.add_argument("--session-key", default="")
+    player_cancel_parser.add_argument("--actor-id", default="")
+    add_format_option(player_cancel_parser)
 
     player_confirm_parser = player_sub.add_parser("confirm", help="confirm and save the pending player action")
     player_confirm_parser.add_argument("root")
     player_confirm_parser.add_argument("--session-id", required=True, help="pending action session_id returned by player turn")
+    player_confirm_parser.add_argument("--save-path", default="")
+    player_confirm_parser.add_argument("--platform", default="")
+    player_confirm_parser.add_argument("--session-key", default="")
+    player_confirm_parser.add_argument("--actor-id", default="")
     add_format_option(player_confirm_parser)
 
     player_new_parser = player_sub.add_parser("new", help="create and activate a new save")
@@ -608,6 +627,13 @@ def add_v1_parsers(subparsers: argparse._SubParsersAction, registered_actions: l
     add_platform_message_options(platform_confirm_parser, required_text=False)
     add_platform_sidecar_options(platform_confirm_parser)
     add_format_option(platform_confirm_parser)
+
+    platform_cancel_parser = platform_sub.add_parser("cancel", help="cancel the exact pending platform player session")
+    platform_cancel_parser.add_argument("root")
+    platform_cancel_parser.add_argument("--expected-pending-id", required=True)
+    add_platform_message_options(platform_cancel_parser, required_text=False)
+    add_platform_sidecar_options(platform_cancel_parser)
+    add_format_option(platform_cancel_parser)
 
     platform_metrics_parser = platform_sub.add_parser("metrics", help="print platform sidecar canary metrics")
     platform_metrics_parser.add_argument("root")
@@ -1102,15 +1128,35 @@ def handle_player(args: argparse.Namespace) -> int:
             result = manager.player_turn(
                 user_text=resolve_user_text_arg(args),
                 **intent_preview_kwargs_from_args(args),
+                actor_id=args.actor_id,
+                expected_pending_id=args.expected_pending_id,
+                clarification_id=args.clarification_id,
             )
         elif args.player_type == "act":
             result = manager.player_act(
                 user_text=resolve_user_text_arg(args),
                 **intent_option_kwargs_from_args(args),
                 **preflight_consume_kwargs_from_args(args),
+                actor_id=args.actor_id,
+                expected_pending_id=args.expected_pending_id,
+                clarification_id=args.clarification_id,
+            )
+        elif args.player_type == "cancel":
+            result = manager.player_cancel(
+                args.expected_pending_id,
+                save_path=args.save_path,
+                platform=args.platform,
+                session_key=args.session_key,
+                actor_id=args.actor_id,
             )
         elif args.player_type == "confirm":
-            result = manager.player_confirm(session_id=args.session_id)
+            result = manager.player_confirm(
+                session_id=args.session_id,
+                save_path=args.save_path,
+                platform=args.platform,
+                session_key=args.session_key,
+                actor_id=args.actor_id,
+            )
         elif args.player_type == "new":
             result = manager.create_save(
                 campaign=args.campaign,
@@ -1163,6 +1209,11 @@ def handle_platform(args: argparse.Namespace) -> int:
             data = sidecar.player_confirm_from_message(
                 platform_event_from_args(args),
                 session_id=args.session_id,
+            ).to_dict()
+        elif args.platform_type == "cancel":
+            data = sidecar.player_cancel_from_message(
+                platform_event_from_args(args),
+                expected_pending_id=args.expected_pending_id,
             ).to_dict()
         elif args.platform_type == "metrics":
             sidecar.expire_stale_bindings()

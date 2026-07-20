@@ -29,7 +29,7 @@ from .game_session import (
 )
 from .preflight_cache import PREFLIGHT_IDENTITY_MESSAGE_ONLY
 from .runtime import GMRuntime
-from .save_manager import process_file_lock
+from .save_manager import identity_input_is_bounded_utf8, process_file_lock
 
 
 PLATFORM_PREWARM_ENV = "AIGM_PLATFORM_PREWARM"
@@ -39,11 +39,14 @@ DEFAULT_BINDINGS_LOCK_RELATIVE = ".aigm/platform-sidecar-entry.lock"
 DEFAULT_PREWARM_QUEUE_SIZE = 16
 DEFAULT_PREWARM_WORKERS = 1
 DEFAULT_PREWARM_TTL_SECONDS = 300
+MAX_PLATFORM_MESSAGE_ID_LENGTH = 4096
 
 DROP_FEATURE_DISABLED = "feature_disabled"
 DROP_MISSING_PLATFORM = "missing_platform"
 DROP_MISSING_SESSION_KEY = "missing_session_key"
 DROP_MISSING_MESSAGE_ID = "missing_message_id"
+DROP_INVALID_IDENTITY = "invalid_identity"
+DROP_INVALID_MESSAGE_ID = "invalid_message_id"
 DROP_DUPLICATE_MESSAGE = "duplicate_message"
 DROP_QUEUE_FULL = "queue_full"
 DROP_AI_TIMEOUT = "ai_timeout"
@@ -54,6 +57,8 @@ DROP_REASONS = {
     DROP_MISSING_PLATFORM,
     DROP_MISSING_SESSION_KEY,
     DROP_MISSING_MESSAGE_ID,
+    DROP_INVALID_IDENTITY,
+    DROP_INVALID_MESSAGE_ID,
     "inactive",
     "platform_mismatch",
     "session_mismatch",
@@ -221,6 +226,11 @@ class GameSessionBindingStore:
         return [binding_from_record(item) for item in self.read_state().get("bindings", []) if isinstance(item, dict)]
 
     def get(self, *, platform: str, session_key: str) -> GameSessionBinding | None:
+        if not all(
+            identity_input_is_bounded_utf8(value)
+            for value in (platform, session_key)
+        ):
+            return None
         platform_value = clean(platform)
         session_hash = hash_identity(session_key)
         for binding in self.list_bindings():
@@ -300,6 +310,8 @@ class GameSessionBindingStore:
         self.write_state(state)
 
     def record_last_message(self, *, platform: str, session_key: str, message_id: str) -> None:
+        if not platform_message_id_is_valid(message_id):
+            return
         binding = self.get(platform=platform, session_key=session_key)
         if binding is None:
             return
@@ -324,6 +336,11 @@ class GameSessionBindingStore:
         )
 
     def delete(self, *, platform: str, session_key: str) -> bool:
+        if not all(
+            identity_input_is_bounded_utf8(value)
+            for value in (platform, session_key)
+        ):
+            return False
         state = self.read_state()
         platform_value = clean(platform)
         session_hash = hash_identity(session_key)
@@ -429,7 +446,7 @@ class PrewarmQueue:
                 enqueued=True,
                 dropped=False,
                 reason="enqueued",
-                message_id=clean(request.message.message_id),
+                message_id=public_platform_message_id(request.message.message_id),
                 active_save=request.active_save,
                 queue_depth=depth,
             )
@@ -545,7 +562,7 @@ class PrewarmWorker:
                 ok=ok,
                 status=status,
                 reason=reason,
-                message_id=clean(request.message.message_id),
+                message_id=public_platform_message_id(request.message.message_id),
                 preflight_id=preflight_id if ok else "",
                 duration_ms=duration_ms,
                 errors=public_prewarm_errors(reason) if not ok else (),
@@ -557,7 +574,7 @@ class PrewarmWorker:
                 ok=False,
                 status="failed",
                 reason=DROP_AI_TIMEOUT,
-                message_id=clean(request.message.message_id),
+                message_id=public_platform_message_id(request.message.message_id),
                 duration_ms=duration_ms,
                 errors=public_prewarm_errors(DROP_AI_TIMEOUT),
             )
@@ -568,7 +585,7 @@ class PrewarmWorker:
                 ok=False,
                 status="failed",
                 reason=DROP_WORKER_ERROR,
-                message_id=clean(request.message.message_id),
+                message_id=public_platform_message_id(request.message.message_id),
                 duration_ms=duration_ms,
                 errors=public_prewarm_errors(DROP_WORKER_ERROR),
             )
@@ -625,7 +642,7 @@ class PlatformPrewarmService:
                 allow_platform=True,
                 dropped=True,
                 reason=DROP_FEATURE_DISABLED,
-                message_id=clean(message.message_id),
+                message_id=public_platform_message_id(message.message_id),
                 queue_depth=self.queue.qsize(),
             )
         missing = missing_message_identity_reason(message)
@@ -635,7 +652,7 @@ class PlatformPrewarmService:
                 allow_platform=True,
                 dropped=True,
                 reason=missing,
-                message_id=clean(message.message_id),
+                message_id=public_platform_message_id(message.message_id),
                 queue_depth=self.queue.qsize(),
             )
         with game_session_binding_lock(self.root):
@@ -647,7 +664,7 @@ class PlatformPrewarmService:
                     allow_platform=True,
                     dropped=True,
                     reason=decision.reason,
-                    message_id=clean(message.message_id),
+                    message_id=public_platform_message_id(message.message_id),
                     active_save=decision.active_save,
                     queue_depth=self.queue.qsize(),
                     decision=decision.to_dict(),
@@ -658,7 +675,7 @@ class PlatformPrewarmService:
                 self.binding_store.record_last_message(
                     platform=message.platform,
                     session_key=message.session_key,
-                    message_id=message.message_id,
+                    message_id=public_platform_message_id(message.message_id),
                 )
             return result
 
@@ -787,13 +804,39 @@ def ensure_under_root(root: Path, candidate: Path, label: str) -> None:
 
 
 def missing_message_identity_reason(message: PlatformMessage) -> str:
+    if not all(
+        identity_input_is_bounded_utf8(value)
+        for value in (message.platform, message.session_key, message.actor_id)
+    ):
+        return DROP_INVALID_IDENTITY
+    if isinstance(message.message_id, str) and not message.message_id.strip():
+        return DROP_MISSING_MESSAGE_ID
+    if not platform_message_id_is_valid(message.message_id):
+        return DROP_INVALID_MESSAGE_ID
     if not clean(message.platform):
         return DROP_MISSING_PLATFORM
     if not clean(message.session_key):
         return DROP_MISSING_SESSION_KEY
-    if not clean(message.message_id):
-        return DROP_MISSING_MESSAGE_ID
     return ""
+
+
+def platform_message_id_is_valid(value: Any) -> bool:
+    if (
+        not isinstance(value, str)
+        or not value
+        or value != clean(value)
+        or len(value) > MAX_PLATFORM_MESSAGE_ID_LENGTH
+    ):
+        return False
+    try:
+        value.encode("utf-8")
+    except UnicodeError:
+        return False
+    return True
+
+
+def public_platform_message_id(value: Any) -> str:
+    return value if platform_message_id_is_valid(value) else ""
 
 
 def missing_request_identity_reason(request: PlatformPrewarmRequest) -> str:
@@ -806,7 +849,7 @@ def dropped_result(reason: str, *, request: PlatformPrewarmRequest, queue_depth:
         enqueued=False,
         dropped=True,
         reason=reason,
-        message_id=clean(request.message.message_id),
+        message_id=public_platform_message_id(request.message.message_id),
         active_save=request.active_save,
         queue_depth=queue_depth,
     )

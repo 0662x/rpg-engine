@@ -952,8 +952,10 @@ SaveManager 在 `.aigm/` 下存储临时玩家入口状态：
 ```text
 .aigm/pending-player-action.json
 .aigm/pending-player-clarification.json
+.aigm/pending-player-lifecycle-revision.json
 .aigm/pending-player-action.lock
 .aigm/last-confirmed-player-action.json
+.aigm/confirmed-player-action-history.json
 ```
 
 Pending action 绑定：
@@ -977,6 +979,18 @@ replay evidence，包含 save identity/path、hashed confirmation/platform/sessi
 id/hash、delta/proposal digest、turn id、event count 与 result classification。二者均不属于 Save Package
 事实模型；receipt 的完整摘要锚定在目标 Save SQLite `meta`，replay 必须同时复核该 anchor 与
 turn/command/event evidence，不能靠可重算的 workspace 自摘要授权。
+历史文件最多保留 8 条 receipt，只保存必要 hashed identity/digest/result evidence；其 receipt 顺序摘要锚定在
+最后一条 retained receipt 的目标 Save SQLite meta。读取时必须同时验证逐条 receipt、自摘要、顺序摘要与
+SQLite order anchor；新归档前还要重新核验 latest receipt 的 authoritative turn/command/event evidence。
+
+`pending-player-lifecycle-revision.json` 只保存 schema、随机 incarnation 与单调整数 revision。任何
+action/clarification 写入或清理都先推进 revision；文件缺失后的兼容初始化会生成新 incarnation。Player turn
+与 low-level clarification 的锁外 Runtime 结果必须同时匹配原 pending generation、incarnation 和 revision，
+实际 active Save selection 变化也推进同一 revision，因而不能在 `empty → pending → cancel → empty`、
+revision 丢失/重建或 `Save A → B → A` 后通过 ABA 复活。Low-level publication
+snapshot 还带进程内 HMAC 完整性 token 与 workspace/registry owner-scope hash，字段篡改或跨 workspace
+重放一律在 owner 写入前拒绝；成功写入会推进 revision，使同一 snapshot 只能使用一次。该文件是临时
+owner/CAS evidence，不是事实、玩家确认或 commit authority。
 
 Pending `confirmation_claim` 还用于区分“TTL 到期且从未提交”与“已 durable、等待 reconcile”：后者不得按
 expired pending 删除。Replay permission 默认拒绝；只有带 `confirmed_via=player_confirm`、非空
@@ -1035,3 +1049,16 @@ git add -N docs _bmad-output
 git diff --check
 python3 scripts/check_markdown_links.py docs _bmad-output
 ```
+
+## Pending entry-state envelope（非事实模型）
+
+Action 与 clarification 都使用 `schema_version=1`，并持久化 exact `save_id/save_path`、创建时间、
+`expires_at`、`ttl_seconds=1800` 及 hashed optional identity。Action 以 `session_id` 标识并携带待确认
+delta/proposal；clarification 以 `clarification_id` 标识，另含 `clarification_origin`、exact
+`original_user_text`、bounded clarification payload 与 external candidate digest。每次 clarification publication
+都由 `SaveManager` 生成新的 owner CAS id；Runtime/AI 提供的语义 clarification id 不能成为或复用授权 token。
+
+这些 JSON 与 bounded receipt history 是 entry/evidence state，不属于 `data/game.sqlite` 事实模型。历史
+receipt 固定最多 8 条，按 confirmation session hash 去重并淘汰最旧；每条 replay 必须重新核验 SQLite
+receipt anchor、command hash、turn id 与 event count。淘汰 receipt 时同步删除其 exact historical SQLite
+anchor，因此每个 workspace 的 retained history 与各目标 Save 的 replay evidence 保持一致。

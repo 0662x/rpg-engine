@@ -213,7 +213,12 @@ class CurrentNativePlayerTurnTests(FormalCurrentSaveReadOnlyTestCase):
                             self.assertTrue(pending_action.exists())
                         else:
                             self.assertFalse(result["session_id"], result)
-                            self.assertFalse(pending_action.exists())
+                        pending = manager.inspect_pending()
+                        lifecycle = pending.get("lifecycle", {})
+                        if lifecycle.get("state") not in {"not_found", "expired"}:
+                            pending_id = lifecycle.get("pending_id")
+                            self.assertTrue(pending_id, pending)
+                            self.assertTrue(manager.player_cancel(str(pending_id))["ok"])
             finally:
                 if old_fake is None:
                     os.environ.pop("AIGM_AI_FAKE_RESPONSE", None)

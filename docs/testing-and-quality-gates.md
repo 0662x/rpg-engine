@@ -590,7 +590,7 @@ Round 4B 已把旧长评审中仍有效的后续风险摘到
 - skipped tests 豁免清单和按模块 coverage 增长。
 - eval report 版本化与历史趋势对比。
 - declarative action spec 的第二个非 random 示例。
-- pending supersede/cancel/clarification lifecycle（atomic confirmation/replay 已由 Story 6.4 关闭）。
+- pending→confirm freshness / revalidation（supersede、cancel、clarification lifecycle 已由 Story 6.5 关闭）。
 - TurnCoordinator 不得回退 player workflow、profile gate、atomic write 和 eval metrics。
 
 ## CI 对齐
@@ -607,3 +607,23 @@ CI 当前执行：
 - `python -m twine check dist/*`
 
 本地变更不一定每次都要跑全量 CI，但最终说明必须记录已跑命令和未跑原因。
+
+## Story 6.5 pending lifecycle gate
+
+Focused gate 必须完整运行：
+
+```bash
+python3 -m pytest -q tests/test_pending_lifecycle.py tests/test_pending_confirmation_replay.py tests/test_save_manager.py tests/test_mcp_adapter.py tests/test_mcp_transcript.py tests/test_platform_sidecar.py tests/test_platform_ai_simulation.py
+```
+
+跨进程首次发布与 supersede/confirm 交错还必须运行以下确定性 race gate：
+
+```bash
+python3 -m pytest -q tests/test_pending_lifecycle.py tests/test_platform_sidecar.py tests/test_platform_ai_simulation.py -k 'two_process_first_publications_leave_exactly_one_pending or supersede_loses_cleanly_to_inflight_confirmation or player_turn_publication_cannot_be_deleted_by_inflight_confirmation or default_save_publication_conflicts_if_active_save_switches_inflight or default_save_publication_rejects_active_selection_aba or low_level_clarification_publication_rejects_inflight_pending_change or low_level_clarification_freezes_runtime_save_and_rejects_active_switch or low_level_publication_rejects_active_selection_aba or losing_publication_does_not_migrate_later_legacy_clarification or explicit_save_publication_rechecks_archived_registry_binding or low_level_publication_rechecks_registry_inside_owner_lock or player_turn_publication_rejects_empty_state_aba or player_turn_publication_rejects_revision_loss_after_aba or low_level_publication_snapshot_rejects_empty_state_aba or low_level_publication_snapshot_rejects_revision_loss or inflight_clarification_answer_reconciles_binding_after_exact_cancel or platform_act_completion_does_not_reactivate_a_newly_inactive_binding or cancel_completion_never_reactivates_newer_inactive_binding'
+```
+
+测试必须使用 synthetic Campaign 与独立 temporary Save/workspace，并覆盖 missing/wrong CAS、四向
+action/clarification 替代、identity presence parity、query/blocked preservation、TTL/migration/cancel、
+adapter restart、bounded receipt history、save switch、tamper/duplicate/oversize、竞态与 no-gameplay-write。
+任何后续 patch 都会使受影响旧绿灯失效；最终仍须从 clean diff 重跑 focused、adjacent、两套 Campaign、
+Markdown links、全仓 py_compile、full Ruff、`git diff --check` 与 full pytest。

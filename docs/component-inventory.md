@@ -138,3 +138,13 @@
 | Legacy Actions | `rpg_engine/legacy/*` | 历史动作兼容 |
 | Importers | `rpg_engine/importers/*` | 外部/旧内容导入 |
 | Compat | `rpg_engine/compat/*` | 兼容边界 |
+
+## Pending 生命周期组件
+
+| 组件 | 文件 | 当前责任 |
+| --- | --- | --- |
+| Lifecycle owner | `rpg_engine/save_manager.py` | 单一 pending、CAS supersede、TTL、inspect/cancel、save binding 与历史 replay receipt |
+| MCP mirror | `rpg_engine/mcp_adapter.py` | 转发 `expected_pending_id` / `clarification_id` / `player_cancel`，low-level gate 每次读取 owner |
+| CLI mirror | `rpg_engine/cli_v1.py` | player turn/act/cancel/confirm 的薄参数转发 |
+| Platform mirror | `rpg_engine/platform_sidecar.py` | 镜像 pending state/hash/revision，不复制 owner conflict 判定 |
+| Surface contract | `rpg_engine/surface_inventory.py` | 声明 player-safe cancel 与 platform cancel 权限边界 |

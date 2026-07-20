@@ -122,7 +122,7 @@ class V1CliTests(unittest.TestCase):
         self.assertRegex(help_text, r"\bhealth\s+developer/trusted low-level read-only runtime health\s+check")
         self.assertRegex(help_text, r"\bux-metrics\s+developer/trusted low-level read-only runtime UX\s+metrics")
 
-    def test_player_handler_routes_turn_act_and_confirm_through_save_manager(self) -> None:
+    def test_player_handler_routes_turn_act_cancel_and_confirm_through_save_manager(self) -> None:
         calls: list[tuple[str, object]] = []
 
         class RecordingSaveManager:
@@ -140,6 +140,10 @@ class V1CliTests(unittest.TestCase):
             def player_confirm(self, **kwargs: object) -> dict[str, object]:
                 calls.append(("player_confirm", kwargs))
                 return {"ok": True, "kind": "confirm"}
+
+            def player_cancel(self, expected_pending_id: str, **kwargs: object) -> dict[str, object]:
+                calls.append(("player_cancel", {"expected_pending_id": expected_pending_id, **kwargs}))
+                return {"ok": True, "kind": "cancel", "status": "canceled"}
 
         def player_args(player_type: str, **overrides: object) -> Namespace:
             values = {
@@ -162,9 +166,13 @@ class V1CliTests(unittest.TestCase):
                 "message_id": "",
                 "platform": "",
                 "session_key": "",
+                "actor_id": "",
+                "expected_pending_id": "",
+                "clarification_id": "",
                 "source_user_text_hash": "",
                 "preflight_pending_wait_ms": 0,
                 "session_id": "pending:1",
+                "save_path": "",
             }
             values.update(overrides)
             return Namespace(**values)
@@ -185,6 +193,7 @@ class V1CliTests(unittest.TestCase):
                 0,
             )
             self.assertEqual(handle_player(player_args("act")), 0)
+            self.assertEqual(handle_player(player_args("cancel", expected_pending_id="pending:1")), 0)
             self.assertEqual(handle_player(player_args("confirm")), 0)
 
         self.assertEqual(
@@ -213,6 +222,9 @@ class V1CliTests(unittest.TestCase):
                         "message_id": "",
                         "platform": "",
                         "session_key": "",
+                        "actor_id": "",
+                        "expected_pending_id": "",
+                        "clarification_id": "",
                         "source_user_text_hash": "",
                         "preflight_pending_wait_ms": 0,
                     },
@@ -234,12 +246,35 @@ class V1CliTests(unittest.TestCase):
                         "message_id": "",
                         "platform": "",
                         "session_key": "",
+                        "actor_id": "",
+                        "expected_pending_id": "",
+                        "clarification_id": "",
                         "source_user_text_hash": "",
                         "preflight_pending_wait_ms": 0,
                     },
                 ),
                 ("__init__", "/tmp/player-root"),
-                ("player_confirm", {"session_id": "pending:1"}),
+                (
+                    "player_cancel",
+                    {
+                        "expected_pending_id": "pending:1",
+                        "save_path": "",
+                        "platform": "",
+                        "session_key": "",
+                        "actor_id": "",
+                    },
+                ),
+                ("__init__", "/tmp/player-root"),
+                (
+                    "player_confirm",
+                    {
+                        "session_id": "pending:1",
+                        "save_path": "",
+                        "platform": "",
+                        "session_key": "",
+                        "actor_id": "",
+                    },
+                ),
             ],
         )
 

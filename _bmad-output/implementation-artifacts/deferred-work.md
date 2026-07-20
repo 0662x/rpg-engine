@@ -35,11 +35,11 @@
 
 ## Deferred from: code review of 4-1-low-trust-intent-candidate-contract (2026-07-11)
 
-- `SaveManager.player_turn()` 在解析新的玩家请求前会清理已有 pending action；malformed external candidate 也会取消旧 pending。这是既有“新 turn 取代旧 pending”的生命周期策略，不由 Story 4.1 引入；改变它需要独立确认 pending replacement / retry 语义。
+- CLOSED 2026-07-20（Story 6.5）：`SaveManager.player_turn()` 不再因新请求或 malformed external candidate 静默清理旧 pending；新 publication 使用 exact `expected_pending_id` 两阶段 CAS，query/blocked/error 保留旧 session。
 
 ## Deferred from: code review of 4-2-ai-latency-policy-and-safe-degradation (2026-07-11)
 
-- Reaffirmed：`SaveManager.player_turn()` 在解析新请求前清理已有 pending action 的行为是 Story 4.1 已记录的 pre-existing lifecycle policy；本 Story 的 timeout policy 不改变 pending replacement / retry 语义。
+- CLOSED 2026-07-20（Story 6.5）：pending replacement / retry 已由 canonical owner、explicit supersede、TTL/cancel 与 generation CAS 统一实现；latency helper 仍不拥有 lifecycle authority。
 
 ## Deferred from: code review of 6-2-canonical-action-taxonomy-registry-projection (2026-07-13)
 
@@ -48,7 +48,7 @@
 ## Deferred from: code review of 6-4-atomic-pending-confirmation-claim-and-replay-classification (2026-07-14)
 
 - 可选 archivist 请求在通用 CommitService 的 SQLite commit 后崩溃窗口没有 durable phase/outbox。普通 `SaveManager.player_confirm()` 默认不启用 archivist；修复需要扩大持久化设计，作为独立规划项处理，不在 Story 6.4 内引入 migration 或新 authority。
-- 新行动成功发布后，上一行动的单条 bounded replay receipt 会被替换；跨后续行动的延迟重试因此不再保留稳定 replay classification。支持这类历史 receipt 集合会引入按 confirmation session 的多 entry retention、supersede/orphan 与清理策略，属于 Story 6.5 明确的 pending lifecycle 范围，不在 Story 6.4 扩张。
+- CLOSED 2026-07-20（Story 6.5）：latest receipt 现会迁入最多 8 条的 canonical bounded history；延迟 retry 按 confirmation session/save/identity/payload digest 查找，并重新核验 SQLite anchor、turn 与 event evidence。
 
 ## Deferred from: code review of 1-9-库存消耗语义提交门 (2026-07-15)
 
@@ -66,7 +66,7 @@
 
 ## Deferred from: eleventh code review of 6-9-retired-entity-binding-fail-closed (2026-07-18)
 
-- `SaveManager.player_turn()` 在解析新turn前无条件清除既有pending，并在被binder拒绝后仍更新workspace registry `last_played_at`。用户选择保持Story 6.9 binder-only边界：本Story只保证拒绝不创建新的committable pending或游戏事实；既有pending的保留、显式compare-and-supersede、身份/session冲突与活动元数据语义由Story 6.5统一实现。
+- PARTIALLY CLOSED 2026-07-20（Story 6.5）：既有 pending 的保留、显式 compare-and-supersede、身份/session/save conflict 已完成；`last_played_at` 沿用既有合法 bookkeeping 语义，未在 Story 6.5 扩张或重新定义。
 
 ## Deferred from: code review of 6-8-rpg-engine-compatibility-fixture-for-hermes-stdio-e2e (2026-07-19)
 

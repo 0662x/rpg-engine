@@ -711,9 +711,21 @@ class SaveManagerConditionCoverageTests(unittest.TestCase):
                     "saves": [{"id": "source", "path": "saves/minimal/source", "campaign_id": "minimal", "label": "Source", "kind": "normal"}],
                 }
             )
-            with mock.patch.object(manager, "build_save_record", side_effect=lambda **kwargs: {**kwargs, "id": kwargs["save_id"], "health": "ok"}):
+            with mock.patch.object(
+                manager,
+                "build_save_record",
+                side_effect=lambda **kwargs: {
+                    "id": kwargs["save_id"],
+                    "campaign_path": kwargs["campaign_path"],
+                    "path": kwargs["save_path"],
+                    "label": kwargs["label"],
+                    "kind": kwargs["kind"],
+                    "source": kwargs["source"],
+                    "health": "ok",
+                },
+            ):
                 duplicate = manager.duplicate_save("source", activate=False)
-            self.assertTrue((root / duplicate["save"]["save_path"] / "marker.txt").exists())
+            self.assertTrue((root / duplicate["save"]["path"] / "marker.txt").exists())
             self.assertEqual(duplicate["active_save_id"], "source")
 
             no_save = {"ok": False, "errors": ["none"], "error_details": [{"code": "SAVE_MANAGER_ERROR"}]}
@@ -760,22 +772,42 @@ class SaveManagerConditionCoverageTests(unittest.TestCase):
     def test_player_action_and_confirmation_cover_pending_session_combinations(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            manager = SaveManager(root)
-            save = {"id": "save-ok", "path": "saves/minimal/save-ok", "health": "ok", "label": "OK"}
+            campaign_dir = root / "campaigns" / "minimal"
+            shutil.copytree(MINIMAL_FIXTURE, campaign_dir)
+            manager = SaveManager(root, default_campaign="campaigns/minimal")
+            save = manager.start_or_continue(campaign="campaigns/minimal")["save"]
+
+            def pending_action(**overrides: object) -> dict[str, object]:
+                return {
+                    "schema_version": "1",
+                    "save_id": save["id"],
+                    "save_path": save["path"],
+                    "session_id": "sid",
+                    "created_at": "2099-01-01T00:00:00+00:00",
+                    "expires_at": "2099-01-01T00:30:00+00:00",
+                    "ttl_seconds": 1800,
+                    "delta": {},
+                    "turn_proposal": {},
+                    **overrides,
+                }
 
             manager.write_pending_clarification(
                 {
                     "schema_version": "1",
                     "clarification_id": "clarify:1",
-                    "save_id": "save-ok",
+                    "save_id": save["id"],
+                    "save_path": save["path"],
+                    "created_at": "2099-01-01T00:00:00+00:00",
                     "original_user_text": "repeat this",
                     "clarification": {"question": "which way?"},
                 }
             )
             with mock.patch.object(manager, "require_save", return_value=save):
-                repeat = manager.player_act(user_text=" repeat   this ")
+                repeat = manager.player_act(user_text="repeat this")
             self.assertFalse(repeat["ok"])
-            self.assertEqual(repeat["pending_clarification_id"], "clarify:1")
+            self.assertEqual(repeat["pending_clarification_id"], "clarify:1", repeat)
+            with mock.patch.object(manager, "require_save", return_value=save):
+                self.assertTrue(manager.player_cancel("clarify:1")["ok"])
 
             ready_runtime = SimpleNamespace(
                 act=lambda *_args, **_kwargs: result_object(
@@ -796,11 +828,11 @@ class SaveManagerConditionCoverageTests(unittest.TestCase):
                 mock.patch.object(manager, "mark_played"),
             ):
                 ready = manager.player_act(user_text="rest", platform="web", session_key="abc")
-            pending_action = manager.read_pending_action()
+            pending_action_state = manager.read_pending_action()
             self.assertTrue(ready["ready_to_confirm"])
-            self.assertEqual(pending_action["platform"], "web")
-            self.assertNotEqual(pending_action["session_key_hash"], "abc")
-            self.assertIn("expires_at", pending_action)
+            self.assertEqual(pending_action_state["platform"], "web")
+            self.assertNotEqual(pending_action_state["session_key_hash"], "abc")
+            self.assertIn("expires_at", pending_action_state)
 
             captured_turn_kwargs: dict[str, object] = {}
 
@@ -829,6 +861,9 @@ class SaveManagerConditionCoverageTests(unittest.TestCase):
                     user_text="rest",
                     external_intent_candidate=external,
                     intent_ai="consensus",
+                    expected_pending_id=str(ready["session_id"]),
+                    platform="web",
+                    session_key="abc",
                 )
             self.assertTrue(turn["ready_to_confirm"])
             self.assertEqual(captured_turn_kwargs["external_intent_candidate"], external)
@@ -849,37 +884,37 @@ class SaveManagerConditionCoverageTests(unittest.TestCase):
                 mock.patch("rpg_engine.save_manager.GMRuntime.from_path", return_value=clarification_runtime),
                 mock.patch.object(manager, "mark_played"),
             ):
-                clarification = manager.player_act(user_text="use it")
+                clarification = manager.player_act(
+                    user_text="use it",
+                    expected_pending_id=str(turn["session_id"]),
+                    platform="web",
+                    session_key="abc",
+                )
             self.assertFalse(clarification["ready_to_confirm"])
             self.assertTrue(clarification["pending_clarification_id"].startswith("clarification:"))
 
             blocked_runtime = SimpleNamespace(act=lambda *_args, **_kwargs: result_object({"ok": False, "status": "blocked", "errors": ["bad"]}))
-            manager.write_pending_clarification({"schema_version": "1", "save_id": "save-ok", "original_user_text": "old"})
             with (
                 mock.patch.object(manager, "require_save", return_value=save),
                 mock.patch("rpg_engine.save_manager.GMRuntime.from_path", return_value=blocked_runtime),
                 mock.patch.object(manager, "mark_played"),
             ):
-                blocked = manager.player_act(user_text="different")
+                blocked = manager.player_act(user_text="different", platform="web", session_key="abc")
             self.assertFalse(blocked["ok"])
-            self.assertIsNone(manager.read_pending_clarification())
+            self.assertIsNotNone(manager.read_pending_clarification())
 
             with mock.patch.object(manager, "require_save", return_value=save):
                 manager.clear_pending_action()
+                manager.clear_pending_clarification()
                 with self.assertRaisesRegex(SaveManagerError, "no pending player action"):
                     manager.player_confirm("sid")
-                manager.write_pending_action({"save_id": "other", "session_id": "sid", "delta": {}, "turn_proposal": {}})
+                manager.write_pending_action(pending_action(save_id="other"))
                 with self.assertRaisesRegex(SaveManagerError, "different active save"):
                     manager.player_confirm("sid")
                 manager.write_pending_action(
-                    {
-                        "save_id": "save-ok",
-                        "save_path": save["path"],
-                        "session_id": "sid",
-                        "delta": {},
-                        "turn_proposal": {},
+                    pending_action(
                         **platform_session_metadata(platform="web", session_key="abc"),
-                    }
+                    )
                 )
                 with self.assertRaisesRegex(SaveManagerError, "requires matching platform session"):
                     manager.player_confirm("sid")
@@ -888,60 +923,32 @@ class SaveManagerConditionCoverageTests(unittest.TestCase):
                 with self.assertRaisesRegex(SaveManagerError, "different platform session"):
                     manager.player_confirm("sid", platform="web", session_key="wrong")
                 manager.write_pending_action(
-                    {
-                        "save_id": "save-ok",
-                        "save_path": save["path"],
-                        "session_id": "sid",
-                        "delta": {},
-                        "turn_proposal": {},
+                    pending_action(
                         **platform_session_metadata(platform="web", session_key="abc", actor_id="actor:one"),
-                    }
+                    )
                 )
                 with self.assertRaisesRegex(SaveManagerError, "requires matching platform actor"):
                     manager.player_confirm("sid", platform="web", session_key="abc")
                 with self.assertRaisesRegex(SaveManagerError, "different platform actor"):
                     manager.player_confirm("sid", platform="web", session_key="abc", actor_id="actor:two")
                 manager.write_pending_action(
-                    {
-                        "save_id": "save-ok",
-                        "save_path": save["path"],
-                        "session_id": "sid",
-                        "delta": {},
-                        "turn_proposal": {},
-                        "created_at": "2000-01-01T00:00:00+00:00",
-                        "expires_at": "2000-01-01T00:30:00+00:00",
-                    }
+                    pending_action(
+                        created_at="2000-01-01T00:00:00+00:00",
+                        expires_at="2000-01-01T00:30:00+00:00",
+                    )
                 )
                 with self.assertRaisesRegex(SaveManagerError, "pending player action expired"):
                     manager.player_confirm("sid")
                 self.assertIsNone(manager.read_pending_action())
-                manager.write_pending_action(
-                    {"save_id": "save-ok", "save_path": save["path"], "delta": {}, "turn_proposal": {}}
-                )
-                with self.assertRaisesRegex(SaveManagerError, "missing confirmation session_id"):
+                manager.write_pending_action(pending_action(session_id=""))
+                with self.assertRaisesRegex(SaveManagerError, "invalid owner token"):
                     manager.player_confirm("sid")
-                manager.write_pending_action(
-                    {
-                        "save_id": "save-ok",
-                        "save_path": save["path"],
-                        "session_id": "sid",
-                        "delta": {},
-                        "turn_proposal": {},
-                    }
-                )
+                manager.write_pending_action(pending_action())
                 with self.assertRaisesRegex(SaveManagerError, "requires the pending action session_id"):
                     manager.player_confirm("")
                 with self.assertRaisesRegex(SaveManagerError, "does not match"):
                     manager.player_confirm("other")
-                manager.write_pending_action(
-                    {
-                        "save_id": "save-ok",
-                        "save_path": save["path"],
-                        "session_id": "sid",
-                        "delta": [],
-                        "turn_proposal": {},
-                    }
-                )
+                manager.write_pending_action(pending_action(delta=[]))
                 with self.assertRaisesRegex(SaveManagerError, "incomplete"):
                     manager.player_confirm("sid")
 
@@ -960,16 +967,23 @@ class SaveManagerConditionCoverageTests(unittest.TestCase):
                     }
                 )
 
-            commit_runtime = SimpleNamespace(campaign=object(), commit_turn=commit_turn)
-            manager.write_registry({"schema_version": "1", "active_save_id": "save-ok", "campaigns": [], "saves": [save]})
-            manager.write_pending_action(
+            commit_runtime = SimpleNamespace(
+                campaign=load_campaign(root / str(save["path"])),
+                commit_turn=commit_turn,
+            )
+            manager.write_registry(
                 {
-                    "save_id": "save-ok",
-                    "save_path": save["path"],
-                    "session_id": "sid",
-                    "delta": {"changed": True},
-                    "turn_proposal": {"provenance": {"source": "test"}},
+                    "schema_version": "1",
+                    "active_save_id": save["id"],
+                    "campaigns": [],
+                    "saves": [save],
                 }
+            )
+            manager.write_pending_action(
+                pending_action(
+                    delta={"changed": True},
+                    turn_proposal={"provenance": {"source": "test"}},
+                )
             )
             with (
                 mock.patch.object(manager, "require_save", return_value=save),
@@ -982,6 +996,7 @@ class SaveManagerConditionCoverageTests(unittest.TestCase):
                     return_value={"schema_version": "1", "receipt_digest": "test-only"},
                 ),
                 mock.patch.object(manager, "write_confirmation_receipt_anchor"),
+                mock.patch.object(manager, "write_confirmation_receipt"),
                 mock.patch.object(manager, "refresh_save_record", side_effect=lambda record: {**record, "health": "ok"}),
             ):
                 confirmed = manager.player_confirm("sid")
@@ -1008,7 +1023,7 @@ class SaveManagerConditionCoverageTests(unittest.TestCase):
                     with self.assertRaisesRegex(SaveManagerError, message):
                         manager.read_registry()
 
-            with self.assertRaisesRegex(SaveManagerError, "escapes workspace root"):
+            with self.assertRaisesRegex(SaveManagerError, "must not contain"):
                 resolve_registry_path(root, "../outside.json")
             with self.assertRaisesRegex(SaveManagerError, "registry_path must be relative"):
                 resolve_registry_path(root, root / ".aigm" / "absolute-registry.json")

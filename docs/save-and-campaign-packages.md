@@ -370,8 +370,10 @@ SaveManager 以本地 workspace root 为边界，管理玩家可见 Campaign 和
 ```text
 <workspace>/.aigm/pending-player-action.json
 <workspace>/.aigm/pending-player-clarification.json
+<workspace>/.aigm/pending-player-lifecycle-revision.json
 <workspace>/.aigm/pending-player-action.lock
 <workspace>/.aigm/last-confirmed-player-action.json
+<workspace>/.aigm/confirmed-player-action-history.json
 ```
 
 registry 记录：
@@ -461,7 +463,8 @@ identity、payload digest、turn evidence 或 result 后重算 workspace SHA 仍
 entry evidence，不产生 turn/event/fact，也不允许 low-level Runtime caller 自报 confirmation provenance。
 
 `player_turn()` 发布新的 pending session 时使用同一 lock，并在 pending 文件发布失败时恢复上一条 receipt；
-这只关闭 confirm/publication TOCTOU，不定义 Story 6.5 的 supersede/cancel 产品策略。若 pending 已过期但其
+显式 `expected_pending_id` CAS、cancel、clarification correction 与 terminal lifecycle 均由同一 SaveManager
+owner 执行。若 pending 已过期但其
 command 已在 SQLite durable，确认重试不得先删除 pending，而应完成 replay reconcile。若 commit 后的
 projection/outbox 仍 dirty，可信 replay 只处理 dirty work；若 registry cached turn 与 durable turn 不同，
 再执行一次 repair refresh。已 clean/current 的 replay 不重复这些写入。
@@ -522,6 +525,7 @@ CLI/MCP 文档的完整契约会在 `docs/cli-contracts.md` 和 `docs/mcp-contra
 - `intent_manifest`
 - `player_turn`
 - `player_confirm`
+- `player_cancel`
 - `campaign_validate`
 - `save_inspect`
 - `health`
@@ -619,3 +623,24 @@ Markdown 链接和 diff whitespace 门禁。
 - 是否允许路径逃逸 workspace root 或 campaign root。
 - 是否可能泄露 hidden / GM-only 信息。
 - 是否需要补 CLI、MCP、SaveManager、projection 或 hidden-content focused tests。
+
+## Workspace pending 与 replay artifacts
+
+一个 workspace 最多存在一个普通玩家 pending session：
+
+- `.aigm/pending-player-action.json` 或 `.aigm/pending-player-clarification.json`，不能同时 active；
+- `.aigm/pending-player-lifecycle-revision.json` 保存 owner 的随机 incarnation 与单调 CAS revision；任何
+  pending 写入/清理先推进，缺失重建会更换 incarnation，避免锁外 Runtime 结果在空状态 ABA 或 revision
+  丢失后复活；实际 active Save selection 变化也推进 revision，拒绝 `A → B → A` selection ABA；它不授予
+  事实、确认或 commit authority；
+- `.aigm/last-confirmed-player-action.json` 保留最新 replay receipt；
+- `.aigm/confirmed-player-action-history.json` 最多保留 8 条必要的 canonical hashed/digest evidence；确定性淘汰
+  同步删除目标 Save 中对应的 exact historical receipt anchor，latest receipt 仍保留独立 anchor。History
+  envelope 的 ordered receipt digest 由最后一条 retained receipt 所属 Save 的 SQLite meta 锚定，既有顺序
+  不可重写；latest receipt 只有重新对账 SQLite turn/command/event 与 exact anchor 后才能进入 history。
+
+读取必须有大小上限、strict duplicate-key JSON、root/symlink 边界和 schema 校验。Clarification schema 1
+legacy envelope 仅在 save binding、id、created time 和 payload 可无歧义证明时原位补入 TTL/origin；坏文件、
+双 active 或冲突 binding fail closed。`switch_save` 不清除或转绑 pending，旧 action 仍只能以显式原
+`save_path` confirmation。每次 clarification publication 都生成新的 owner token，不接受 Runtime/AI id 复用。
+Cancel/expiry 不写 Save SQLite、turn、event 或 projection。

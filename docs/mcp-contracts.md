@@ -58,7 +58,7 @@ player_turn(user_text, optional external_intent_candidate)
 - 根据 MCP profile 注册工具，并在 adapter method 层再次拒绝 profile/surface category mismatch。
 - 校验 configured root 下的相对路径。
 - 校验 player profile 的 hidden view、maintenance mode 和 per-call AI override 边界。
-- 在同一个 adapter 进程内跟踪 pending clarification，防止低层工具跳过澄清。
+- 每次从 `SaveManager` canonical persisted session 检查 pending clarification，防止 adapter restart 或低层工具跳过澄清。
 - 写结构化 audit record。
 
 它不做：
@@ -149,6 +149,7 @@ save_switch
 start_or_continue
 intent_manifest
 player_turn
+player_cancel
 player_confirm
 campaign_validate
 save_inspect
@@ -197,6 +198,7 @@ admin profiles。
 | `start_or_continue` | 继续或创建 onboarding context；gameplay facts 仍要走 `player_turn/player_confirm`。 |
 | `intent_manifest` | 只读 manifest v4 action/query/slot/taxonomy/safety/version contract；不是玩法入口或授权。 |
 | `player_turn` | 标准自然语言入口；返回 query、clarification、blocked 或 pending action。 |
+| `player_cancel` | 用 exact `expected_pending_id` 取消 action 或 clarification；不写 gameplay facts。 |
 | `player_confirm` | 用 `player_turn` 返回的 `session_id` 确认并保存 pending action。 |
 | `campaign_validate` | 只读校验 configured campaign package。 |
 | `save_inspect` | 只读检查 configured save package；结果包含 Save fact authority `authority_contract` 和 projection/outbox evidence `projection_health`，其中 outbox evidence 包含 `ok`/`status`、schema/availability errors、counts 和非 `done` work rows。 |
@@ -208,6 +210,7 @@ admin profiles。
 - `external_intent_candidate`
 - passive preflight identity：`preflight_id`、`message_id`、`platform`、`session_key`、
   `source_user_text_hash`、`preflight_pending_wait_ms`
+- pending lifecycle：`actor_id`、`expected_pending_id`、`clarification_id`
 
 `player_turn` 不能接收：
 
@@ -339,16 +342,21 @@ MCP 的 AI 配置分两层：
 
 ## Clarification Guard
 
-MCP adapter 在同一个 server 进程内记录 pending clarification。目的不是持久化事实，而是防止低层工具
-跳过玩家澄清。
+MCP adapter 不拥有进程内 clarification truth。`SaveManager` 在 owner lock 内持久化唯一 canonical
+action/clarification；每个 low-level gate 都重新读取 owner state，可能发布 clarification 的工具还会冻结
+Save binding 与 pending generation 并在 Runtime 后执行 CAS，所以 adapter restart 后仍观察相同 id、origin、
+expiry 和 terminal outcome。
 
 规则：
 
-- `start_turn` 或 `preview_from_text` 返回 clarification 后，会记录 `clarification_id`。
+- 注册 Save workspace 的 `start_turn` 或 `preview_from_text` 返回 clarification 后，由 SaveManager owner
+  记录 `clarification_id`；legacy standalone low-level Save 只返回 preview，不获得普通 player lifecycle authority。
+- 两个 low-level 入口均薄转发可选 `actor_id`；与 `platform/session_key` 一起提供时，owner snapshot 与
+  clarification 只保存 actor hash，同 actor 才能继续或取消，cross-actor 必须 conflict 且不得泄露 token。
 - 同一 save 上，`preview_action`、`validate_delta`、`commit_turn` 和 `intent_preflight` 会被拒绝，
   直到 clarification 被新输入处理。
-- 再次调用 `start_turn` 或 `preview_from_text` 时，必须提供 fresh `user_text` 或不同的
-  `external_intent_candidate`。
+- 后续 low-level preview 不能结束 canonical clarification；必须回到 `player_turn`，同时提交匹配的
+  `expected_pending_id` / `clarification_id` 和 fresh 玩家回答，或调用 `player_cancel`。
 - Fresh re-preview 后，旧 preview 不能直接套用 choice 或继续 commit。
 
 RPG Engine MCP adapter 只发布并校验 contract，不实现 Hermes consumer lifecycle。Hermes 应读取
